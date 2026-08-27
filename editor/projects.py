@@ -275,14 +275,24 @@ def auto_edit(project: Project, ctx) -> dict:
         raise RuntimeError("rode a análise antes")
     words = project.words
     takes = project.analysis.get("takes", [])
+    # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
+    manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
     ctx.stage("cortes", "propondo cortes com encaixe no vale de energia")
-    result = build_auto_plan(words, env, project.plan.cut, project.plan.speed, takes)
+    result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
+                             takes, extra_removed=manual_removed)
     plan = project.plan
+    from .edit.ops import remap_output_items
+    fps = project.info.fps if project.info else None
+    old_tl = Timeline(plan.active_clips, fps)
     plan.clips = result["clips"]
     plan.removed = result["removed"]
     plan.discarded_takes = takes
     plan.claps = project.analysis.get("claps", [])
-    plan.subtitles = []
+    # NÃO zerar plan.subtitles aqui: os textos editados à mão são casados de
+    # volta pelo rebuild (por palavra), e cutaways/overlays/desfoques são
+    # reancorados pela fonte — refazer a edição não pode custar trabalho manual
+    new_tl = Timeline(plan.active_clips, fps)
+    remap_output_items(plan, old_tl, new_tl)
     project.analysis["removed_word_ids"] = result["removed_word_ids"]
     project.analysis["plan_notes"] = result["notes"]
 
@@ -350,18 +360,25 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> lis
     fps = project.info.fps if project.info else None
     tl = timeline or Timeline(plan.active_clips, fps)
     mapped = remap_words(words, tl)
-    manual = {s.id: s for s in plan.subtitles if s.edited}
+    manual = [s for s in plan.subtitles if s.edited]
     cues = build_cues(mapped, plan.style, limit=tl.duration)
     plan.subtitles = [
         Subtitle(start=c["start"], end=c["end"], text=c["text"],
                  word_ids=[i for i in c["word_ids"] if i is not None])
         for c in cues
     ]
+    # o texto editado segue as PALAVRAS, não o relógio: cortes anteriores
+    # deslocam todos os tempos, mas os índices das palavras não mudam
+    claimed: set[int] = set()
     for sub in plan.subtitles:
-        for old in manual.values():
-            if abs(old.start - sub.start) < 0.12:
-                sub.text = old.text
-                sub.edited = True
+        ids = set(sub.word_ids)
+        for k, old in enumerate(manual):
+            if k in claimed or not ids & set(old.word_ids):
+                continue
+            sub.text = old.text
+            sub.edited = True
+            claimed.add(k)
+            break
     project.analysis["correction_log"] = log
     return [s.to_dict() for s in plan.subtitles]
 

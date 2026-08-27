@@ -487,34 +487,37 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
 
     O loudnorm roda em duas passadas (mede, depois aplica em modo linear).
     A passada única erra o alvo em mais de 1 LU e ainda encurta a faixa —
-    medi 3200 amostras a menos numa faixa de 31 s, que é exatamente o tipo de
-    coisa que vira dessincronia.
+    medi 3200 amostras a menos numa faixa de 31 s.
+
+    Com trilha, o mix (voz + música com ducking) é montado ANTES da medição:
+    medir só a voz e normalizar o mix erraria o alvo e o pico exatamente no
+    caso em que há mais energia na faixa.
     """
     from ..audio.loudness import (build_pre_chain, loudnorm_second_pass,
                                   measure_loudnorm)
 
-    pre = build_pre_chain(params)
-    measured = measure_loudnorm(raw_wav, pre, params)
-    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured)) if x)
-
     music = plan.music if plan.music and plan.music.get("enabled") else None
-    cmd = [FFMPEG, "-y", "-v", "error", "-i", str(raw_wav)]
-    if music:
-        mpath = sources.get(music.get("media_id"), {}).get("path")
-        if mpath:
-            cmd += ["-stream_loop", "-1", "-i", str(mpath)]
-            mix = F.music_chain(float(music.get("gain_db", -18)),
-                                bool(music.get("ducking", True)),
-                                float(music.get("duck_amount", 12)),
-                                float(music.get("fade_in", 1.0)),
-                                float(music.get("fade_out", 2.0)), duration)
-            cmd += ["-filter_complex", f"{mix};[aout]{chain}[a]", "-map", "[a]"]
-        else:
-            music = None
-    if not music:
-        cmd += ["-af", chain]
-    cmd += ["-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)]
-    run(cmd)
+    mpath = sources.get(music.get("media_id"), {}).get("path") if music else None
+    stage_src = raw_wav
+    if music and mpath:
+        mix_path = dest.with_name(dest.stem + "_mix.wav")
+        graph = F.music_chain(float(music.get("gain_db", -18)),
+                              bool(music.get("ducking", True)),
+                              float(music.get("duck_amount", 12)),
+                              float(music.get("fade_in", 1.0)),
+                              float(music.get("fade_out", 2.0)), duration)
+        run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
+             "-stream_loop", "-1", "-i", str(mpath),
+             "-filter_complex", graph, "-map", "[aout]",
+             "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le",
+             "-t", f"{duration:.6f}", str(mix_path)])
+        stage_src = mix_path
+
+    pre = build_pre_chain(params)
+    measured = measure_loudnorm(stage_src, pre, params)
+    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured)) if x)
+    run([FFMPEG, "-y", "-v", "error", "-i", str(stage_src), "-af", chain,
+         "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)])
 
     # Trava o comprimento exato. Qualquer filtro que engula ou acrescente
     # amostras vira dessincronia acumulada ao longo de dezenas de blocos.
@@ -529,6 +532,8 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
             samples = np.concatenate(
                 [samples, np.zeros(target - len(samples), dtype=np.float32)])
         write_wav(dest, samples, AUDIO_SR)
+    if stage_src is not raw_wav:
+        Path(stage_src).unlink(missing_ok=True)
     return dest
 
 

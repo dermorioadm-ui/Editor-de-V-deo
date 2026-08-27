@@ -48,18 +48,25 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
     if not kept:
         return []
 
+    import bisect
+
+    removed_sorted = sorted(removed_ids)
+
+    def removed_between(a: int, b: int) -> bool:
+        k = bisect.bisect_right(removed_sorted, a)
+        return k < len(removed_sorted) and removed_sorted[k] < b
+
     groups: list[list[dict]] = [[kept[0]]]
-    removed_between: list[bool] = []
+    removed_flags: list[bool] = []
     for prev, cur in zip(kept, kept[1:]):
         gap = cur["start"] - prev["end"]
-        has_removed = any(prev["i"] < w["i"] < cur["i"] for w in words
-                          if w["i"] in removed_ids)
+        has_removed = removed_between(prev["i"], cur["i"])
         if gap >= params.silence_min or has_removed:
             groups.append([cur])
-            removed_between.append(has_removed)
+            removed_flags.append(has_removed)
         else:
             groups[-1].append(cur)
-    removed_between.append(False)
+    removed_flags.append(False)
 
     spans: list[Span] = []
     for gi, group in enumerate(groups):
@@ -97,7 +104,7 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
             end = min(env.duration, start + 0.02)
         spans.append(Span(round(start, 4), round(end, 4), first["i"], last["i"],
                           s_in.to_dict(), s_out.to_dict(),
-                          gap_has_removed_words=removed_between[gi]))
+                          gap_has_removed_words=removed_flags[gi]))
 
     _resolve_overlaps(spans, env, params)
     return spans
@@ -282,6 +289,7 @@ def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
                 src_start=round(a, 4),
                 src_end=round(b, 4),
                 speed=speed_mod.apply_global(info["speed"], sp),
+                base_speed=round(float(info["speed"]), 4),
                 section=info["section"],
                 kind="speech",
                 cut_in=span.cut_in if first else False,

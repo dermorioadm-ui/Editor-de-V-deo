@@ -81,10 +81,19 @@ export function dismissToast(id: number) {
   setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
 }
 
-/** Empilha o plano atual antes de uma alteração — desfazer/refazer completo. */
-export function pushHistory(plan: any) {
-  setState((s) => ({
-    history: [...s.history, JSON.parse(JSON.stringify(plan))].slice(-100),
-    future: [],
-  }))
+export interface HistoryEntry {
+  plan: any
+  removedWordIds: number[]
+  manualRemovedWordIds: number[]
+}
+
+/** Empilha plano + estado de remoções — o desfazer restaura os dois juntos. */
+export function pushHistory(plan: any, removedWordIds: number[],
+                            manualRemovedWordIds: number[]) {
+  const entry: HistoryEntry = {
+    plan: JSON.parse(JSON.stringify(plan)),
+    removedWordIds: [...removedWordIds],
+    manualRemovedWordIds: [...manualRemovedWordIds],
+  }
+  setState((s) => ({ history: [...s.history, entry].slice(-100), future: [] }))
 }

@@ -62,8 +62,13 @@ export const api = {
   savePreset: (data: any) => post<any>('/api/presets', data),
   deletePreset: (name: string) => del<any>(`/api/presets/${encodeURIComponent(name)}`),
 
-  replacePlan: (id: string, plan: any) =>
-    post<{ timeline: TimelineView }>(`/api/projects/${id}/plan`, { plan }),
+  replacePlan: (id: string, entry: { plan: any; removedWordIds?: number[];
+                                     manualRemovedWordIds?: number[] }) =>
+    post<{ timeline: TimelineView }>(`/api/projects/${id}/plan`, {
+      plan: entry.plan,
+      removed_word_ids: entry.removedWordIds,
+      manual_removed_word_ids: entry.manualRemovedWordIds,
+    }),
 
   deleteRange: (id: string, start: number, end: number) =>
     post<any>(`/api/projects/${id}/ops/delete-range`, { start, end }),
@@ -79,8 +84,8 @@ export const api = {
     post<any>(`/api/projects/${id}/ops/merge`, { clip_ids }),
   setSpeed: (id: string, clip_id: string, speed: number) =>
     post<any>(`/api/projects/${id}/ops/speed`, { clip_id, speed }),
-  setGlobalSpeed: (id: string, value: number, previous: number) =>
-    post<any>(`/api/projects/${id}/ops/speed`, { global: value, previous }),
+  setGlobalSpeed: (id: string, value: number) =>
+    post<any>(`/api/projects/${id}/ops/speed`, { global: value }),
   setSection: (id: string, clip_id: string, section: string) =>
     post<any>(`/api/projects/${id}/ops/section`, { clip_id, section }),
   fixAudit: (id: string, index: number) =>

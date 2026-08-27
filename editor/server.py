@@ -380,8 +380,35 @@ def api_replace_plan(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     project.plan = EditPlan.from_dict(payload.get("plan", {}))
     project.plan.project_id = pid
+    # o plano e a lista de palavras removidas andam JUNTOS no histórico:
+    # restaurar só o plano deixava a palavra de volta no vídeo mas ainda
+    # riscada no texto e fora da legenda
+    if "removed_word_ids" in payload:
+        project.analysis["removed_word_ids"] = sorted(
+            int(i) for i in payload["removed_word_ids"])
+        project.analysis["manual_removed_word_ids"] = sorted(
+            int(i) for i in payload.get("manual_removed_word_ids", []))
+        project.save_analysis()
+        svc.rebuild_subtitles(project)
     project.save_plan()
     return {"ok": True, "timeline": svc.timeline_summary(project)}
+
+
+def _fps(project: svc.Project) -> float | None:
+    return project.info.fps if project.info else None
+
+
+def _remapping(project: svc.Project, fn):
+    """Executa uma edição reancorando cutaways/overlays/desfoques (fonte é a âncora)."""
+    from .edit.timeline import Timeline
+
+    old = Timeline(project.plan.active_clips, _fps(project))
+    result = fn()
+    new = Timeline(project.plan.active_clips, _fps(project))
+    moved = ops.remap_output_items(project.plan, old, new)
+    if moved and isinstance(result, dict):
+        result = {**result, "remapped": moved}
+    return result
 
 
 def _after_edit(project: svc.Project, rebuild: bool = True) -> dict:
@@ -400,9 +427,9 @@ def _after_edit(project: svc.Project, rebuild: bool = True) -> dict:
 def api_delete_range(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     env = _env_or_404(project)
-    res = ops.delete_output_range(project.plan, env, float(payload["start"]),
-                                  float(payload["end"]), project.plan.cut,
-                                  project.words)
+    res = _remapping(project, lambda: ops.delete_output_range(
+        project.plan, env, float(payload["start"]), float(payload["end"]),
+        project.plan.cut, project.words, fps=_fps(project)))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não foi possível deletar"))
     return {**res, "timeline": _after_edit(project)}
@@ -412,13 +439,19 @@ def api_delete_range(pid: str, payload: dict = Body(...)) -> dict:
 def api_remove_words(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     env = _env_or_404(project)
-    res = ops.remove_words(project.plan, env, project.words,
-                           payload.get("word_ids", []), project.plan.cut)
+    res = _remapping(project, lambda: ops.remove_words(
+        project.plan, env, project.words, payload.get("word_ids", []),
+        project.plan.cut))
     removed = set(project.analysis.get("removed_word_ids", []))
+    manual = set(project.analysis.get("manual_removed_word_ids", []))
     for group in res.get("applied", []):
         if group.get("ok"):
             removed.update(group["words"])
+            manual.update(group["words"])
     project.analysis["removed_word_ids"] = sorted(removed)
+    # remoções manuais sobrevivem ao "refazer edição" — sem esta lista, a
+    # reedição automática traria de volta tudo que o usuário tirou pelo texto
+    project.analysis["manual_removed_word_ids"] = sorted(manual)
     project.save_analysis()
     return {**res, "timeline": _after_edit(project)}
 
@@ -432,9 +465,12 @@ def api_restore_words(pid: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(400, "nenhuma palavra informada")
     start = min(words[i]["start"] for i in ids) - 0.12
     end = max(words[i]["end"] for i in ids) + 0.12
-    res = ops.restore_range(project.plan, max(0.0, start), end)
+    res = _remapping(project,
+                     lambda: ops.restore_range(project.plan, max(0.0, start), end))
     removed = set(project.analysis.get("removed_word_ids", [])) - set(ids)
+    manual = set(project.analysis.get("manual_removed_word_ids", [])) - set(ids)
     project.analysis["removed_word_ids"] = sorted(removed)
+    project.analysis["manual_removed_word_ids"] = sorted(manual)
     project.save_analysis()
     return {**res, "timeline": _after_edit(project)}
 
@@ -442,9 +478,9 @@ def api_restore_words(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/ops/restore-range")
 def api_restore_range(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    res = ops.restore_range(project.plan, float(payload["start"]),
-                            float(payload["end"]),
-                            payload.get("source", "main"))
+    res = _remapping(project, lambda: ops.restore_range(
+        project.plan, float(payload["start"]), float(payload["end"]),
+        payload.get("source", "main")))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não foi possível recuperar"))
     return {**res, "timeline": _after_edit(project)}
@@ -453,7 +489,8 @@ def api_restore_range(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/ops/split")
 def api_split(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    res = ops.split_clip(project.plan, payload["clip_id"], float(payload["time"]))
+    res = ops.split_clip(project.plan, payload["clip_id"], float(payload["time"]),
+                         fps=_fps(project))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não foi possível dividir"))
     return {**res, "timeline": _after_edit(project)}
@@ -462,7 +499,8 @@ def api_split(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/ops/merge")
 def api_merge(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    res = ops.merge_clips(project.plan, payload.get("clip_ids", []))
+    res = _remapping(project,
+                     lambda: ops.merge_clips(project.plan, payload.get("clip_ids", [])))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não foi possível fundir"))
     return {**res, "timeline": _after_edit(project)}
@@ -473,15 +511,27 @@ def api_speed(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     env = project.envelope()
     if payload.get("global") is not None:
-        project.plan.speed.global_multiplier = float(payload["global"])
-        base = float(payload["global"])
-        for clip in project.plan.clips:
-            clip.speed = round(max(project.plan.speed.min_speed,
-                                   min(project.plan.speed.max_speed,
-                                       clip.speed * base / max(1e-6, payload.get("previous", 1.0)))), 2)
-            clip.measured_duration = None
-        return {"ok": True, "timeline": _after_edit(project)}
-    res = ops.set_speed(project.plan, payload["clip_id"], float(payload["speed"]), env)
+        new = float(payload["global"])
+        prev = float(project.plan.speed.global_multiplier or 1.0)
+        ratio = new / max(1e-6, prev)
+
+        def apply_global():
+            sp = project.plan.speed
+            for clip in project.plan.clips:
+                base = clip.base_speed
+                if base is None:
+                    base = clip.speed / max(1e-6, prev)
+                clip.base_speed = round(base, 4)
+                clip.speed = round(max(sp.min_speed,
+                                       min(sp.max_speed, base * new)), 2)
+                clip.measured_duration = None
+            sp.global_multiplier = new
+            return {"ok": True, "applied_ratio": round(ratio, 4)}
+
+        res = _remapping(project, apply_global)
+        return {**res, "timeline": _after_edit(project)}
+    res = _remapping(project, lambda: ops.set_speed(
+        project.plan, payload["clip_id"], float(payload["speed"]), env))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "bloco não encontrado"))
     warn = float(payload["speed"]) > project.plan.speed.warn_above

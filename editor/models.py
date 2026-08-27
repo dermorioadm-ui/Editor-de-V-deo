@@ -51,6 +51,10 @@ class Clip:
     src_start: float = 0.0
     src_end: float = 0.0
     speed: float = 1.0
+    # velocidade do bloco com o multiplicador global em 1,00x. O speed efetivo
+    # é clamp(base × global); sem guardar a base, subir o global até o teto e
+    # voltar perdia a velocidade original do bloco (o clamp não tem inversa).
+    base_speed: float | None = None
     section: str = "explicacao"
     kind: str = "speech"            # speech | insert | photo
     audio: str = "source"           # source | mute

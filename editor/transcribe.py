@@ -129,7 +129,13 @@ def transcribe(
     """
     info = device_info or detect_device()
     model_size = resolve_model(model_size, info.device)
+    if on_progress:
+        on_progress(0.0, f"carregando o modelo {model_size} — na primeira vez "
+                         f"ele é baixado (1 a 3 GB) e isso demora alguns "
+                         f"minutos; das próximas ele já está no disco")
     model = load_model(model_size, info)
+    if on_progress:
+        on_progress(0.01, f"modelo {model_size} pronto ({info.device})")
 
     if isinstance(audio, (str, Path)):
         from .ffmpeg_utils import read_wav_mono

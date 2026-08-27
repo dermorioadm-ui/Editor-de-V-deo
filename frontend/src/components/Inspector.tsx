@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { SECTIONS } from '../types'
 import { api } from '../lib/api'
 import { seconds, timecode } from '../lib/format'
@@ -11,8 +11,10 @@ export default function Inspector({ onChanged, snapshot }: Props) {
   const view = useStore((s) => s.timeline)
   const selectedId = useStore((s) => s.selectedClip)
   const playhead = useStore((s) => s.playhead)
-  const [globalSpeed, setGlobalSpeed] = useState(1)
+  const storedGlobal = project?.plan?.speed?.global_multiplier ?? 1
+  const [globalSpeed, setGlobalSpeed] = useState(storedGlobal)
   const [busy, setBusy] = useState(false)
+  useEffect(() => { setGlobalSpeed(storedGlobal) }, [storedGlobal])
 
   const block = useMemo(
     () => view?.blocks.find((b) => b.id === selectedId) ?? null, [view, selectedId])
@@ -213,13 +215,24 @@ export default function Inspector({ onChanged, snapshot }: Props) {
                onMouseUp={async (e) => {
                  const value = Number((e.target as HTMLInputElement).value)
                  snapshot()
-                 await api.setGlobalSpeed(project.id, value, globalSpeed)
-                 setGlobalSpeed(1)
+                 await api.setGlobalSpeed(project.id, value)
                  await onChanged()
                }} />
-        <p className="hint mt-1">
-          Multiplica todos os blocos proporcionalmente e volta para 1,00x.
-        </p>
+        <div className="flex items-center gap-2 mt-1">
+          <p className="hint flex-1">
+            Multiplica todos os blocos proporcionalmente.
+          </p>
+          {Math.abs(globalSpeed - 1) > 0.005 && (
+            <button className="btn btn-xs"
+                    onClick={async () => {
+                      snapshot()
+                      await api.setGlobalSpeed(project.id, 1.0)
+                      await onChanged()
+                    }}>
+              voltar a 1,00x
+            </button>
+          )}
+        </div>
       </section>
 
       {/* ------------------------------------------------------ resumo */}

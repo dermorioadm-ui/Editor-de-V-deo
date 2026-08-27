@@ -18,7 +18,7 @@ from .audio.envelope import compute_envelope
 from .config import FFMPEG, CutParams, SpeedParams
 from .edit.audit import audit_edges
 from .edit.plan_builder import build_auto_plan
-from .edit.timeline import Timeline
+from .edit.timeline import Timeline  # noqa: F401  (usado pelo cues)
 from .ffmpeg_utils import (extract_wav, probe, read_wav_mono, write_wav)
 from .models import EditPlan
 from .render.export import export_project
@@ -142,7 +142,6 @@ def run(verbose: bool = True) -> bool:
         say(" 5/6  exportando (uma geração de encode) …")
         plan = EditPlan(clips=clips, removed=plano["removed"])
         sources = {"main": {"path": str(src), "info": info}}
-        tl = Timeline(plan.active_clips, info.fps)
 
         def cues(timeline: Timeline) -> list[dict]:
             vivas = [w for w in words if w["i"] not in removidas]

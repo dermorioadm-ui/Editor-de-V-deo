@@ -59,9 +59,15 @@ def _clone(clip: Clip, src_start: float, src_end: float) -> Clip:
 
 
 def delete_output_range(plan, env: Envelope, out_start: float, out_end: float,
-                        params: CutParams, words: list[dict] | None = None) -> dict:
-    """Deleta o trecho selecionado na timeline, encaixando as bordas no vale."""
-    timeline = Timeline(plan.active_clips)
+                        params: CutParams, words: list[dict] | None = None,
+                        fps: float | None = None) -> dict:
+    """Deleta o trecho selecionado na timeline, encaixando as bordas no vale.
+
+    ``fps`` tem que ser o MESMO usado para desenhar a timeline na interface:
+    a linha quantizada em quadros e a linha crua divergem alguns milissegundos
+    por bloco, e isso acumula — num vídeo longo a seleção erraria o alvo.
+    """
+    timeline = Timeline(plan.active_clips, fps)
     a = timeline.to_source(out_start)
     b = timeline.to_source(max(out_end, out_start + 0.01))
     if not a or not b:
@@ -167,9 +173,10 @@ def restore_range(plan, start: float, end: float, source: str = "main",
     return {"ok": True, "clip": clip.to_dict()}
 
 
-def split_clip(plan, clip_id: str, out_time: float) -> dict:
+def split_clip(plan, clip_id: str, out_time: float,
+               fps: float | None = None) -> dict:
     """Divide um bloco. As duas metades ficam contíguas — não é corte."""
-    timeline = Timeline(plan.active_clips)
+    timeline = Timeline(plan.active_clips, fps)
     target = next((p for p in timeline if p.clip.id == clip_id), None)
     if not target:
         return {"ok": False, "reason": "bloco não encontrado"}
@@ -229,6 +236,8 @@ def set_speed(plan, clip_id: str, speed: float, env: Envelope | None = None,
         return {"ok": False, "reason": "bloco não encontrado"}
     old = target.speed
     target.speed = round(float(speed), 2)
+    g = float(getattr(plan.speed, "global_multiplier", 1.0) or 1.0)
+    target.base_speed = round(target.speed / max(g, 1e-6), 4)
     target.measured_duration = None
     moved = []
     if env is not None and snap_boundaries:
@@ -269,3 +278,54 @@ def _word_after(words: list[dict], t: float) -> dict | None:
         if w["start"] >= t:
             return w
     return None
+
+
+def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
+    """Reancoragem de cutaways, sobreposições e desfoques depois de uma edição.
+
+    Esses elementos vivem na linha do tempo de SAÍDA. Sem isto, cortar dez
+    segundos no começo do vídeo deixa todos eles dez segundos em cima do
+    conteúdo errado — o usuário posiciona uma vez e a edição seguinte estraga.
+
+    A âncora verdadeira é o instante na FONTE: cada tempo de saída é levado à
+    fonte pela linha antiga e trazido de volta pela nova.
+    """
+    if not len(old_tl.placed) or not len(new_tl.placed):
+        return []
+
+    def remap(t: float) -> float | None:
+        src = old_tl.to_source(t)
+        if src is None:
+            return None
+        source, src_t = src
+        out = new_tl.to_output(src_t, source)
+        if out is None:
+            out = new_tl.to_output_clamped(src_t, source)
+        return out
+
+    moved: list[dict] = []
+    for kind, items in (("cutaway", plan.cutaways), ("overlay", plan.overlays),
+                        ("blur", plan.blurs)):
+        for item in items:
+            a = remap(item.out_start)
+            b = remap(item.out_end)
+            if a is None or b is None:
+                continue
+            orig = item.out_end - item.out_start
+            if kind == "overlay" and b - a < 0.2:
+                # sobreposição é decorativa: preserva a duração ancorada no início
+                b = min(new_tl.duration, a + orig)
+            if b <= a:
+                b = min(new_tl.duration, a + 0.05)
+            if abs(a - item.out_start) > 0.005 or abs(b - item.out_end) > 0.005:
+                moved.append({"kind": kind, "id": item.id,
+                              "from": [round(item.out_start, 3), round(item.out_end, 3)],
+                              "to": [round(a, 3), round(b, 3)]})
+            item.out_start = round(a, 4)
+            item.out_end = round(b, 4)
+            if kind == "blur" and getattr(item, "keyframes", None):
+                for kf in item.keyframes:
+                    nt = remap(float(kf.get("t", 0.0)))
+                    if nt is not None:
+                        kf["t"] = round(nt, 4)
+    return moved

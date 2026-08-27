@@ -76,30 +76,45 @@ export default function Editor() {
   }, [activeJob?.id, activeJob?.status])
 
   const snapshot = useCallback(() => {
-    if (project?.plan) pushHistory(project.plan)
+    const s = getState()
+    if (project?.plan) {
+      pushHistory(project.plan, s.removedWordIds,
+        project.analysis?.manual_removed_word_ids ?? [])
+    }
+  }, [project])
+
+  const currentEntry = useCallback(() => {
+    const s = getState()
+    return {
+      plan: JSON.parse(JSON.stringify(project!.plan)),
+      removedWordIds: [...s.removedWordIds],
+      manualRemovedWordIds: project!.analysis?.manual_removed_word_ids ?? [],
+    }
   }, [project])
 
   const undo = useCallback(async () => {
     if (!project || !history.length) return
     const prev = history[history.length - 1]
+    const now = currentEntry()
     setState((s) => ({
       history: s.history.slice(0, -1),
-      future: [...s.future, JSON.parse(JSON.stringify(project.plan))],
+      future: [...s.future, now],
     }))
     await api.replacePlan(project.id, prev)
     await refresh()
-  }, [project, history, refresh])
+  }, [project, history, refresh, currentEntry])
 
   const redo = useCallback(async () => {
     if (!project || !future.length) return
     const next = future[future.length - 1]
+    const now = currentEntry()
     setState((s) => ({
       future: s.future.slice(0, -1),
-      history: [...s.history, JSON.parse(JSON.stringify(project.plan))],
+      history: [...s.history, now],
     }))
     await api.replacePlan(project.id, next)
     await refresh()
-  }, [project, future, refresh])
+  }, [project, future, refresh, currentEntry])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -153,9 +168,15 @@ export default function Editor() {
     toast('ok', 'Trecho recuperado', `${timecode(start, true)} → ${timecode(end, true)}`)
   }, [project, refresh, snapshot])
 
+  const analysed = ((project?.analysis?.words?.length ?? 0) > 0)
+
   const runOneClick = async () => {
     if (!project) return
-    const job = await api.oneclick(project.id)
+    // já analisado = a transcrição está pronta; refazer só a proposta de
+    // corte leva segundos. Retranscrever custaria minutos à toa.
+    const job = analysed
+      ? await api.autoedit(project.id)
+      : await api.oneclick(project.id)
     setState({ activeJob: job })
   }
 
@@ -173,7 +194,6 @@ export default function Editor() {
 
   if (!project) return null
   const view = timeline
-  const analysed = (project.analysis?.words?.length ?? 0) > 0
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
