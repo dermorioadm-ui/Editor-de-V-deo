@@ -8,7 +8,10 @@ Cada teste aqui corresponde a um bug que existiu:
 5. a Timeline dos ops ignorava o fps e a seleção errava o alvo;
 6. os quatro critérios de palma olhavam só o envelope, e uma palavra forte
    depois de uma pausa passava em todos — dava vinte perguntas por vídeo;
-7. toda borda suja virava pergunta, mesmo quando a correção era óbvia.
+7. toda borda suja virava pergunta, mesmo quando a correção era óbvia;
+8. a pausa que a pessoa dá ANTES de bater palma contava como fronteira de
+   frase, e a palma descartava um trecho vazio em vez do take errado;
+9. quando a frase era refeita SEM palma, as duas versões ficavam no vídeo.
 """
 from __future__ import annotations
 
@@ -250,6 +253,9 @@ def main() -> int:
     print()
     testar_timbre()
     testar_bordas()
+    testar_take_da_palma()
+    testar_repeticao()
+    testar_zoom()
 
     print()
     if FALHAS:
@@ -333,6 +339,116 @@ def testar_bordas() -> None:
     settle_edges(clips, env, words, removidas)
     fechou = abs(clips[0].src_end - clips[1].src_start) < 0.002
     check(not fechou, "o buraco com palavra removida dentro NÃO foi fechado")
+
+
+def testar_take_da_palma() -> None:
+    """A palma descarta a frase em andamento — não um trecho vazio."""
+    from editor.audio.clap import build_discarded_takes, detect_claps
+    from tests.speech import ESPEAK, build_track, SR
+
+    if not ESPEAK:
+        print("  --    take da palma (espeak-ng não instalado)")
+        return
+    frases = [("O seu anúncio está parado e você não sabe por quê", 1.0),
+              ("Eu descobri isso depois de perder três meses", 1.1),
+              ("Eu descobri isso depois de perder três meses inteiros", 1.0),
+              ("Clica no link aqui embaixo agora", 1.0)]
+    samples, marks, _ = build_track(frases, claps_after={1})
+    env = compute_envelope(samples, SR)
+    words, i = [], 0
+    for m in marks:
+        if m.get("clap"):
+            continue
+        toks = m["text"].split()
+        passo = (m["end"] - m["start"]) / len(toks)
+        for k, tok in enumerate(toks):
+            a = m["start"] + k * passo
+            words.append({"i": i, "start": round(a, 3),
+                          "end": round(a + passo * 0.92, 3),
+                          "text": tok, "prob": 0.95})
+            i += 1
+    claps = detect_claps(samples, SR, env)
+    takes = build_discarded_takes(env, claps, words)
+    errada = marks[1]
+    ok = bool(takes) and takes[0].start <= errada["start"] + 0.25 \
+        and takes[0].end >= errada["end"] - 0.25
+    check(ok, "a palma descarta a frase em andamento, não um trecho vazio"
+              + (f" ({takes[0].start:.2f}-{takes[0].end:.2f}, "
+                 f"esperado ~{errada['start']:.2f}-{errada['end']:.2f})"
+                 if takes else " (nenhum take)"))
+    check(bool(takes) and len(takes[0].text.split()) >= 4,
+          "o take descartado tem o texto da frase errada dentro")
+    check(all(c.enabled for c in claps),
+          "palma nunca vira pergunta: já entra ativa")
+
+
+def testar_repeticao() -> None:
+    """Frase refeita sem palma: sai a primeira, fica a última."""
+    from editor.edit.repeats import find_repeats
+    from tests.speech import ESPEAK, build_track, SR
+
+    if not ESPEAK:
+        print("  --    repetição (espeak-ng não instalado)")
+        return
+    frases = [("O seu anúncio está parado e você não sabe por quê", 1.0),
+              ("O problema não é o preço é a foto do anúncio", 0.9),
+              ("O problema não é o preço é a foto do seu anúncio", 1.0),
+              ("São trezentos e quarenta e sete anfitriões usando", 0.9),
+              ("Clica no link aqui embaixo agora", 1.0)]
+    samples, marks, _ = build_track(frases, claps_after=set())
+    env = compute_envelope(samples, SR)
+    words, i = [], 0
+    for m in marks:
+        toks = m["text"].split()
+        passo = (m["end"] - m["start"]) / len(toks)
+        for k, tok in enumerate(toks):
+            a = m["start"] + k * passo
+            words.append({"i": i, "start": round(a, 3),
+                          "end": round(a + passo * 0.92, 3),
+                          "text": tok, "prob": 0.95})
+            i += 1
+    reps = find_repeats(words, env)
+    check(len(reps) == 1, f"achou exatamente a repetição ({len(reps)})")
+    if reps:
+        r = reps[0]
+        check(abs(r.start - marks[1]["start"]) < 0.3,
+              "sai a PRIMEIRA versão (a que deu errado)")
+        check(abs(r.kept_start - marks[2]["start"]) < 0.3,
+              "fica a ÚLTIMA versão")
+    # as frases diferentes não podem se atrair
+    check(not any(abs(r.start - marks[3]["start"]) < 0.3 for r in reps),
+          "frase de assunto diferente não vira repetição")
+
+
+def testar_zoom() -> None:
+    """O enquadramento só troca onde existe corte de verdade."""
+    from editor.config import ZoomParams
+    from editor.edit.zoom import assign_zoom, zoom_chain
+    from editor.models import Clip
+
+    def c(a, b, sec="explicacao"):
+        return Clip(source="main", src_start=a, src_end=b, section=sec)
+
+    # 0-3 e 3-6 são contíguos (só muda a velocidade); 8-12 vem depois de corte
+    clips = [c(0, 3, "gancho"), c(3, 6, "gancho"), c(8, 12), c(14, 18)]
+    n = assign_zoom(clips, ZoomParams(levels=(1.0, 1.08), hook_punch=False))
+    check(abs(clips[0].zoom - clips[1].zoom) < 1e-6,
+          "bloco contíguo mantém o enquadramento (não pula sem corte)")
+    check(abs(clips[2].zoom - clips[1].zoom) > 1e-3,
+          "depois de um corte de verdade o enquadramento troca")
+    check(n >= 1, f"o jogo de zoom chegou em algum bloco ({n})")
+
+    curto = [c(0, 3), c(5, 5.4), c(7, 11)]
+    assign_zoom(curto, ZoomParams(levels=(1.0, 1.08), min_block=1.2,
+                                  hook_punch=False))
+    check(abs(curto[1].zoom - curto[0].zoom) < 1e-6,
+          "bloco curto herda o enquadramento (não embrulha o olho)")
+
+    ch = zoom_chain(1.08, 1080, 1920, 0.38)
+    check("crop=" in ch and "scale=1080:1920" in ch,
+          "o zoom volta ao tamanho de saída (a resolução não muda)")
+    check(zoom_chain(1.0, 1080, 1920, 0.38) == "",
+          "zoom 1,00x não põe filtro nenhum na cadeia")
 
 
 if __name__ == "__main__":

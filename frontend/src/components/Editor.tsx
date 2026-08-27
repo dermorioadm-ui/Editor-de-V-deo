@@ -166,6 +166,25 @@ export default function Editor() {
     }
   }, [project, selection, timeline, refresh, snapshot])
 
+  // Apagar o bloco inteiro: o gesto do CapCut. Vira um delete-range na
+  // janela de saída do bloco, então tudo que já existe (remap de overlays,
+  // reconstrução de legenda, desfazer) continua valendo.
+  const deleteClip = useCallback(async (clipId: string) => {
+    if (!project || !timeline) return
+    const b = timeline.blocks.find((x) => x.id === clipId)
+    if (!b || b.out_start == null || b.out_end == null) return
+    snapshot()
+    try {
+      await api.deleteRange(project.id, b.out_start + 0.002, b.out_end - 0.002)
+      setState({ selectedClip: null })
+      await refresh()
+      toast('ok', 'Bloco apagado',
+        `${timecode(b.out_start, true)} → ${timecode(b.out_end, true)}`)
+    } catch (e: any) {
+      toast('error', 'Não deu para apagar', String(e.message ?? e))
+    }
+  }, [project, timeline, refresh, snapshot])
+
   const restore = useCallback(async (start: number, end: number) => {
     if (!project) return
     snapshot()
@@ -237,9 +256,13 @@ export default function Editor() {
       {analysed && view && (() => {
         // O veredito. O usuário reclamou que o editor não entregava pronto:
         // ou está pronto e ele exporta, ou aqui diz exatamente o que falta.
-        const claps = (view.claps ?? []).filter((c) => c.suspect).length
-        const pend = (view.audit?.length ?? 0) + claps
+        // Palma não pergunta mais nada, então o único pendente possível é a
+        // borda que nem desfazendo o corte ficou limpa.
+        const pend = view.audit?.length ?? 0
         const fixed = view.audit_fixed?.length ?? 0
+        const auto = (view.takes ?? []).filter((t) => !t.restored).length
+          + (view.repeats ?? []).filter((r) => !r.restored).length
+        const zoom = view.blocks.filter((b) => (b.zoom ?? 1) > 1.001).length
         const econ = view.source_duration > 0
           ? Math.round((1 - view.duration / view.source_duration) * 100) : 0
         if (pend === 0) {
@@ -248,10 +271,12 @@ export default function Editor() {
                             border-emerald-900/50 bg-emerald-950/25">
               <span className="text-emerald-300 font-medium">✓ Pronto para exportar</span>
               <span className="text-slate-400">
-                {view.blocks.length} blocos · {timecode(view.duration)} de{' '}
-                {timecode(view.source_duration)} ({econ}% mais curto) ·{' '}
+                {timecode(view.duration)} de {timecode(view.source_duration)}{' '}
+                ({econ}% mais curto) · {view.blocks.length} blocos ·{' '}
                 {view.subtitles.length} legendas
-                {fixed > 0 && ` · ${fixed} borda(s) acertadas sozinhas`}
+                {auto > 0 && ` · ${auto} trecho(s) ruim(ns) fora`}
+                {zoom > 0 && ` · zoom em ${zoom}`}
+                {fixed > 0 && ` · ${fixed} borda(s) acertadas`}
               </span>
               <button className="btn btn-primary btn-xs ml-auto"
                       onClick={() => setTab('exportar')}>
@@ -267,10 +292,9 @@ export default function Editor() {
               Falta você decidir {pend} coisa(s)
             </span>
             <span className="text-slate-400">
-              {view.audit?.length ? `${view.audit.length} corte(s) sem respiro por perto` : ''}
-              {view.audit?.length && claps ? ' · ' : ''}
-              {claps ? `${claps} som(ns) que podem ser palma` : ''}
+              {view.audit!.length} corte(s) sem respiro por perto
               {fixed > 0 && ` · ${fixed} borda(s) já resolvidas sozinhas`}
+              {auto > 0 && ` · ${auto} trecho(s) ruim(ns) já foram fora`}
             </span>
             <span className="ml-auto flex gap-1.5">
               <button className="btn btn-xs" onClick={() => setTab('exportar')}>
@@ -336,7 +360,13 @@ export default function Editor() {
         </main>
 
         <aside className="w-[300px] shrink-0 border-l border-line overflow-auto">
-          <Inspector onChanged={refresh} snapshot={snapshot} />
+          <Inspector onChanged={refresh} snapshot={snapshot}
+                     onToggleTake={async (id, restored) => {
+                       snapshot()
+                       await api.setTake(project.id, id, restored)
+                       const job = await api.autoedit(project.id)
+                       setState({ activeJob: job })
+                     }} />
         </aside>
       </div>
 
@@ -344,6 +374,7 @@ export default function Editor() {
         <Timeline view={view} envelope={envelope}
                   sourceDuration={view.source_duration || project.info?.duration || 0}
                   onDeleteSelection={deleteSelection}
+                  onDeleteClip={deleteClip}
                   onRestore={restore}
                   onToggleTake={async (id, restored) => {
                     snapshot()

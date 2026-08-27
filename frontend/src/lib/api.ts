@@ -92,6 +92,12 @@ export const api = {
     post<any>(`/api/projects/${id}/ops/audit-fix`, { index }),
   setTake: (id: string, take_id: string, restored: boolean) =>
     post<any>(`/api/projects/${id}/ops/take`, { take_id, restored }),
+  setRepeat: (id: string, repeat_id: string, restored: boolean) =>
+    post(`/api/projects/${id}/ops/repeat`, { repeat_id, restored }),
+
+  setZoom: (id: string, clip_id: string, zoom: number) =>
+    post(`/api/projects/${id}/ops/zoom`, { clip_id, zoom }),
+
   setClap: (id: string, clap_id: string, enabled: boolean) =>
     post<any>(`/api/projects/${id}/ops/clap`, { clap_id, enabled }),
   fillers: (id: string) => req<any[]>(`/api/projects/${id}/fillers`),

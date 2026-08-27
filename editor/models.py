@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Any
 
 from .config import (AudioParams, CutParams, ExportParams, SpeedParams,
-                     SubtitleStyle)
+                     SubtitleStyle, ZoomParams)
 
 SECTIONS = {
     "gancho":     {"label": "Gancho / abertura", "speed": (1.00, 1.06), "color": "#38bdf8"},
@@ -64,6 +64,7 @@ class Clip:
     snap_in: dict | None = None     # SnapResult, para a interface explicar
     snap_out: dict | None = None
     measured_duration: float | None = None   # medida real do render
+    zoom: float = 1.0               # jogo de zoom do corte (crop central)
     label: str = ""
     photo: dict | None = None       # {duration, ken_burns, annotations}
     fit: dict | None = None         # {tonemap, brightness, saturation, contrast}
@@ -212,8 +213,10 @@ class EditPlan:
     style: SubtitleStyle = field(default_factory=SubtitleStyle)
     audio: AudioParams = field(default_factory=AudioParams)
     export: ExportParams = field(default_factory=ExportParams)
+    zoom: ZoomParams = field(default_factory=ZoomParams)
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
+    repeats: list = field(default_factory=list)       # trechos ditos duas vezes
     version: int = 1
 
     # ------------------------------------------------------------ serialize
@@ -236,8 +239,10 @@ class EditPlan:
             "style": asdict(self.style),
             "audio": asdict(self.audio),
             "export": asdict(self.export),
+            "zoom": asdict(self.zoom),
             "audit": self.audit,
             "audit_fixed": self.audit_fixed,
+            "repeats": self.repeats,
             "version": self.version,
         }
 
@@ -259,8 +264,13 @@ class EditPlan:
         plan.style = _from_dict(SubtitleStyle, data.get("style")) or SubtitleStyle()
         plan.audio = _from_dict(AudioParams, data.get("audio")) or AudioParams()
         plan.export = _from_dict(ExportParams, data.get("export")) or ExportParams()
+        zdata = dict(data.get("zoom") or {})
+        if "levels" in zdata:
+            zdata["levels"] = tuple(float(x) for x in zdata["levels"])
+        plan.zoom = ZoomParams(**zdata) if zdata else ZoomParams()
         plan.audit = list(data.get("audit", []))
         plan.audit_fixed = list(data.get("audit_fixed", []))
+        plan.repeats = list(data.get("repeats", []))
         plan.version = int(data.get("version", 1))
         return plan
 

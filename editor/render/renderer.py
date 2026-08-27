@@ -25,6 +25,7 @@ import numpy as np
 
 from ..config import FFMPEG, AudioParams, ExportParams
 from ..edit.timeline import Timeline
+from ..edit.zoom import zoom_chain
 from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
                             run_with_progress, write_wav)
 from ..models import EditPlan
@@ -48,6 +49,7 @@ class VideoSegment:
     info: MediaInfo | None = None
     photo: dict | None = None
     fit: dict | None = None
+    zoom: float = 1.0          # jogo de zoom do corte, aplicado neste encode
     out_start: float = 0.0     # preenchido com a soma das durações MEDIDAS
     t_start: float = 0.0       # posição na linha do tempo das legendas (nominal)
     measured: float | None = None
@@ -210,7 +212,7 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         kind="main" if clip.source == "main" else "insert",
                         src_start=s0, src_duration=s1 - s0, speed=clip.speed,
                         out_theoretical=out_dur, clip_id=clip.id, info=info,
-                        t_start=out_a, fit=clip.fit))
+                        t_start=out_a, fit=clip.fit, zoom=clip.zoom))
             else:
                 cpath = sources.get(cut.media_id, {}).get("path")
                 cinfo = sources.get(cut.media_id, {}).get("info")
@@ -225,7 +227,8 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         src_start=clip.src_start + frac_a * clip.src_duration,
                         src_duration=(frac_b - frac_a) * clip.src_duration,
                         speed=clip.speed, out_theoretical=out_dur,
-                        clip_id=clip.id, info=info, t_start=out_a))
+                        clip_id=clip.id, info=info, t_start=out_a,
+                        zoom=clip.zoom))
                 else:
                     offset = (out_a - cut.out_start) * cut.speed
                     segs.append(VideoSegment(
@@ -306,6 +309,12 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
             chain.append(F.fit_chain(width, height))
         elif seg.kind != "main":
             chain.append(f"scale={width}:{height}")
+        # jogo de zoom: crop central + volta ao tamanho de saída. Entra DEPOIS
+        # do fit — a imagem já está em width x height, então o crop é sempre
+        # sobre o quadro final e a resolução de saída não muda.
+        zc = zoom_chain(seg.zoom, width, height, plan.zoom.bias_y)
+        if zc:
+            chain.append(zc)
 
     graph_parts.append(f"[{cur_tag}]" + ",".join(chain) + "[__v0]")
     cur_tag = "__v0"
@@ -399,6 +408,7 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
             "src": seg.source_path, "start": round(seg.src_start, 4),
             "dur": round(seg.src_duration, 4), "speed": seg.speed,
             "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
+            "zoom": round(seg.zoom, 4), "zoom_bias": plan.zoom.bias_y,
             "t_start": round(seg.t_start, 3) if positional else None,
             "nominal": round(seg.nominal, 4),
             "style": plan.style.__dict__ if seg_cues else None,

@@ -6,17 +6,19 @@ import time
 from dataclasses import asdict
 
 from .config import (AudioParams, CutParams, ExportParams, Preset, SpeedParams,
-                     SubtitleStyle)
+                     SubtitleStyle, ZoomParams)
 
 
 def _preset(name: str, description: str, cut: CutParams, speed: SpeedParams,
             style: SubtitleStyle, audio: AudioParams | None = None,
-            export: ExportParams | None = None) -> dict:
+            export: ExportParams | None = None,
+            zoom: ZoomParams | None = None) -> dict:
     return {
         "name": name, "description": description, "builtin": True,
         "cut": asdict(cut), "speed": asdict(speed), "style": asdict(style),
         "audio": asdict(audio or AudioParams()),
         "export": asdict(export or ExportParams()),
+        "zoom": asdict(zoom or ZoomParams()),
     }
 
 
@@ -26,6 +28,7 @@ BUILTIN = [
         CutParams(silence_min=0.70, air=0.25, margin=0.15, min_block=1.0),
         SpeedParams(ceiling=1.12, max_speed=1.25, warn_above=1.25),
         SubtitleStyle(fontsize=64, max_chars_per_line=24, margin_v=220),
+        zoom=ZoomParams(levels=(1.0, 1.08)),
     ),
     _preset(
         "Criativo 60s", "Corte agressivo, até 1,18x, legenda maior.",
@@ -33,6 +36,7 @@ BUILTIN = [
         SpeedParams(ceiling=1.18, max_speed=1.30, warn_above=1.25),
         SubtitleStyle(fontsize=82, max_chars_per_line=20, margin_v=300,
                       outline=5.0),
+        zoom=ZoomParams(levels=(1.0, 1.10, 1.05), min_block=1.0),
     ),
     _preset(
         "Story", "30 s, corte máximo, até 1,25x.",
@@ -43,8 +47,16 @@ BUILTIN = [
         SpeedParams(ceiling=1.25, max_speed=1.40, warn_above=1.25),
         SubtitleStyle(fontsize=92, max_chars_per_line=18, margin_v=420,
                       outline=6.0, uppercase=True),
+        zoom=ZoomParams(levels=(1.0, 1.12, 1.06, 1.14), min_block=0.8),
     ),
 ]
+
+
+def _zoom(data: dict | None) -> ZoomParams:
+    d = dict(data or {})
+    if "levels" in d:
+        d["levels"] = tuple(float(x) for x in d["levels"])
+    return ZoomParams(**d)
 
 
 def to_objects(data: dict) -> Preset:
@@ -55,6 +67,7 @@ def to_objects(data: dict) -> Preset:
         style=SubtitleStyle(**data.get("style", {})),
         audio=AudioParams(**data.get("audio", {})),
         export=ExportParams(**data.get("export", {})),
+        zoom=_zoom(data.get("zoom")),
         builtin=bool(data.get("builtin")),
     )
 

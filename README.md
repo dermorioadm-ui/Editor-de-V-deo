@@ -273,7 +273,9 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
    transcrevendo → analisando → propondo cortes → gerando legendas.
 4. Quando terminar, o vídeo aparece na timeline, já cortado, acelerado e
    legendado.
-5. **Olhe a faixa logo abaixo do nome do projeto.** É o veredito:
+5. O editor já tirou os takes ruins (com e sem palma), acertou as bordas e
+   montou o jogo de zoom — sem perguntar nada.
+6. **Olhe a faixa logo abaixo do nome do projeto.** É o veredito:
    - verde, “✓ Pronto para exportar” — não sobrou nada para você decidir.
      Clique em **exportar →** e acabou.
    - amarelo, “Falta você decidir N coisa(s)” — diz exatamente o que é. Só
@@ -295,7 +297,7 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
   | marcas | bandeirinha laranja = palma (clique liga/desliga). Triângulo vermelho = borda que ainda precisa de você. |
   | onda | o áudio. Hachurado vermelho = sai do vídeo. Cinza = take descartado pela palma. O risco vermelho fino no rodapé é um corte curto demais para desenhar — dê zoom para vê-lo. |
   | seções | Gancho, Dor, Oferta… blocos vizinhos da mesma seção viram uma faixa só, com o nome escrito. |
-  | velocidade | um retângulo por bloco, colorido pela velocidade: azul 1,00x, verde até 1,12x, amarelo até 1,25x, laranja acima disso. Clique para selecionar e ajustar no painel da direita. |
+  | velocidade | um retângulo por bloco, colorido pela velocidade: azul 1,00x, verde até 1,12x, amarelo até 1,25x, laranja acima disso. Canto marcado = enquadramento fechado. Clique para selecionar; **Delete apaga o bloco inteiro**. |
 
   Embaixo de tudo, a faixa azul das legendas — arraste as bordas para ajustar.
 - **Painel da direita** — o que sobrou para você decidir. Bordas que dava para
@@ -323,6 +325,45 @@ estava em andamento (não tudo que veio antes — só a tentativa que deu errado
 Os takes descartados aparecem em cinza na timeline. Se o take novo tiver saído
 pior que o antigo, passe o mouse por cima e clique em **recuperar este take**.
 
+### O que o editor tira sozinho
+
+Três coisas saem do vídeo sem perguntar nada:
+
+| o quê | como ele sabe |
+|---|---|
+| **o take que você refez batendo palma** | o timbre da palma (tabela abaixo). Descarta a frase que estava em andamento — a última palavra dita antes da palma manda, não a respirada. |
+| **o take que você refez SEM bater palma** | você disse quase a mesma coisa duas vezes seguidas. Fica a **última**; a primeira foi a que deu errado. |
+| **a borda de corte que encostava em fala** | acerta sozinho; e onde não dá para cortar limpo, não corta — a pausa fica. |
+
+Tudo isso aparece no painel da direita em **“Saiu sozinho”**, com o texto do
+que saiu riscado e o texto do que ficou embaixo. Errou em algum? **voltar**, e
+ele volta. Você corrige uma automação; nunca alimenta uma.
+
+**Como ele separa refeitura de repetição de propósito.** Comparar as palavras
+inteiras não basta: “eu vou te mostrar o print DA CONTA” e “…DO EXTRATO” batem
+75% e são duas frases diferentes. O que decide é a semelhança das palavras de
+**conteúdo** (fora artigo, preposição e pronome). Medido em 16 pares: refeitura
+fica entre 0,80 e 1,00; frase diferente, entre 0,00 e 0,67 — e “não é sobre
+**preço** é sobre **valor**” contra “não é sobre **sorte** é sobre **método**”
+dá 0,00 de conteúdo, então o paralelismo fica no vídeo.
+
+### O jogo de zoom
+
+Corte de silêncio sem troca de enquadramento parece defeito de arquivo. Com o
+enquadramento mudando, o mesmo corte vira linguagem — é assim que VSL é
+montada. O editor faz isso sozinho: a cada corte de verdade o quadro alterna
+entre aberto e fechado, e a virada do gancho para o corpo entra fechada.
+
+- Bloco **contíguo** (onde só a velocidade muda, sem corte) mantém o
+  enquadramento. Trocar sem cortar é que embrulha o olho.
+- Bloco curto herda o do vizinho.
+- É um crop central com volta ao tamanho de saída, **no mesmo encode dos
+  blocos**: não custa geração nenhuma e a resolução não muda.
+
+Desligue em **Jogo de zoom nos cortes**, no painel da direita, ou ajuste bloco
+a bloco em **Enquadramento**. O canto marcado no bloco, na timeline, mostra
+quais estão fechados.
+
 **Por que ele não confunde palma com palavra forte.** Pico, salto de volume,
 duração e ataque a partir do silêncio — os quatro critérios de envelope — não
 separam nada: uma palavra enfática logo depois de uma pausa passa em todos, e
@@ -335,10 +376,10 @@ editor mede três coisas:
 | planura espectral (ruído x harmônico) | 0,84 a 0,86 | 0,05 a 0,08 |
 | agudo sobre grave | 4,2 a 6,3 | 0,03 a 0,39 |
 
-Som que falha em dois desses três nem vira pergunta. Quem passa nos três e vem
-do silêncio é palma confirmada e descarta o take sozinho. Só o caso do meio —
-timbre de palma mas ataque duvidoso — aparece em **amarelo** e pede sua
-confirmação, sem descartar nada enquanto você não responder.
+Som que falha em dois desses três nem entra na lista. O resto é palma e
+descarta o take **sozinho** — o editor nunca pergunta “isso foi palma?”.
+Se ele errar, a bandeirinha laranja na timeline desliga com um clique, ou você
+usa **voltar** em “Saiu sozinho”.
 
 ### Exportar
 

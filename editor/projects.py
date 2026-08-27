@@ -13,9 +13,13 @@ from . import db, presets as presets_mod
 from .audio.clap import build_discarded_takes, detect_claps
 from .audio.envelope import Envelope, compute_envelope
 from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
-                     SpeedParams, SubtitleStyle, ensure_dirs)
+                     SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs)
 from .edit.audit import audit_edges, audit_summary, settle_edges
-from .edit.plan_builder import build_auto_plan, resync_removed
+from .edit.plan_builder import (build_auto_plan, resync_removed,
+                                words_removed_by_takes)
+from .edit.repeats import find_repeats
+from .edit.zoom import assign_zoom
+from .edit.repeats import removed_word_ids as repeats_removed_ids
 from .edit.timeline import Timeline
 from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoders, probe,
                            read_wav_mono)
@@ -160,6 +164,10 @@ def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
     plan.style = SubtitleStyle(**data.get("style", {}))
     plan.audio = AudioParams(**data.get("audio", {}))
     plan.export = ExportParams(**data.get("export", {}))
+    zdata = dict(data.get("zoom") or {})
+    if "levels" in zdata:
+        zdata["levels"] = tuple(float(x) for x in zdata["levels"])
+    plan.zoom = ZoomParams(**zdata) if zdata else ZoomParams()
 
 
 # -------------------------------------------------------------------- mídia
@@ -239,19 +247,13 @@ def analyze(project: Project, ctx) -> dict:
 
     fillers = annotate_fillers(words, env)
     previous = project.analysis or {}
-    # decisões do usuário sobrevivem a uma reanálise: palma confirmada ou
-    # descartada é casada pelo instante do pico; take recuperado, pelo início
+    # decisões do usuário sobrevivem a uma reanálise. Agora só existe UMA
+    # decisão possível: "isto não era palma" — casada pelo instante do pico.
     for clap in claps:
         for old in previous.get("claps", []):
-            if abs(float(old.get("time", -1)) - clap.time) < 0.05                     and not old.get("suspect", True) is None:
-                if old.get("suspect") is False and clap.suspect:
-                    clap.suspect = False
-                    clap.confirmed = bool(old.get("confirmed", clap.confirmed))
-                    clap.enabled = bool(old.get("enabled", clap.enabled))
-                elif old.get("enabled") is False:
-                    clap.enabled = False
-                    clap.confirmed = False
-                    clap.suspect = False
+            if (abs(float(old.get("time", -1)) - clap.time) < 0.05
+                    and old.get("enabled") is False):
+                clap.enabled = False
     takes = [t.to_dict() for t in build_discarded_takes(env, claps, words)]
     for take in takes:
         for old in previous.get("takes", []):
@@ -296,9 +298,35 @@ def auto_edit(project: Project, ctx) -> dict:
     takes = project.analysis.get("takes", [])
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
+
+    # Repetição: quando a mesma coisa é dita duas vezes, a que vale é a última.
+    # Roda DEPOIS da regra do take (o que a palma já descartou não entra na
+    # comparação) e ANTES do corte, para o plano já nascer sem a versão ruim.
+    ctx.stage("repeticao", "procurando trechos ditos duas vezes")
+    ja_fora = set(words_removed_by_takes(words, takes)) | manual_removed
+    repeats = find_repeats(words, env, pause=project.plan.cut.narrative_pause,
+                           already_removed=ja_fora)
+    antigos = {r.get("id"): r for r in project.analysis.get("repeats", [])}
+    saida = []
+    for r in repeats:
+        d = r.to_dict()
+        # a decisão de recuperar sobrevive a uma reedição: casa pelo início
+        for old_r in antigos.values():
+            if abs(float(old_r.get("start", -9)) - d["start"]) < 0.2 \
+                    and old_r.get("restored"):
+                d["restored"] = True
+        saida.append(d)
+    # o usuário pode ter recuperado uma repetição que a reanálise não achou
+    for old_r in project.analysis.get("repeats", []):
+        if old_r.get("restored") and not any(
+                abs(float(old_r.get("start", -9)) - d["start"]) < 0.2 for d in saida):
+            saida.append(old_r)
+    project.analysis["repeats"] = saida
+    repetidas = repeats_removed_ids(saida)
+
     ctx.stage("cortes", "propondo cortes com encaixe no vale de energia")
     result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
-                             takes, extra_removed=manual_removed)
+                             takes, extra_removed=manual_removed | repetidas)
     plan = project.plan
     from .edit.ops import remap_output_items
     fps = project.info.fps if project.info else None
@@ -315,6 +343,10 @@ def auto_edit(project: Project, ctx) -> dict:
     project.analysis["removed_word_ids"] = result["removed_word_ids"]
     project.analysis["plan_notes"] = result["notes"]
 
+    plan.repeats = saida
+    ativas = [r for r in saida if not r.get("restored")]
+    if ativas:
+        ctx.progress(0.5, f"{len(ativas)} trecho(s) repetido(s) removido(s)")
     ctx.progress(0.55, f"{len(plan.clips)} blocos propostos")
     ctx.stage("auditoria", "auditando as bordas de corte")
     # As bordas que dá para acertar sozinho são acertadas AQUI. O usuário
@@ -328,11 +360,20 @@ def auto_edit(project: Project, ctx) -> dict:
         # as bordas mudaram: o vermelho da timeline tem que acompanhar
         plan.removed = resync_removed(plan.clips, plan.removed, env.duration)
 
+    # Jogo de zoom por ÚLTIMO: a auditoria pode desfazer um corte, e onde o
+    # corte deixou de existir o enquadramento não pode mudar — senão a imagem
+    # pula sem que nada tenha sido cortado, que é o defeito que o zoom existe
+    # para esconder.
+    ctx.stage("zoom", "montando o jogo de zoom dos cortes")
+    n_zoom = assign_zoom(plan.clips, plan.zoom)
+
     ctx.stage("legendas", "gerando legendas")
     cues = rebuild_subtitles(project)
     project.save_analysis()
     project.save_plan()
     project.set_status("editado")
+    if n_zoom:
+        ctx.progress(0.95, f"jogo de zoom em {n_zoom} bloco(s)")
     ctx.progress(1.0, f"{len(plan.clips)} blocos, {len(cues)} legendas, "
                       + (f"{len(fixed)} borda(s) ajustada(s) sozinho, " if fixed else "")
                       + (f"{len(issues)} alerta(s) de borda" if issues
@@ -341,6 +382,8 @@ def auto_edit(project: Project, ctx) -> dict:
         "clips": len(plan.clips), "subtitles": len(cues),
         "audit": audit_summary(issues),
         "audit_fixed": len(fixed),
+        "repeats": len(ativas),
+        "zoom": n_zoom,
         "duration": round(plan.duration, 2),
         "notes": result["notes"],
     }
@@ -563,6 +606,11 @@ def timeline_summary(project: Project) -> dict:
         "subtitles": [s.to_dict() for s in plan.subtitles],
         "audit": plan.audit,
         "audit_fixed": plan.audit_fixed,
+        "repeats": plan.repeats,
+        "zoom": {"enabled": plan.zoom.enabled,
+                 "levels": list(plan.zoom.levels),
+                 "max_level": plan.zoom.max_level,
+                 "bias_y": plan.zoom.bias_y},
         "cutaways": [c.to_dict() for c in plan.cutaways],
         "overlays": [o.to_dict() for o in plan.overlays],
         "blurs": [b.to_dict() for b in plan.blurs],

@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db, presets as presets_mod, projects as svc, video_analysis
 from .config import (STATIC_DIR, AudioParams, CutParams, ExportParams,
-                     SpeedParams, SubtitleStyle, ensure_dirs, ffmpeg_available,
-                     WHISPER_MODEL)
+                     SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs,
+                     ffmpeg_available, WHISPER_MODEL)
 from .edit import ops
 from .edit.audit import apply_fix, audit_edges
 from .ffmpeg_utils import hw_encoders
@@ -353,12 +353,18 @@ def api_params(pid: str, payload: dict = Body(...)) -> dict:
     plan = project.plan
     mapping = {"cut": (CutParams, "cut"), "speed": (SpeedParams, "speed"),
                "style": (SubtitleStyle, "style"), "audio": (AudioParams, "audio"),
-               "export": (ExportParams, "export")}
+               "export": (ExportParams, "export"), "zoom": (ZoomParams, "zoom")}
     for key, (cls, attr) in mapping.items():
         if key in payload and isinstance(payload[key], dict):
             current = getattr(plan, attr).__dict__.copy()
             current.update({k: v for k, v in payload[key].items() if k in current})
+            if "levels" in current:
+                current["levels"] = tuple(float(x) for x in current["levels"])
             setattr(plan, attr, cls(**current))
+    if "zoom" in payload and isinstance(payload["zoom"], dict):
+        # mudou o jogo de zoom: redistribui pelos blocos na hora
+        from .edit.zoom import assign_zoom
+        assign_zoom(plan.clips, plan.zoom)
     if payload.get("rebuild_subtitles"):
         svc.rebuild_subtitles(project)
     project.save_plan()
@@ -594,6 +600,41 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
         project.plan.removed = resync_removed(project.plan.clips,
                                               project.plan.removed, env.duration)
     return {"ok": True, "timeline": _after_edit(project)}
+
+
+@app.post("/api/projects/{pid}/ops/zoom")
+def api_zoom(pid: str, payload: dict = Body(...)) -> dict:
+    """Ajusta o enquadramento de UM bloco (o jogo de zoom, na mão)."""
+    project = _project(pid)
+    zoom = float(payload.get("zoom", 1.0))
+    limite = project.plan.zoom.max_level
+    zoom = max(1.0, min(zoom, max(limite, 1.0)))
+    for clip in project.plan.clips:
+        if clip.id == payload.get("clip_id"):
+            clip.zoom = round(zoom, 4)
+            project.save_plan()
+            return {"ok": True, "zoom": clip.zoom,
+                    "timeline": svc.timeline_summary(project)}
+    raise HTTPException(404, "bloco não encontrado")
+
+
+@app.post("/api/projects/{pid}/ops/repeat")
+def api_repeat(pid: str, payload: dict = Body(...)) -> dict:
+    """Recupera (ou volta a remover) um trecho repetido."""
+    project = _project(pid)
+    repeats = project.analysis.get("repeats", [])
+    rid = payload.get("repeat_id")
+    for r in repeats:
+        if r.get("id") == rid:
+            r["restored"] = bool(payload.get("restored"))
+            break
+    else:
+        raise HTTPException(404, "repetição não encontrada")
+    project.analysis["repeats"] = repeats
+    project.save_analysis()
+    project.plan.repeats = repeats
+    project.save_plan()
+    return {"ok": True, "repeats": repeats}
 
 
 @app.post("/api/projects/{pid}/ops/take")

@@ -6,7 +6,7 @@ export interface Clip {
   cut_in: boolean; cut_out: boolean
   snap_in: SnapResult | null; snap_out: SnapResult | null
   label: string; photo: any; fit: any
-  src_duration: number; out_duration: number
+  src_duration: number; out_duration: number; zoom: number
   out_start?: number; out_end?: number
 }
 
@@ -45,6 +45,12 @@ export interface AuditIssue {
   suggestion: number; suggestion_reason: string; word?: string
 }
 
+export interface Repeat {
+  id: string; start: number; end: number; text: string
+  kept_start: number; kept_end: number; kept_text: string
+  similarity: number; word_ids: number[]; restored: boolean; reason: string
+}
+
 export interface AuditFixed {
   clip_id: string; side: string; from: number; to: number
   reason: string; message: string; kind?: string
@@ -65,6 +71,8 @@ export interface TimelineView {
   duration: number; source_duration: number
   blocks: Clip[]; removed: RemovedRegion[]; takes: Take[]; claps: Clap[]
   subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]
+  repeats?: Repeat[]; zoom?: { enabled: boolean; levels: number[]
+                              max_level: number; bias_y: number }
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
 }
 

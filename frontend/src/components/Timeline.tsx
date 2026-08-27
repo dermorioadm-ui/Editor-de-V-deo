@@ -11,6 +11,7 @@ interface Props {
   envelope: Envelope | null
   sourceDuration: number
   onDeleteSelection: () => void
+  onDeleteClip: (clipId: string) => void
   onRestore: (start: number, end: number) => void
   onToggleTake: (id: string, restored: boolean) => void
   onToggleClap: (id: string, enabled: boolean) => void
@@ -274,6 +275,15 @@ export default function Timeline(props: Props) {
         g.font = 'bold 10px ui-monospace, monospace'
         g.fillText(`${b.speed.toFixed(2)}x`, x0 + 4, yBlocks + 15)
       }
+      // bloco com enquadramento fechado ganha um canto marcado: dá para ver
+      // o jogo de zoom da timeline inteira sem clicar em nada
+      if ((b.zoom ?? 1) > 1.001) {
+        g.fillStyle = '#08111f'
+        g.beginPath()
+        g.moveTo(x1 - Math.min(9, w), yBlocks + 3)
+        g.lineTo(x1, yBlocks + 3); g.lineTo(x1, yBlocks + 12)
+        g.closePath(); g.fill()
+      }
       // corte de verdade: um talho escuro entre os blocos
       g.fillStyle = '#0f1218'
       if (b.cut_in) g.fillRect(x0 - 1, yBlocks + 1, 2.5, ROW.blocks - 4)
@@ -500,14 +510,19 @@ export default function Timeline(props: Props) {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
       if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable) return
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selection) {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (selection) {
         e.preventDefault()
         props.onDeleteSelection()
+      } else if (selectedClip) {
+        // sem área marcada, Delete apaga o BLOCO clicado — é o gesto do CapCut
+        e.preventDefault()
+        props.onDeleteClip(selectedClip)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selection, props])
+  }, [selection, selectedClip, props])
 
   const hoveredRemoved = hover
     ? (view.removed ?? []).find((r) => hover.t >= r.start && hover.t <= r.end)
@@ -597,10 +612,15 @@ export default function Timeline(props: Props) {
           <span className="w-2.5 h-1 rounded-sm bg-red-400" />corte (dá zoom para ver)
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" />palma (clique liga/desliga)
+          <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" />palma (clique desliga)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2.5 h-2.5 bg-slate-300"
+                style={{ clipPath: 'polygon(100% 0,100% 100%,0 0)' }} />
+          enquadramento fechado
         </span>
         <span className="ml-auto">
-          arraste para selecionar · Delete corta · roda dá zoom · Alt+arraste move
+          clique num bloco e Delete apaga ele · arraste para marcar um trecho e Delete corta · roda dá zoom · Alt+arraste move
         </span>
       </div>
     </div>

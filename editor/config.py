@@ -120,6 +120,26 @@ class SpeedParams:
 
 
 @dataclass
+class ZoomParams:
+    """Jogo de zoom (o corte "seco" de VSL).
+
+    O corte de silêncio sozinho aparece como um salto na imagem — parece
+    defeito. Trocar o enquadramento junto com o corte transforma o mesmo salto
+    em linguagem: é assim que toda VSL é montada. O zoom é aplicado no MESMO
+    encode dos blocos, então não custa geração nenhuma.
+    """
+
+    enabled: bool = True
+    levels: tuple[float, ...] = (1.0, 1.09)   # a cada corte, alterna
+    max_level: float = 1.20
+    min_block: float = 1.20      # bloco curto herda o zoom do anterior: trocar
+                                 # de enquadramento a cada 0,5 s embrulha
+    bias_y: float = 0.38         # 0,5 é o centro; menos sobe o corte, e a
+                                 # cabeça de quem fala fica no terço de cima
+    hook_punch: bool = True      # o primeiro bloco depois do gancho entra fechado
+
+
+@dataclass
 class SubtitleStyle:
     font: str = "Arial"
     fontsize: int = 64
@@ -183,4 +203,5 @@ class Preset:
     style: SubtitleStyle = field(default_factory=SubtitleStyle)
     audio: AudioParams = field(default_factory=AudioParams)
     export: ExportParams = field(default_factory=ExportParams)
+    zoom: ZoomParams = field(default_factory=ZoomParams)
     builtin: bool = False

@@ -4,9 +4,13 @@ import { api } from '../lib/api'
 import { seconds, timecode } from '../lib/format'
 import { getPlayhead, setPlayhead, setState, toast, useStore } from '../state/store'
 
-interface Props { onChanged: () => Promise<any>; snapshot: () => void }
+interface Props {
+  onChanged: () => Promise<any>
+  snapshot: () => void
+  onToggleTake: (id: string, restored: boolean) => void
+}
 
-export default function Inspector({ onChanged, snapshot }: Props) {
+export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
   const selectedId = useStore((s) => s.selectedClip)
@@ -14,6 +18,7 @@ export default function Inspector({ onChanged, snapshot }: Props) {
   const [globalSpeed, setGlobalSpeed] = useState(storedGlobal)
   const [busy, setBusy] = useState(false)
   const [dragSpeed, setDragSpeed] = useState<number | null>(null)
+  const [dragZoom, setDragZoom] = useState<number | null>(null)
   useEffect(() => { setGlobalSpeed(storedGlobal) }, [storedGlobal])
 
   const block = useMemo(
@@ -110,47 +115,116 @@ export default function Inspector({ onChanged, snapshot }: Props) {
         </section>
       )}
 
-      {/* ---------------------------------------------------------- palmas */}
-      {view.claps?.some((c) => c.suspect) && (
-        <section className="card border-amber-900/60 bg-amber-950/25 p-3">
-          <h3 className="text-xs font-semibold text-amber-300 uppercase tracking-wide mb-2">
-            {view.claps.filter((c) => c.suspect).length} som(ns) parecem palma
-          </h3>
-          <p className="hint mb-2">
-            O timbre bate com palma (estouro seco, agudo, sem harmônico), mas falta
-            um critério. Enquanto você não disser que é, nada é descartado.
+      {/* ---------------------------------------------------- jogo de zoom */}
+      <section className="card p-3">
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <input type="checkbox" checked={view.zoom?.enabled ?? true}
+                 onChange={async (e) => {
+                   snapshot()
+                   await api.params(project.id, { zoom: { enabled: e.target.checked } })
+                   await onChanged()
+                 }} />
+          <b>Jogo de zoom nos cortes</b>
+        </label>
+        <p className="hint mt-1">
+          A cada corte o enquadramento troca. É o que faz o corte parecer
+          montagem de VSL em vez de defeito no arquivo. Não custa geração
+          nenhuma — entra no mesmo encode.
+        </p>
+        {(view.zoom?.enabled ?? true) && (
+          <p className="text-[11px] text-slate-500 mt-1.5 font-mono">
+            {view.blocks.filter((b) => (b.zoom ?? 1) > 1.001).length} de{' '}
+            {view.blocks.filter((b) => b.source === 'main').length} blocos fechados
           </p>
-          {view.claps.filter((c) => c.suspect).map((c) => (
-            <div key={c.id} className="text-[11px] border-t border-amber-900/40 pt-2 mt-2
-                                       first:border-0 first:pt-0 first:mt-0">
-              <div className="font-mono">{timecode(c.time, true)} · sobe em{' '}
-                {c.rise_ms?.toFixed(1)} ms · {c.timbre_score}/3 no timbre</div>
-              <p className="text-slate-400 mt-0.5">{c.reason}</p>
-              <div className="flex gap-1 mt-1.5">
-                <button className="btn btn-xs"
-                        onClick={() => setPlayhead(Math.max(0, c.time - 1.0))}>
-                  ouvir
-                </button>
-                <button className="btn btn-xs"
-                        onClick={async () => {
-                          await api.setClap(project.id, c.id, true)
-                          const job = await api.autoedit(project.id)
-                          setState({ activeJob: job })
-                        }}>
-                  é palma, descarta o take
-                </button>
-                <button className="btn btn-xs"
-                        onClick={async () => {
-                          await api.setClap(project.id, c.id, false)
-                          await onChanged()
-                        }}>
-                  não é
-                </button>
-              </div>
+        )}
+      </section>
+
+      {/* ------------------------------------------- o que saiu sozinho */}
+      {(() => {
+        const takes = (view.takes ?? []).filter((t) => !t.restored)
+        const reps = (view.repeats ?? []).filter((r) => !r.restored)
+        const voltaram = (view.takes ?? []).filter((t) => t.restored).length
+          + (view.repeats ?? []).filter((r) => r.restored).length
+        if (!takes.length && !reps.length && !voltaram) return null
+        const total = takes.length + reps.length
+        return (
+          <section className="card p-3">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
+              Saiu sozinho · {total}
+            </h3>
+            <p className="hint mb-2">
+              Não perguntei nada. Se errei em algum, clique em <b>voltar</b> —
+              corrigir é mais rápido que responder.
+            </p>
+            <div className="space-y-2 max-h-72 overflow-auto">
+              {reps.map((r) => (
+                <div key={r.id} className="text-[11px] border-t border-line pt-2
+                                           first:border-0 first:pt-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="chip border-violet-800 text-violet-300">
+                      falou 2x
+                    </span>
+                    <span className="font-mono text-slate-500">
+                      {timecode(r.start, true)}
+                    </span>
+                    <span className="text-slate-600">
+                      {Math.round(r.similarity * 100)}% igual
+                    </span>
+                  </div>
+                  <p className="text-slate-500 line-through mt-1 leading-snug">
+                    {r.text.slice(0, 120)}
+                  </p>
+                  <p className="text-slate-300 mt-0.5 leading-snug">
+                    ficou: {r.kept_text.slice(0, 120)}
+                  </p>
+                  <div className="flex gap-1 mt-1.5">
+                    <button className="btn btn-xs"
+                            onClick={() => setPlayhead(Math.max(0, r.kept_start - 0.3))}>
+                      ouvir a que ficou
+                    </button>
+                    <button className="btn btn-xs"
+                            onClick={async () => {
+                              snapshot()
+                              await api.setRepeat(project.id, r.id, true)
+                              const job = await api.autoedit(project.id)
+                              setState({ activeJob: job })
+                            }}>
+                      voltar
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {takes.map((t) => (
+                <div key={t.id} className="text-[11px] border-t border-line pt-2
+                                           first:border-0 first:pt-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="chip border-amber-800 text-amber-300">palma</span>
+                    <span className="font-mono text-slate-500">
+                      {timecode(t.start, true)}–{timecode(t.end, true)}
+                    </span>
+                  </div>
+                  <p className="text-slate-500 line-through mt-1 leading-snug">
+                    {(t.text || '(sem texto)').slice(0, 140)}
+                  </p>
+                  <div className="flex gap-1 mt-1.5">
+                    <button className="btn btn-xs"
+                            onClick={() => setPlayhead(Math.max(0, t.start - 0.3))}>
+                      ouvir
+                    </button>
+                    <button className="btn btn-xs"
+                            onClick={() => onToggleTake(t.id, true)}>
+                      voltar
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </section>
-      )}
+            {voltaram > 0 && (
+              <p className="hint mt-2">{voltaram} trecho(s) você já mandou voltar.</p>
+            )}
+          </section>
+        )
+      })()}
 
       {/* ------------------------------------------------------ bloco atual */}
       <section className="card p-3">
@@ -206,6 +280,31 @@ export default function Inspector({ onChanged, snapshot }: Props) {
               <div className="flex justify-between text-[10px] text-slate-600 font-mono">
                 <span>0,90x</span><span>1,25x</span><span>1,40x</span>
               </div>
+
+            <div>
+              <label className="label">
+                Enquadramento · <span className="font-mono text-slate-300">
+                  {((dragZoom ?? block.zoom ?? 1) * 100).toFixed(0)}%</span>
+                {(block.zoom ?? 1) > 1.001 && (
+                  <span className="text-slate-500 normal-case ml-1">
+                    fechado — o corte deixa de parecer defeito
+                  </span>
+                )}
+              </label>
+              <input type="range" min={1} max={view.zoom?.max_level ?? 1.2} step={0.01}
+                     value={dragZoom ?? block.zoom ?? 1} className="w-full"
+                     onChange={(e) => setDragZoom(Number(e.target.value))}
+                     onMouseUp={(e) => {
+                       const v = Number((e.target as HTMLInputElement).value)
+                       setDragZoom(null)
+                       api.setZoom(project.id, block.id, v).then(onChanged)
+                     }}
+                     onTouchEnd={(e) => {
+                       const v = Number((e.target as HTMLInputElement).value)
+                       setDragZoom(null)
+                       api.setZoom(project.id, block.id, v).then(onChanged)
+                     }} />
+            </div>
             </div>
 
             <div className="flex gap-1.5">

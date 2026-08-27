@@ -34,7 +34,9 @@ JUMP_MIN_DB = 30.0          # salto sobre a mediana do entorno
 CONTEXT = 1.0               # 1 s antes e depois formam o "entorno"
 MAX_DURATION = 0.60         # palma é curta
 ATTACK_WINDOW = 0.20        # 200 ms antes têm que cair pro piso
-PHRASE_PAUSE = 0.40         # fronteira de frase
+PHRASE_PAUSE = 0.70         # fronteira de frase
+# 0,40 s era pouco: quem respira no meio da frase tinha só a metade
+# dela descartada, e a outra metade ficava no vídeo dobrando o texto.
 COUNT_TOKENS = {
     "um", "uma", "dois", "duas", "tres", "três", "1", "2", "3",
     "one", "two", "three",
@@ -120,11 +122,16 @@ def timbre_features(samples: np.ndarray, sample_rate: int,
 
 def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
                  peak_min_dbfs: float = PEAK_MIN_DBFS) -> list[ClapEvent]:
-    """Aplica os quatro critérios. Nunca descarta um candidato sozinho.
+    """Envelope filtra o candidato; o TIMBRE decide se é palma.
 
-    Quem falha só no critério do ataque volta como ``suspect`` para o usuário
-    confirmar na interface. Sem o critério do ataque uma sílaba tônica no meio
-    de fala contínua vira palma — numa gravação real isso deu 31 falsos.
+    Os quatro critérios de envelope (pico, salto, duração, ataque) não separam
+    palma de palavra forte: uma palavra enfática logo depois de uma pausa passa
+    em todos os quatro, porque a própria pausa é o silêncio de onde o ataque
+    vem. Quem separa é o timbre — subida, planura espectral e razão
+    agudo/grave — e é ele que manda aqui.
+
+    O que passa no timbre é palma e descarta o take SOZINHO. Nada vira
+    pergunta: o usuário conserta depois, na lista do que saiu sozinho.
     """
     db = env.db
     if not db.size:
@@ -181,10 +188,14 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
         score = int(crit_rise) + int(crit_flat) + int(crit_hf)
 
         if score <= 1:
-            # som de voz, não de mão: nem vira pergunta para o usuário
+            # som de voz, não de mão: nem entra na lista
             continue
 
-        confirmed = score == 3 and attack_ok
+        # NUNCA pergunta. Passou no timbre, é palma, e o take vai embora
+        # sozinho. Responder "é palma?" dezessete vezes não é editar vídeo.
+        # O usuário conserta depois, na lista do que foi removido sozinho —
+        # corrigir uma automação é barato; alimentar uma não é.
+        confirmed = score == 3
         reasons = []
         if not crit_rise:
             reasons.append(f"sobe em {tf['rise_ms']:.0f} ms (palma sobe em "
@@ -216,16 +227,29 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
             confirmed=confirmed,
             suspect=not confirmed,
             attack_floor_db=round(attack_floor, 2),
-            reason="; ".join(reasons),
-            enabled=confirmed,
+            reason="; ".join(reasons) or "estouro seco, agudo e sem harmônico",
+            enabled=True,
         ))
     return events
 
 
-def phrase_start_before(env: Envelope, t: float,
+def phrase_start_before(env: Envelope, t: float, words: list | None = None,
                         pause: float = PHRASE_PAUSE) -> float:
-    """Início da frase em andamento: fim da pausa longa mais próxima antes."""
-    runs = env.silence_runs(max(0.0, t - 60.0), t, min_duration=pause)
+    """Início da frase que estava em andamento quando a palma veio.
+
+    A âncora é a ÚLTIMA PALAVRA dita antes da palma, não a palma. Quem bate
+    palma respira antes — e essa respirada é uma pausa longa que a busca
+    tomava por fronteira de frase, devolvendo o instante da própria palma e
+    descartando um trecho vazio. Ancorando na última palavra, a respirada
+    deixa de existir para a busca.
+    """
+    anchor = t
+    if words:
+        ends = [float(w["end"] if isinstance(w, dict) else w.end) for w in words
+                if float(w["end"] if isinstance(w, dict) else w.end) <= t + 0.02]
+        if ends:
+            anchor = max(ends) - 0.01
+    runs = env.silence_runs(max(0.0, anchor - 120.0), anchor, min_duration=pause)
     if runs:
         return runs[-1].end
     return 0.0
@@ -275,7 +299,7 @@ def build_discarded_takes(env: Envelope, claps: list[ClapEvent],
     for clap in claps:
         if not clap.enabled:
             continue
-        start = phrase_start_before(env, clap.start)
+        start = phrase_start_before(env, clap.start, words)
         end = resume_point_after(env, clap.end, words)
         if end <= start:
             end = clap.end
