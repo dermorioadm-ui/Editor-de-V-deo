@@ -99,8 +99,14 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
 
         # ataque a partir do silêncio
         a0 = max(0.0, t_start - ATTACK_WINDOW)
-        attack_floor = env.min_db(a0, max(a0, t_start - 0.02))
-        attack_ok = attack_floor <= env.silence_threshold
+        if t_start < 0.06:
+            # transiente colado no início do arquivo: não há janela para medir,
+            # e antes do arquivo só existe silêncio — o critério vale
+            attack_floor = env.noise_floor
+            attack_ok = True
+        else:
+            attack_floor = env.min_db(a0, max(a0, t_start - 0.02))
+            attack_ok = attack_floor <= env.silence_threshold
 
         crit_peak = peak_db >= peak_min_dbfs
         crit_jump = jump >= JUMP_MIN_DB

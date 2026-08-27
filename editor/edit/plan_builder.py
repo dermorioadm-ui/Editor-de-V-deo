@@ -35,6 +35,8 @@ class Span:
     cut_out: bool = True
     gap_has_removed_words: bool = False   # o corte à direita remove palavras?
     refused_cut: bool = False             # corte recusado por cair em cima de fala
+    min_start: float = -1e9               # o ar nunca pode recuar além disto
+    max_end: float = 1e9                  # nem avançar além disto (palavra removida)
 
     @property
     def duration(self) -> float:
@@ -93,10 +95,13 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
             end = min(end, s_out.valley_end - 0.02)
 
         # a folga não pode passar por cima de uma palavra vizinha removida
+        min_start, max_end = -1e9, 1e9
         if prev_word is not None and prev_word["i"] in removed_ids:
-            start = max(start, prev_word["end"] + params.snap_neighbor_guard)
+            min_start = prev_word["end"] + params.snap_neighbor_guard
+            start = max(start, min_start)
         if next_word is not None and next_word["i"] in removed_ids:
-            end = min(end, next_word["start"] - params.snap_neighbor_guard)
+            max_end = next_word["start"] - params.snap_neighbor_guard
+            end = min(end, max_end)
 
         start = max(0.0, start)
         end = min(env.duration, end)
@@ -104,7 +109,8 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
             end = min(env.duration, start + 0.02)
         spans.append(Span(round(start, 4), round(end, 4), first["i"], last["i"],
                           s_in.to_dict(), s_out.to_dict(),
-                          gap_has_removed_words=removed_flags[gi]))
+                          gap_has_removed_words=removed_flags[gi],
+                          min_start=min_start, max_end=max_end))
 
     _resolve_overlaps(spans, env, params)
     return spans
@@ -137,8 +143,11 @@ def _resolve_overlaps(spans: list[Span], env: Envelope, params: CutParams) -> No
             continue
         room = max(0.0, (gap - MIN_GAP) / 2.0)
         add = min(extra_air, room)
-        a.end = round(a.end + add, 4)
-        b.start = round(b.start - add, 4)
+        # o ar não pode reinvadir uma palavra removida pelo usuário: sem esta
+        # trava, 40 ms do começo da palavra removida vazavam de volta como um
+        # estalo na emenda (o clamp do build_spans era desfeito aqui)
+        a.end = round(min(a.end + add, a.max_end), 4)
+        b.start = round(max(b.start - add, b.min_start), 4)
         # O resgate é sempre a ÚLTIMA palavra sobre a borda: o ar da 3.3
         # também é capaz de empurrar uma borda encaixada de volta para cima da
         # fala, e nesse caso é o ar que cede.

@@ -561,7 +561,8 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
     index = int(payload.get("index", -1))
     if not (0 <= index < len(issues)):
         raise HTTPException(400, "alerta inválido")
-    if not apply_fix(project.plan.clips, issues[index]):
+    removed = set(project.analysis.get("removed_word_ids", []))
+    if not apply_fix(project.plan.clips, issues[index], project.words, removed):
         raise HTTPException(400, "não foi possível aplicar a correção")
     return {"ok": True, "timeline": _after_edit(project)}
 

@@ -81,17 +81,43 @@ def audit_summary(issues: list[dict]) -> dict:
     }
 
 
-def apply_fix(clips: list[Clip], issue: dict) -> bool:
-    """Aplica a correção sugerida de um alerta (o clique único da interface)."""
+def apply_fix(clips: list[Clip], issue: dict,
+              words: list[dict] | None = None,
+              removed_ids: set[int] | None = None) -> bool:
+    """Aplica a correção sugerida de um alerta (o clique único da interface).
+
+    A sugestão vem de um snap sem contexto de vizinhança — clampada aqui:
+    a borda nunca invade o clipe vizinho (mesmo trecho da fonte encodado duas
+    vezes) nem uma palavra removida pelo usuário (restauraria o removido).
+    """
+    words = words or []
+    removed_ids = removed_ids or set()
     for clip in clips:
         if clip.id != issue.get("clip_id"):
             continue
         t = float(issue["suggestion"])
+        same = [c for c in clips if c.enabled and c.source == clip.source
+                and c is not clip]
         if issue["side"] == "in":
+            prev_end = max((c.src_end for c in same
+                            if c.src_end <= clip.src_start + 1e-6), default=0.0)
+            t = max(t, prev_end)
+            for w in words:
+                if w["i"] in removed_ids and w["end"] <= clip.src_start + 1e-6:
+                    if t < w["end"]:
+                        t = max(t, w["end"] + 0.02)
             if t < clip.src_end - 0.05:
                 clip.src_start = round(t, 4)
                 return True
         else:
+            next_start = min((c.src_start for c in same
+                              if c.src_start >= clip.src_end - 1e-6),
+                             default=1e12)
+            t = min(t, next_start)
+            for w in words:
+                if w["i"] in removed_ids and w["start"] >= clip.src_end - 1e-6:
+                    if t > w["start"]:
+                        t = min(t, w["start"] - 0.02)
             if t > clip.src_start + 0.05:
                 clip.src_end = round(t, 4)
                 return True
