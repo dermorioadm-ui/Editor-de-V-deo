@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "editor-de-video"
+version = "1.0.0"
+description = "Editor de vídeo local para criativos de anúncio: corta, acelera e legenda sem o arquivo sair da máquina."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "numpy>=1.24",
+    "python-multipart>=0.0.9",
+    "faster-whisper>=1.0.0",
+]
+
+[project.scripts]
+editor-de-video = "editor.__main__:main"
+
+[tool.setuptools]
+packages = [
+    "editor", "editor.audio", "editor.edit", "editor.subtitles", "editor.render",
+]
+
+[tool.setuptools.package-data]
+editor = ["static/**/*"]
