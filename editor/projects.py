@@ -14,8 +14,8 @@ from .audio.clap import build_discarded_takes, detect_claps
 from .audio.envelope import Envelope, compute_envelope
 from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
                      SpeedParams, SubtitleStyle, ensure_dirs)
-from .edit.audit import audit_edges, audit_summary
-from .edit.plan_builder import build_auto_plan
+from .edit.audit import audit_edges, audit_summary, settle_edges
+from .edit.plan_builder import build_auto_plan, resync_removed
 from .edit.timeline import Timeline
 from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoders, probe,
                            read_wav_mono)
@@ -317,8 +317,16 @@ def auto_edit(project: Project, ctx) -> dict:
 
     ctx.progress(0.55, f"{len(plan.clips)} blocos propostos")
     ctx.stage("auditoria", "auditando as bordas de corte")
-    issues = audit_edges(plan.clips, env, words, set(result["removed_word_ids"]))
+    # As bordas que dá para acertar sozinho são acertadas AQUI. O usuário
+    # pediu para receber pronto: se a correção é a mesma que ele daria
+    # apertando "corrigir com um clique", ela não vira pergunta.
+    issues, fixed = settle_edges(plan.clips, env, words,
+                                 set(result["removed_word_ids"]))
     plan.audit = issues
+    plan.audit_fixed = fixed
+    if fixed:
+        # as bordas mudaram: o vermelho da timeline tem que acompanhar
+        plan.removed = resync_removed(plan.clips, plan.removed, env.duration)
 
     ctx.stage("legendas", "gerando legendas")
     cues = rebuild_subtitles(project)
@@ -326,10 +334,13 @@ def auto_edit(project: Project, ctx) -> dict:
     project.save_plan()
     project.set_status("editado")
     ctx.progress(1.0, f"{len(plan.clips)} blocos, {len(cues)} legendas, "
-                      f"{len(issues)} alerta(s) de borda")
+                      + (f"{len(fixed)} borda(s) ajustada(s) sozinho, " if fixed else "")
+                      + (f"{len(issues)} alerta(s) de borda" if issues
+                         else "nenhum alerta de borda"))
     return {
         "clips": len(plan.clips), "subtitles": len(cues),
         "audit": audit_summary(issues),
+        "audit_fixed": len(fixed),
         "duration": round(plan.duration, 2),
         "notes": result["notes"],
     }
@@ -551,6 +562,7 @@ def timeline_summary(project: Project) -> dict:
         "claps": plan.claps,
         "subtitles": [s.to_dict() for s in plan.subtitles],
         "audit": plan.audit,
+        "audit_fixed": plan.audit_fixed,
         "cutaways": [c.to_dict() for c in plan.cutaways],
         "overlays": [o.to_dict() for o in plan.overlays],
         "blurs": [b.to_dict() for b in plan.blurs],

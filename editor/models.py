@@ -213,6 +213,7 @@ class EditPlan:
     audio: AudioParams = field(default_factory=AudioParams)
     export: ExportParams = field(default_factory=ExportParams)
     audit: list = field(default_factory=list)
+    audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     version: int = 1
 
     # ------------------------------------------------------------ serialize
@@ -236,6 +237,7 @@ class EditPlan:
             "audio": asdict(self.audio),
             "export": asdict(self.export),
             "audit": self.audit,
+            "audit_fixed": self.audit_fixed,
             "version": self.version,
         }
 
@@ -258,6 +260,7 @@ class EditPlan:
         plan.audio = _from_dict(AudioParams, data.get("audio")) or AudioParams()
         plan.export = _from_dict(ExportParams, data.get("export")) or ExportParams()
         plan.audit = list(data.get("audit", []))
+        plan.audit_fixed = list(data.get("audit_fixed", []))
         plan.version = int(data.get("version", 1))
         return plan
 

@@ -5,7 +5,10 @@ Cada teste aqui corresponde a um bug que existiu:
 2. refazer a edição descartava palavras removidas à mão;
 3. refazer a edição apagava textos de legenda editados;
 4. cortar um trecho deixava overlays/cutaways/desfoques em cima do conteúdo errado;
-5. a Timeline dos ops ignorava o fps e a seleção errava o alvo.
+5. a Timeline dos ops ignorava o fps e a seleção errava o alvo;
+6. os quatro critérios de palma olhavam só o envelope, e uma palavra forte
+   depois de uma pausa passava em todos — dava vinte perguntas por vídeo;
+7. toda borda suja virava pergunta, mesmo quando a correção era óbvia.
 """
 from __future__ import annotations
 
@@ -241,6 +244,13 @@ def main() -> int:
                 json={"style": {"max_chars_per_line": 24},
                       "rebuild_subtitles": True})
 
+    # ------------------------------------------------------------- timbre
+    # 6. palma x palavra forte: sem o timbre, os dois passam nos mesmos
+    #    quatro critérios de envelope.
+    print()
+    testar_timbre()
+    testar_bordas()
+
     print()
     if FALHAS:
         print(f"{len(FALHAS)} FALHA(S):")
@@ -249,6 +259,80 @@ def main() -> int:
         return 1
     print("todas as regressões passam")
     return 0
+
+
+def testar_timbre() -> None:
+    """Palma tem que ser palma, e palavra forte não pode virar pergunta."""
+    from editor.audio.clap import detect_claps
+    from tests.speech import ESPEAK, build_track, SR
+
+    if not ESPEAK:
+        print("  --    timbre de palma (espeak-ng não instalado)")
+        return
+    frases = [("Presta atenção nisso aqui", 0.9), ("Olha isso", 1.0),
+              ("Para tudo", 0.9), ("Pá", 1.0), ("Quarenta reais só hoje", 0.8),
+              ("Chega", 1.0), ("Tá", 0.9), ("Isso muda o jogo agora", 0.8)]
+    samples, marks, _ = build_track(frases, claps_after={2, 5})
+    env = compute_envelope(samples, SR)
+    claps = detect_claps(samples, SR, env)
+    reais = [m["start"] for m in marks if m.get("clap")]
+    achou = sum(1 for t in reais
+                if any(abs(c.time - t) < 0.5 and c.confirmed for c in claps))
+    falsos = [c for c in claps
+              if not any(abs(c.time - t) < 0.5 for t in reais)]
+    check(achou == len(reais),
+          f"as {len(reais)} palmas reais foram confirmadas ({achou})")
+    check(not falsos,
+          f"nenhuma palavra forte virou palma ({len(falsos)} falso(s))")
+
+
+def testar_bordas() -> None:
+    """O que dá para acertar sozinho não pode virar pergunta."""
+    from editor.edit.audit import audit_edges, settle_edges
+    from editor.models import Clip
+    from tests.speech import ESPEAK, build_track, SR
+
+    if not ESPEAK:
+        print("  --    auditoria de bordas (espeak-ng não instalado)")
+        return
+    frases = [("Presta atenção nisso aqui porque muda tudo", 1.2),
+              ("O problema é que você perde cliente todo dia", 1.2),
+              ("Então eu montei um jeito de cortar sozinho", 1.2),
+              ("Clica no link aqui embaixo agora", 1.2)]
+    samples, marks, _ = build_track(frases, claps_after=set())
+    env = compute_envelope(samples, SR)
+    words, i = [], 0
+    for m in marks:
+        toks = m["text"].split()
+        passo = (m["end"] - m["start"]) / len(toks)
+        for k, tok in enumerate(toks):
+            a = m["start"] + k * passo
+            words.append({"i": i, "start": round(a, 3),
+                          "end": round(a + passo * 0.92, 3),
+                          "text": tok, "prob": 0.95})
+            i += 1
+
+    def clipe(a: float, b: float, cid: str) -> Clip:
+        return Clip(id=cid, source="main", src_start=round(a, 3),
+                    src_end=round(b, 3), speed=1.0, section="gancho",
+                    cut_in=True, cut_out=True)
+
+    # borda de saída dentro da fala, com pausa depois: dá para abrir a borda
+    clips = [clipe(marks[0]["start"] - 0.1, marks[0]["end"] - 0.25, "a"),
+             clipe(marks[1]["start"] - 0.1, marks[1]["end"] + 0.1, "b")]
+    antes = len(audit_edges(clips, env, words, set()))
+    sobra, feitos = settle_edges(clips, env, words, set())
+    check(antes > 0 and not sobra and feitos,
+          f"borda suja resolvida sozinha ({antes} antes, {len(sobra)} depois)")
+
+    # buraco com palavra removida dentro: fechar traria a fala de volta
+    removidas = {w["i"] for w in words
+                 if marks[1]["start"] <= w["start"] < marks[1]["end"]}
+    clips = [clipe(marks[0]["start"] - 0.1, marks[0]["end"] - 0.25, "a"),
+             clipe(marks[2]["start"] - 0.1, marks[2]["end"] + 0.1, "b")]
+    settle_edges(clips, env, words, removidas)
+    fechou = abs(clips[0].src_end - clips[1].src_start) < 0.002
+    check(not fechou, "o buraco com palavra removida dentro NÃO foi fechado")
 
 
 if __name__ == "__main__":

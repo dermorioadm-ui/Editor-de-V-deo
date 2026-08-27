@@ -19,7 +19,6 @@ export interface AppState {
   jobs: Record<string, Job>
   activeJob: Job | null
   toasts: Toast[]
-  playhead: number
   selection: { start: number; end: number } | null
   selectedClip: string | null
   history: any[]
@@ -38,7 +37,6 @@ const initial: AppState = {
   jobs: {},
   activeJob: null,
   toasts: [],
-  playhead: 0,
   selection: null,
   selectedClip: null,
   history: [],
@@ -66,6 +64,43 @@ function subscribe(listener: () => void): () => void {
 
 export function useStore<T>(selector: (s: AppState) => T): T {
   return useSyncExternalStore(subscribe, () => selector(state), () => selector(initial))
+}
+
+// ---------------------------------------------------------------- playhead
+// O playhead muda 60x por segundo. Se ele morasse no AppState, cada quadro
+// re-renderizava TODO componente inscrito na store — o painel de mídia, o
+// inspetor, a lista de legendas — e a interface engasgava num vídeo longo.
+// Ele tem canal próprio, e o canal avisa no máximo uma vez por quadro.
+let playheadValue = 0
+const playheadListeners = new Set<() => void>()
+let playheadScheduled = false
+
+export function getPlayhead(): number {
+  return playheadValue
+}
+
+export function setPlayhead(t: number) {
+  if (!Number.isFinite(t) || t === playheadValue) return
+  playheadValue = t
+  if (playheadScheduled) return
+  playheadScheduled = true
+  const flush = () => {
+    playheadScheduled = false
+    playheadListeners.forEach((l) => l())
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush)
+  else setTimeout(flush, 16)
+}
+
+/** Inscrição crua — para quem desenha em canvas sem passar pelo React. */
+export function subscribePlayhead(listener: () => void): () => void {
+  playheadListeners.add(listener)
+  return () => playheadListeners.delete(listener)
+}
+
+/** Use só onde o valor aparece na tela. Em callback, prefira getPlayhead(). */
+export function usePlayhead(): number {
+  return useSyncExternalStore(subscribePlayhead, getPlayhead, () => 0)
 }
 
 let toastId = 0

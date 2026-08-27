@@ -588,6 +588,11 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
         project.plan.clips, issues[index], project.words, removed))
     if not res:
         raise HTTPException(400, "não foi possível aplicar a correção")
+    env = project.envelope()
+    if env is not None:
+        from .edit.plan_builder import resync_removed
+        project.plan.removed = resync_removed(project.plan.clips,
+                                              project.plan.removed, env.duration)
     return {"ok": True, "timeline": _after_edit(project)}
 
 

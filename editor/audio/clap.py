@@ -13,6 +13,23 @@ import numpy as np
 from .envelope import Envelope, _mask_runs
 
 PEAK_MIN_DBFS = -9.0        # pico absoluto mínimo
+
+# --- o que separa uma palma de uma palavra forte ---------------------------
+# Os critérios de envelope (pico, salto, duração, ataque) NÃO separam: uma
+# palavra enfática logo depois de uma pausa passa em todos os quatro, porque a
+# própria pausa é o "silêncio" de onde o ataque vem. Palma e "Pá!" têm o mesmo
+# envelope; o que difere é o timbre. Medido em fala real contra palma real:
+#
+#                       palma          fala forte
+#   subida (10→90%)     0,1–1,5 ms     43–325 ms
+#   spectral flatness   0,84–0,86      0,05–0,08
+#   agudo/grave         4,2–6,3        0,03–0,39
+#
+# Os limiares abaixo ficam no meio dessa distância, com folga para o áudio
+# comprimido do WhatsApp (que borra o transiente e corta agudo).
+MAX_RISE_MS = 12.0          # palma sobe quase instantaneamente
+MIN_FLATNESS = 0.25         # palma é ruído de banda larga; voz é harmônica
+MIN_HF_RATIO = 1.0          # energia 2–7 kHz sobre 150–1200 Hz
 JUMP_MIN_DB = 30.0          # salto sobre a mediana do entorno
 CONTEXT = 1.0               # 1 s antes e depois formam o "entorno"
 MAX_DURATION = 0.60         # palma é curta
@@ -34,9 +51,13 @@ class ClapEvent:
     peak_db: float
     jump_db: float
     duration: float
-    confirmed: bool             # passou nos 4 critérios
-    suspect: bool               # falhou SÓ no critério do ataque
+    confirmed: bool             # passou em todos os critérios
+    suspect: bool               # passou no timbre mas não no ataque
     attack_floor_db: float      # menor nível nos 200 ms anteriores
+    rise_ms: float = 0.0        # tempo de subida 10→90% do pico
+    flatness: float = 0.0       # planura espectral (ruído x harmônico)
+    hf_ratio: float = 0.0       # razão agudo/grave
+    timbre_score: int = 0       # quantos dos 3 critérios de timbre passaram
     reason: str = ""
     enabled: bool = True        # o usuário pode desligar uma palma suspeita
 
@@ -57,6 +78,44 @@ class DiscardedTake:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def timbre_features(samples: np.ndarray, sample_rate: int,
+                    t_start: float, t_end: float) -> dict:
+    """Mede o TIMBRE do transiente — é isto que distingue palma de fala."""
+    i0 = max(0, int(t_start * sample_rate) - int(0.01 * sample_rate))
+    i1 = min(len(samples), int(t_end * sample_rate) + int(0.02 * sample_rate))
+    x = np.asarray(samples[i0:i1], dtype=np.float32)
+    out = {"rise_ms": 99.0, "flatness": 0.0, "hf_ratio": 0.0}
+    if x.size < 128:
+        return out
+
+    peak_i = int(np.argmax(np.abs(x)))
+    peak = float(abs(x[peak_i])) or 1e-9
+
+    # subida: do primeiro ponto com 10% do pico até o primeiro com 90%
+    pre = np.abs(x[: peak_i + 1])
+    a = np.flatnonzero(pre >= 0.1 * peak)
+    b = np.flatnonzero(pre >= 0.9 * peak)
+    if a.size and b.size:
+        out["rise_ms"] = float(b[0] - a[0]) / sample_rate * 1000.0
+
+    win = x[max(0, peak_i - int(0.005 * sample_rate)):
+            peak_i + int(0.055 * sample_rate)]
+    if win.size < 128:
+        return out
+    spec = np.abs(np.fft.rfft(win * np.hanning(win.size))) + 1e-12
+    freqs = np.fft.rfftfreq(win.size, 1.0 / sample_rate)
+    # planura: média geométrica sobre a aritmética. Ruído -> perto de 1,
+    # voz (picos nos harmônicos) -> perto de 0.
+    out["flatness"] = float(np.exp(np.mean(np.log(spec))) / np.mean(spec))
+
+    def band(lo: float, hi: float) -> float:
+        sel = (freqs >= lo) & (freqs < hi)
+        return float((spec[sel] ** 2).sum()) if sel.any() else 0.0
+
+    out["hf_ratio"] = band(2000, 7000) / max(band(150, 1200), 1e-12)
+    return out
 
 
 def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
@@ -114,7 +173,29 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
         if not (crit_peak and crit_jump and crit_dur):
             continue
 
+        # TIMBRE — o filtro que realmente separa palma de palavra forte
+        tf = timbre_features(samples, sample_rate, t_start, t_end)
+        crit_rise = tf["rise_ms"] <= MAX_RISE_MS
+        crit_flat = tf["flatness"] >= MIN_FLATNESS
+        crit_hf = tf["hf_ratio"] >= MIN_HF_RATIO
+        score = int(crit_rise) + int(crit_flat) + int(crit_hf)
+
+        if score <= 1:
+            # som de voz, não de mão: nem vira pergunta para o usuário
+            continue
+
+        confirmed = score == 3 and attack_ok
         reasons = []
+        if not crit_rise:
+            reasons.append(f"sobe em {tf['rise_ms']:.0f} ms (palma sobe em "
+                           f"menos de {MAX_RISE_MS:.0f} ms)")
+        if not crit_flat:
+            reasons.append(f"som harmônico, não de banda larga "
+                           f"(planura {tf['flatness']:.2f}, palma fica acima de "
+                           f"{MIN_FLATNESS:.2f})")
+        if not crit_hf:
+            reasons.append(f"pouco agudo para uma palma "
+                           f"(razão {tf['hf_ratio']:.2f})")
         if not attack_ok:
             reasons.append(
                 f"ataque não vem do silêncio (mínimo {attack_floor:.1f} dB nos "
@@ -128,11 +209,15 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
             peak_db=round(peak_db, 2),
             jump_db=round(jump, 2),
             duration=round(duration, 3),
-            confirmed=attack_ok,
-            suspect=not attack_ok,
+            rise_ms=round(tf["rise_ms"], 2),
+            flatness=round(tf["flatness"], 4),
+            hf_ratio=round(tf["hf_ratio"], 3),
+            timbre_score=score,
+            confirmed=confirmed,
+            suspect=not confirmed,
             attack_floor_db=round(attack_floor, 2),
             reason="; ".join(reasons),
-            enabled=attack_ok,
+            enabled=confirmed,
         ))
     return events
 

@@ -5,7 +5,7 @@ import PhotoPanel from './PhotoPanel'
 import Positioner from './Positioner'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
-import { toast, useStore } from '../state/store'
+import { getPlayhead, toast, useStore } from '../state/store'
 
 interface Props {
   onChanged: () => Promise<any>
@@ -20,7 +20,6 @@ const AUDIO_EXT = ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg']
 export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
-  const playhead = useStore((s) => s.playhead)
   const [picking, setPicking] = useState<null | 'video' | 'image' | 'audio'>(null)
   const [busy, setBusy] = useState(false)
 
@@ -88,9 +87,9 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                                 snapshot()
                                 await api.addCutaway(project.id, {
                                   media_id: m.id,
-                                  out_start: playhead,
+                                  out_start: getPlayhead(),
                                   out_end: Math.min(view.duration,
-                                    playhead + Math.min(6, m.info?.duration ?? 5)),
+                                    getPlayhead() + Math.min(6, m.info?.duration ?? 5)),
                                   media_start: 0,
                                 })
                                 await onChanged()
@@ -103,7 +102,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                               onClick={async () => {
                                 snapshot()
                                 await api.insert(project.id, {
-                                  media_id: m.id, kind: 'insert', at: playhead,
+                                  media_id: m.id, kind: 'insert', at: getPlayhead(),
                                   media_start: 0, media_end: m.info?.duration ?? 5,
                                 })
                                 await onChanged()
@@ -119,7 +118,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                               onClick={async () => {
                                 snapshot()
                                 await api.insert(project.id, {
-                                  media_id: m.id, kind: 'photo', at: playhead,
+                                  media_id: m.id, kind: 'photo', at: getPlayhead(),
                                   duration: 3.0,
                                   ken_burns: { enabled: true, intensity: 0.12, direction: 'in' },
                                 })
@@ -132,8 +131,8 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                               onClick={async () => {
                                 snapshot()
                                 await api.addOverlay(project.id, {
-                                  media_id: m.id, out_start: playhead,
-                                  out_end: playhead + 3,
+                                  media_id: m.id, out_start: getPlayhead(),
+                                  out_end: getPlayhead() + 3,
                                   x: safeZone?.anchor?.x ?? 0.5,
                                   y: safeZone?.anchor?.y ?? 0.15,
                                 })
@@ -405,12 +404,12 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                   onClick={async () => {
                     snapshot()
                     await api.addBlur(project.id, {
-                      out_start: playhead, out_end: playhead + 3, strength: 24,
-                      keyframes: [{ t: playhead, x: 0.35, y: 0.35, w: 0.3, h: 0.3 }],
+                      out_start: getPlayhead(), out_end: getPlayhead() + 3, strength: 24,
+                      keyframes: [{ t: getPlayhead(), x: 0.35, y: 0.35, w: 0.3, h: 0.3 }],
                     })
                     await onChanged()
                   }}>
-            + região no playhead
+            + região no ponto atual
           </button>
         </div>
         <p className="hint mb-2">
@@ -429,7 +428,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                       onClick={async () => {
                         const last = b.keyframes[b.keyframes.length - 1] ?? {}
                         const kfs = [...b.keyframes,
-                          { t: playhead, x: last.x ?? 0.35, y: last.y ?? 0.35,
+                          { t: getPlayhead(), x: last.x ?? 0.35, y: last.y ?? 0.35,
                             w: last.w ?? 0.3, h: last.h ?? 0.3 }]
                           .sort((p: any, q: any) => p.t - q.t)
                         await api.updateBlur(project.id, b.id, { keyframes: kfs })

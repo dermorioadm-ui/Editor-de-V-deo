@@ -126,3 +126,112 @@ def apply_fix(clips: list[Clip], issue: dict,
                 clip.src_end = round(t, 4)
                 return True
     return False
+
+
+def _edge_ok(env: Envelope, t: float, words: list[dict],
+             removed_ids: set[int]) -> bool:
+    """A borda está limpa? Nível abaixo do limiar e fora de palavra viva."""
+    if env.value_at(t) > env.audit_threshold:
+        return False
+    for w in words:
+        if w["i"] in removed_ids:
+            continue
+        if w["start"] + 0.02 < t < w["end"] - 0.02:
+            return False
+    return True
+
+
+MAX_GIVE_UP = 0.35      # quanto de conteúdo uma correção pode custar
+
+
+def settle_edges(clips: list[Clip], env: Envelope, words: list[dict],
+                 removed_ids: set[int] | None = None,
+                 rounds: int = 3) -> tuple[list[dict], list[dict]]:
+    """Resolve sozinho as bordas que dá para resolver.
+
+    O usuário não quer clicar em "corrigir com um clique" quatro vezes antes
+    de exportar: se a correção é a mesma que ele daria — encaixar a borda no
+    vale, ou abrir a borda para caber a palavra inteira — ela é aplicada
+    aqui. Sobra na lista só o que exige decisão de verdade: borda no meio de
+    fala contínua, onde qualquer escolha come palavra.
+
+    Devolve (alertas que sobraram, correções aplicadas).
+    """
+    removed_ids = removed_ids or set()
+    applied: list[dict] = []
+    issues = audit_edges(clips, env, words, removed_ids)
+    for _ in range(rounds):
+        if not issues:
+            break
+        moved = False
+        for issue in issues:
+            clip = next((c for c in clips if c.id == issue.get("clip_id")), None)
+            if clip is None:
+                continue
+            before = (clip.src_start, clip.src_end)
+            if not apply_fix(clips, issue, words, removed_ids):
+                continue
+            side = issue["side"]
+            new_t = clip.src_start if side == "in" else clip.src_end
+            # encolher custa conteúdo; abrir a borda não custa nada
+            give_up = (new_t - before[0]) if side == "in" else (before[1] - new_t)
+            if give_up > MAX_GIVE_UP or not _edge_ok(env, new_t, words, removed_ids):
+                clip.src_start, clip.src_end = before      # não melhorou: desfaz
+                continue
+            applied.append({
+                "clip_id": clip.id, "side": side,
+                "from": round(issue["time"], 3), "to": round(new_t, 3),
+                "reason": issue.get("suggestion_reason", ""),
+                "message": issue.get("message", ""),
+            })
+            moved = True
+        issues = audit_edges(clips, env, words, removed_ids)
+        if not moved:
+            break
+
+    # Última cartada: a borda que não dá para limpar não vira pergunta — o
+    # corte ali simplesmente não acontece. A pausa fica no vídeo, e a regra
+    # que importa ("corte não pode comer palavra") continua de pé. Perder
+    # meio segundo de pausa é muito melhor do que perder meia palavra.
+    for issue in list(issues):
+        undone = _uncut(clips, env, words, removed_ids, issue)
+        if undone:
+            applied.append(undone)
+    issues = audit_edges(clips, env, words, removed_ids)
+    return issues, applied
+
+
+def _uncut(clips: list[Clip], env: Envelope, words: list[dict],
+           removed_ids: set[int], issue: dict) -> dict | None:
+    """Desfaz o corte de silêncio adjacente a uma borda suja, se der.
+
+    Só quando o buraco é silêncio puro: se houver palavra lá dentro (removida
+    de propósito ou engolida por um take), fechar o buraco traria a fala de
+    volta, e isso o usuário não pediu.
+    """
+    main = sorted([c for c in clips if c.enabled and c.source == "main"],
+                  key=lambda c: c.src_start)
+    idx = next((i for i, c in enumerate(main) if c.id == issue.get("clip_id")), None)
+    if idx is None:
+        return None
+    clip = main[idx]
+    if issue["side"] == "in":
+        left, right = (main[idx - 1] if idx else None), clip
+    else:
+        left, right = clip, (main[idx + 1] if idx + 1 < len(main) else None)
+    if left is None or right is None:
+        return None
+    a, b = left.src_end, right.src_start
+    if b - a <= 0.02 or b - a > 6.0:
+        return None
+    for w in words:
+        if min(w["end"], b) - max(w["start"], a) > 0.02:
+            return None                 # tem palavra no buraco: não fecha
+    left.src_end = round(b, 4)          # os dois se encontram: vira contíguo
+    return {
+        "clip_id": clip.id, "side": issue["side"],
+        "from": round(issue["time"], 3), "to": round(b, 3),
+        "reason": "corte desfeito: a pausa fica no vídeo",
+        "message": issue.get("message", ""),
+        "kind": "sem-corte",
+    }

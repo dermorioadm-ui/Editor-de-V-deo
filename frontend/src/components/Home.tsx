@@ -39,7 +39,7 @@ export default function Home() {
         words: project.analysis?.words ?? [],
         removedWordIds: project.analysis?.removed_word_ids ?? [],
         fillers: project.analysis?.fillers ?? [],
-        history: [], future: [], playhead: 0, selection: null, selectedClip: null,
+        history: [], future: [], selection: null, selectedClip: null,
       })
       if (andEdit) {
         const job = await api.oneclick(id, preset)

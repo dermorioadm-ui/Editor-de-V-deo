@@ -273,6 +273,11 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
    transcrevendo → analisando → propondo cortes → gerando legendas.
 4. Quando terminar, o vídeo aparece na timeline, já cortado, acelerado e
    legendado.
+5. **Olhe a faixa logo abaixo do nome do projeto.** É o veredito:
+   - verde, “✓ Pronto para exportar” — não sobrou nada para você decidir.
+     Clique em **exportar →** e acabou.
+   - amarelo, “Falta você decidir N coisa(s)” — diz exatamente o que é. Só
+     aparece quando o editor tentou resolver sozinho e não deu.
 
 ### Revisar
 
@@ -282,10 +287,21 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
   “então”, “né” vêm sublinhadas: pontilhado amarelo = dá para tirar; ondulado
   vermelho = tirar quebra a palavra vizinha, é melhor manter.
 - **Timeline** — arraste sobre a forma de onda para selecionar e aperte
-  **Delete**. Clique num bloco colorido para mudar a velocidade ou a seção.
-  A roda do mouse dá zoom (de 1 segundo até o vídeo inteiro), Alt+arraste move.
-- **Painel da direita** — alertas de borda (“esta borda está cortando fala”),
-  com correção de um clique. Palmas suspeitas para você confirmar.
+  **Delete**. A roda do mouse dá zoom (de 1 segundo até o vídeo inteiro),
+  Alt+arraste move. São quatro faixas, de cima para baixo:
+
+  | faixa | o que é |
+  |---|---|
+  | marcas | bandeirinha laranja = palma (clique liga/desliga). Triângulo vermelho = borda que ainda precisa de você. |
+  | onda | o áudio. Hachurado vermelho = sai do vídeo. Cinza = take descartado pela palma. O risco vermelho fino no rodapé é um corte curto demais para desenhar — dê zoom para vê-lo. |
+  | seções | Gancho, Dor, Oferta… blocos vizinhos da mesma seção viram uma faixa só, com o nome escrito. |
+  | velocidade | um retângulo por bloco, colorido pela velocidade: azul 1,00x, verde até 1,12x, amarelo até 1,25x, laranja acima disso. Clique para selecionar e ajustar no painel da direita. |
+
+  Embaixo de tudo, a faixa azul das legendas — arraste as bordas para ajustar.
+- **Painel da direita** — o que sobrou para você decidir. Bordas que dava para
+  acertar sozinho já vêm acertadas (o painel verde diz quantas e o que mudou);
+  onde a fala não tem respiro por perto, o editor **não corta** em vez de comer
+  palavra, e só chama você quando nem isso resolve.
 - **Aba Legendas** — editar o texto, arrastar as bordas, mudar fonte, cor,
   tamanho e posição, calibrar o tamanho por largura em pixels, e o dicionário de
   correções (vale entre projetos).
@@ -307,9 +323,22 @@ estava em andamento (não tudo que veio antes — só a tentativa que deu errado
 Os takes descartados aparecem em cinza na timeline. Se o take novo tiver saído
 pior que o antigo, passe o mouse por cima e clique em **recuperar este take**.
 
-Uma palma que não vem do silêncio (o critério que separa palma de sílaba tônica)
-aparece em **amarelo** e nunca é descartada sozinha — o painel da direita pede
-sua confirmação.
+**Por que ele não confunde palma com palavra forte.** Pico, salto de volume,
+duração e ataque a partir do silêncio — os quatro critérios de envelope — não
+separam nada: uma palavra enfática logo depois de uma pausa passa em todos, e
+foi isso que enchia a timeline de marcas erradas. O que separa é o timbre, e o
+editor mede três coisas:
+
+| | palma | palavra forte |
+|---|---|---|
+| tempo de subida (10→90%) | 0,1 a 1,5 ms | 43 a 325 ms |
+| planura espectral (ruído x harmônico) | 0,84 a 0,86 | 0,05 a 0,08 |
+| agudo sobre grave | 4,2 a 6,3 | 0,03 a 0,39 |
+
+Som que falha em dois desses três nem vira pergunta. Quem passa nos três e vem
+do silêncio é palma confirmada e descarta o take sozinho. Só o caso do meio —
+timbre de palma mas ataque duvidoso — aparece em **amarelo** e pede sua
+confirmação, sem descartar nada enquanto você não responder.
 
 ### Exportar
 

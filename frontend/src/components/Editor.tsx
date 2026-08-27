@@ -11,7 +11,8 @@ import JobBar from './JobBar'
 import { api } from '../lib/api'
 import { sourceToOutput } from '../lib/timeline'
 import { timecode } from '../lib/format'
-import { getState, pushHistory, setState, toast, useStore } from '../state/store'
+import { getPlayhead, getState, pushHistory, setPlayhead, setState, toast, useStore }
+  from '../state/store'
 
 const TABS = [
   { id: 'texto', label: 'Texto' },
@@ -42,9 +43,7 @@ export default function Editor() {
     const fresh = await api.project(project.id)
     setPreviewUrl(null)
     const dur = fresh.timeline?.duration ?? 0
-    setState((st) => ({
-      playhead: Math.min(st.playhead, Math.max(0, dur - 0.01)),
-    }))
+    setPlayhead(Math.min(getPlayhead(), Math.max(0, dur - 0.01)))
     setState({
       project: fresh,
       timeline: fresh.timeline ?? null,
@@ -235,6 +234,53 @@ export default function Editor() {
 
       <JobBar />
 
+      {analysed && view && (() => {
+        // O veredito. O usuário reclamou que o editor não entregava pronto:
+        // ou está pronto e ele exporta, ou aqui diz exatamente o que falta.
+        const claps = (view.claps ?? []).filter((c) => c.suspect).length
+        const pend = (view.audit?.length ?? 0) + claps
+        const fixed = view.audit_fixed?.length ?? 0
+        const econ = view.source_duration > 0
+          ? Math.round((1 - view.duration / view.source_duration) * 100) : 0
+        if (pend === 0) {
+          return (
+            <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
+                            border-emerald-900/50 bg-emerald-950/25">
+              <span className="text-emerald-300 font-medium">✓ Pronto para exportar</span>
+              <span className="text-slate-400">
+                {view.blocks.length} blocos · {timecode(view.duration)} de{' '}
+                {timecode(view.source_duration)} ({econ}% mais curto) ·{' '}
+                {view.subtitles.length} legendas
+                {fixed > 0 && ` · ${fixed} borda(s) acertadas sozinhas`}
+              </span>
+              <button className="btn btn-primary btn-xs ml-auto"
+                      onClick={() => setTab('exportar')}>
+                exportar →
+              </button>
+            </div>
+          )
+        }
+        return (
+          <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
+                          border-amber-900/50 bg-amber-950/25">
+            <span className="text-amber-200 font-medium">
+              Falta você decidir {pend} coisa(s)
+            </span>
+            <span className="text-slate-400">
+              {view.audit?.length ? `${view.audit.length} corte(s) sem respiro por perto` : ''}
+              {view.audit?.length && claps ? ' · ' : ''}
+              {claps ? `${claps} som(ns) que podem ser palma` : ''}
+              {fixed > 0 && ` · ${fixed} borda(s) já resolvidas sozinhas`}
+            </span>
+            <span className="ml-auto flex gap-1.5">
+              <button className="btn btn-xs" onClick={() => setTab('exportar')}>
+                exportar assim mesmo
+              </button>
+            </span>
+          </div>
+        )
+      })()}
+
       <div className="flex-1 flex min-h-0">
         <aside className="w-[320px] shrink-0 border-r border-line p-3 flex flex-col gap-3
                           min-h-0 overflow-hidden">
@@ -306,8 +352,13 @@ export default function Editor() {
                     setState({ activeJob: job })
                   }}
                   onToggleClap={async (id, enabled) => {
+                    // ligar uma palma cria (ou tira) um take descartado: sem
+                    // refazer a edição a timeline mostrava a marca mudada e o
+                    // corte antigo
+                    snapshot()
                     await api.setClap(project.id, id, enabled)
-                    await refresh()
+                    const job = await api.autoedit(project.id)
+                    setState({ activeJob: job })
                   }}
                   onSubtitleEdge={async (cueId, side, outTime) => {
                     snapshot()

@@ -26,6 +26,7 @@ export interface Clap {
   id: string; time: number; start: number; end: number; peak_db: number
   jump_db: number; duration: number; confirmed: boolean; suspect: boolean
   attack_floor_db: number; reason: string; enabled: boolean
+  rise_ms: number; flatness: number; hf_ratio: number; timbre_score: number
 }
 
 export interface Take {
@@ -44,6 +45,11 @@ export interface AuditIssue {
   suggestion: number; suggestion_reason: string; word?: string
 }
 
+export interface AuditFixed {
+  clip_id: string; side: string; from: number; to: number
+  reason: string; message: string; kind?: string
+}
+
 export interface Filler {
   id: string; word_ids: number[]; text: string; start: number; end: number
   safe: boolean; pause_before: number; pause_after: number; reason: string
@@ -58,7 +64,7 @@ export interface Envelope {
 export interface TimelineView {
   duration: number; source_duration: number
   blocks: Clip[]; removed: RemovedRegion[]; takes: Take[]; claps: Clap[]
-  subtitles: SubtitleCue[]; audit: AuditIssue[]
+  subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
 }
 

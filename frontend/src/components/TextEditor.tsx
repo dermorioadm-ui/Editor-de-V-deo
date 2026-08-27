@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { sourceToOutput } from '../lib/timeline'
-import { getState, setState, toast, useStore } from '../state/store'
+import { getPlayhead, getState, setPlayhead, subscribePlayhead, toast, useStore }
+  from '../state/store'
 
 interface Props { onChanged: () => Promise<any>; snapshot: () => void }
 
@@ -16,12 +17,11 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
   const removedIds = useStore((s) => s.removedWordIds)
   const fillers = useStore((s) => s.fillers)
   const view = useStore((s) => s.timeline)
-  const playhead = useStore((s) => s.playhead)
   const [range, setRange] = useState<[number, number] | null>(null)
   const [anchor, setAnchor] = useState<number | null>(null)
   const [showRemoved, setShowRemoved] = useState(true)
   const [busy, setBusy] = useState(false)
-  const activeRef = useRef<HTMLSpanElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const removed = useMemo(() => new Set(removedIds), [removedIds])
   const fillerMap = useMemo(() => {
@@ -30,18 +30,55 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
     return m
   }, [fillers])
 
-  const activeWord = useMemo(() => {
-    if (!view) return -1
+  // Palavra sob o playhead. Isto rodava a 60 quadros por segundo varrendo
+  // TODAS as palavras contra TODOS os blocos e re-renderizando a lista
+  // inteira — era a causa da lentidão num vídeo longo. Agora a conversão
+  // para o eixo de saída é feita UMA vez, a busca é binária, e a marca é
+  // posta direto no DOM: o React não re-renderiza nada durante a prévia.
+  const outTimes = useMemo(() => {
+    if (!view) return [] as { i: number; a: number; b: number }[]
+    const out: { i: number; a: number; b: number }[] = []
     for (const w of words) {
-      const out = sourceToOutput(w.start, view.blocks)
-      if (out != null && playhead >= out && playhead <= out + (w.end - w.start)) return w.i
+      const a = sourceToOutput(w.start, view.blocks)
+      if (a == null) continue
+      const bEnd = sourceToOutput(w.end, view.blocks)
+      out.push({ i: w.i, a, b: bEnd ?? a + (w.end - w.start) })
     }
-    return -1
-  }, [words, view, playhead])
+    out.sort((x, y) => x.a - y.a)
+    return out
+  }, [words, view])
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [activeWord])
+    const box = listRef.current
+    if (!box || !outTimes.length) return
+    let markedIndex = -1
+    const apply = () => {
+      const t = getPlayhead()
+      // busca binária: o último começo <= t
+      let lo = 0; let hi = outTimes.length - 1; let found = -1
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        if (outTimes[mid].a <= t) { found = mid; lo = mid + 1 } else { hi = mid - 1 }
+      }
+      const hit = found >= 0 && t <= outTimes[found].b ? outTimes[found].i : -1
+      if (hit === markedIndex) return
+      markedIndex = hit
+      box.querySelector('[data-active="1"]')?.removeAttribute('data-active')
+      if (hit < 0) return
+      const el = box.querySelector<HTMLElement>(`[data-w="${hit}"]`)
+      if (!el) return
+      el.setAttribute('data-active', '1')
+      // só rola quando a palavra saiu da vista: chamar scrollIntoView a cada
+      // palavra forçava o navegador a recalcular o layout das 1500 palavras
+      const r = el.getBoundingClientRect()
+      const b = box.parentElement?.getBoundingClientRect()
+      if (!b || r.top < b.top + 8 || r.bottom > b.bottom - 8) {
+        el.scrollIntoView({ block: 'center', behavior: 'auto' })
+      }
+    }
+    apply()
+    return subscribePlayhead(apply)
+  }, [outTimes])
 
   const selectedIds = useMemo(() => {
     if (!range) return []
@@ -111,7 +148,7 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
     const w = words[i]
     if (view) {
       const out = sourceToOutput(w.start, view.blocks)
-      if (out != null) setState({ playhead: out })
+      if (out != null) setPlayhead(out)
     }
   }
 
@@ -157,16 +194,15 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
         </div>
       )}
 
-      <div className="card p-4 leading-[2] text-[15px]">
+      <div ref={listRef} className="card p-4 leading-[2] text-[15px]">
         {words.map((w: any) => {
           const isRemoved = removed.has(w.i)
           if (isRemoved && !showRemoved) return null
           const filler = fillerMap.get(w.i)
           const selected = selectedSet.has(w.i)
-          const active = activeWord === w.i
           return (
             <span key={w.i}
-                  ref={active ? activeRef : undefined}
+                  data-w={w.i}
                   onClick={(e) => click(w.i, e.shiftKey)}
                   title={filler
                     ? `vício de fala — ${filler.reason}`
@@ -175,7 +211,7 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
                     'cursor-pointer px-0.5 rounded transition',
                     isRemoved ? 'line-through text-slate-600 decoration-red-500/70' : '',
                     selected ? 'bg-accent/30 text-white' : 'hover:bg-ink-600',
-                    active ? 'ring-1 ring-accent/70' : '',
+                    'data-[active=1]:ring-1 data-[active=1]:ring-accent/70',
                     filler && !isRemoved
                       ? (filler.safe
                         ? 'underline decoration-dotted decoration-amber-400 underline-offset-4'

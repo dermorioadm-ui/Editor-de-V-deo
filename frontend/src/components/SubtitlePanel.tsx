@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
-import { setState, toast, useStore } from '../state/store'
+import { getPlayhead, setPlayhead, subscribePlayhead, toast, useStore }
+  from '../state/store'
 
 interface Props { onChanged: () => Promise<any>; snapshot: () => void }
 
 export default function SubtitlePanel({ onChanged, snapshot }: Props) {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
-  const playhead = useStore((s) => s.playhead)
+  const listRef = useRef<HTMLDivElement>(null)
   const [corrections, setCorrections] = useState<any[]>([])
   const [novaDe, setNovaDe] = useState('')
   const [novaPara, setNovaPara] = useState('')
@@ -20,6 +21,32 @@ export default function SubtitlePanel({ onChanged, snapshot }: Props) {
 
   useEffect(() => { api.corrections().then(setCorrections).catch(() => {}) }, [])
   useEffect(() => { setStyleState(project?.plan?.style ?? {}) }, [project?.plan?.style])
+
+  // A legenda que está tocando é marcada direto no DOM. Antes, cada quadro
+  // re-renderizava as 250 legendas (com textarea e tudo) e a aba travava.
+  const cues = view?.subtitles
+  useEffect(() => {
+    const box = listRef.current
+    if (!box || !cues?.length) return
+    let marked = -1
+    const apply = () => {
+      const t = getPlayhead()
+      let hit = -1
+      let lo = 0; let hi = cues.length - 1
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        if (cues[mid].start <= t) { hit = mid; lo = mid + 1 } else { hi = mid - 1 }
+      }
+      if (hit >= 0 && t > cues[hit].end) hit = -1
+      if (hit === marked) return
+      marked = hit
+      box.querySelector('[data-cue-active="1"]')?.removeAttribute('data-cue-active')
+      if (hit < 0) return
+      box.querySelector(`[data-cue="${cues[hit].id}"]`)?.setAttribute('data-cue-active', '1')
+    }
+    apply()
+    return subscribePlayhead(apply)
+  }, [cues])
 
   if (!project || !view) return null
 
@@ -39,9 +66,6 @@ export default function SubtitlePanel({ onChanged, snapshot }: Props) {
       toast('ok', 'Legendas refeitas com o dicionário atualizado')
     } finally { setBusy(false) }
   }
-
-  const current = view.subtitles.findIndex(
-    (c) => playhead >= c.start && playhead <= c.end)
 
   return (
     <div className="p-4 grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4">
@@ -63,13 +87,14 @@ export default function SubtitlePanel({ onChanged, snapshot }: Props) {
             </button>
           </div>
         </div>
-        <div className="card divide-y divide-line max-h-[62vh] overflow-auto">
-          {view.subtitles.map((c, i) => (
+        <div ref={listRef} className="card divide-y divide-line max-h-[62vh] overflow-auto">
+          {view.subtitles.map((c) => (
             <div key={c.id}
-                 className={`p-2.5 flex gap-3 ${i === current ? 'bg-accent/10' : ''}`}>
+                 data-cue={c.id}
+                 className="p-2.5 flex gap-3 data-[cue-active=1]:bg-accent/10">
               <button className="text-[11px] font-mono text-slate-500 w-24 shrink-0
                                  text-left hover:text-accent"
-                      onClick={() => setState({ playhead: c.start + 0.02 })}>
+                      onClick={() => setPlayhead(c.start + 0.02)}>
                 {timecode(c.start, true)}
                 <br />{timecode(c.end, true)}
               </button>

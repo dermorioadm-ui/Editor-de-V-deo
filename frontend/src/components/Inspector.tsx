@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { SECTIONS } from '../types'
 import { api } from '../lib/api'
 import { seconds, timecode } from '../lib/format'
-import { setState, toast, useStore } from '../state/store'
+import { getPlayhead, setPlayhead, setState, toast, useStore } from '../state/store'
 
 interface Props { onChanged: () => Promise<any>; snapshot: () => void }
 
@@ -10,7 +10,6 @@ export default function Inspector({ onChanged, snapshot }: Props) {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
   const selectedId = useStore((s) => s.selectedClip)
-  const playhead = useStore((s) => s.playhead)
   const storedGlobal = project?.plan?.speed?.global_multiplier ?? 1
   const [globalSpeed, setGlobalSpeed] = useState(storedGlobal)
   const [busy, setBusy] = useState(false)
@@ -42,28 +41,69 @@ export default function Inspector({ onChanged, snapshot }: Props) {
   return (
     <div className="p-3 space-y-4">
       {/* ------------------------------------------------ alertas de borda */}
-      {view.audit?.length > 0 && (
-        <section className="card border-red-900/60 bg-red-950/25 p-3">
-          <h3 className="text-xs font-semibold text-red-300 uppercase tracking-wide mb-2">
-            Auditoria de bordas · {view.audit.length}
+      {(view.audit_fixed?.length ?? 0) > 0 && (view.audit?.length ?? 0) === 0 && (
+        <section className="card border-emerald-900/50 bg-emerald-950/20 p-3">
+          <h3 className="text-xs font-semibold text-emerald-300 uppercase tracking-wide">
+            Bordas conferidas · nada a fazer
           </h3>
+          <p className="hint mt-1">
+            {view.audit_fixed!.length} borda(s) foram ajustadas sozinhas.{' '}
+            {view.audit_fixed!.some((f) => f.kind === 'sem-corte')
+              ? 'Onde não dava para cortar limpo, o corte não foi feito — a pausa ficou '
+                + 'no vídeo em vez de comer palavra.'
+              : 'Nenhuma delas encostava em palavra.'}
+          </p>
+          <details className="mt-1.5">
+            <summary className="text-[11px] text-slate-500 cursor-pointer">
+              ver o que mudou
+            </summary>
+            <div className="space-y-1 mt-1.5 max-h-40 overflow-auto">
+              {view.audit_fixed!.map((f, i) => (
+                <p key={i} className="text-[11px] text-slate-400 font-mono">
+                  {timecode(f.from, true)} → {timecode(f.to, true)}
+                  <span className="font-sans"> · {f.reason}</span>
+                </p>
+              ))}
+            </div>
+          </details>
+        </section>
+      )}
+
+      {view.audit?.length > 0 && (
+        <section className="card border-amber-900/60 bg-amber-950/25 p-3">
+          <h3 className="text-xs font-semibold text-amber-300 uppercase tracking-wide mb-1">
+            {view.audit.length} corte(s) precisam de você
+          </h3>
+          <p className="hint mb-2">
+            {(view.audit_fixed?.length ?? 0) > 0
+              ? `Outras ${view.audit_fixed!.length} borda(s) já foram acertadas sozinhas. `
+              : ''}
+            Nestes aqui a fala não tem respiro por perto: qualquer lugar que a borda
+            for come um pedaço. Escolha você.
+          </p>
           <div className="space-y-2 max-h-56 overflow-auto">
             {view.audit.map((issue, i) => (
               <div key={`${issue.clip_id}-${issue.side}-${i}`}
-                   className="text-[11px] leading-snug border-t border-red-900/40 pt-2
+                   className="text-[11px] leading-snug border-t border-amber-900/40 pt-2
                               first:border-0 first:pt-0">
-                <p className="text-red-200">{issue.message}</p>
+                <p className="text-amber-100">{issue.message}</p>
                 <p className="text-slate-400 mt-0.5">{issue.suggestion_reason}</p>
-                <button className="btn btn-xs mt-1.5"
-                        onClick={async () => {
-                          snapshot()
-                          await api.fixAudit(project.id, i)
-                          await onChanged()
-                          toast('ok', 'Borda corrigida',
-                            `movida para ${issue.suggestion.toFixed(3)} s`)
-                        }}>
-                  corrigir com um clique
-                </button>
+                <div className="flex gap-1 mt-1.5">
+                  <button className="btn btn-xs"
+                          onClick={() => setPlayhead(Math.max(0, issue.time - 0.6))}>
+                    ouvir
+                  </button>
+                  <button className="btn btn-xs"
+                          onClick={async () => {
+                            snapshot()
+                            await api.fixAudit(project.id, i)
+                            await onChanged()
+                            toast('ok', 'Borda corrigida',
+                              `movida para ${issue.suggestion.toFixed(3)} s`)
+                          }}>
+                    mover para {issue.suggestion.toFixed(2)} s
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -74,26 +114,30 @@ export default function Inspector({ onChanged, snapshot }: Props) {
       {view.claps?.some((c) => c.suspect) && (
         <section className="card border-amber-900/60 bg-amber-950/25 p-3">
           <h3 className="text-xs font-semibold text-amber-300 uppercase tracking-wide mb-2">
-            Palmas suspeitas
+            {view.claps.filter((c) => c.suspect).length} som(ns) parecem palma
           </h3>
           <p className="hint mb-2">
-            Estas falharam só no critério do ataque — pode ser sílaba tônica no meio
-            de fala contínua. Confirme você.
+            O timbre bate com palma (estouro seco, agudo, sem harmônico), mas falta
+            um critério. Enquanto você não disser que é, nada é descartado.
           </p>
           {view.claps.filter((c) => c.suspect).map((c) => (
             <div key={c.id} className="text-[11px] border-t border-amber-900/40 pt-2 mt-2
                                        first:border-0 first:pt-0 first:mt-0">
-              <div className="font-mono">{timecode(c.time, true)} · pico {c.peak_db} dB
-                · salto {c.jump_db} dB</div>
+              <div className="font-mono">{timecode(c.time, true)} · sobe em{' '}
+                {c.rise_ms?.toFixed(1)} ms · {c.timbre_score}/3 no timbre</div>
               <p className="text-slate-400 mt-0.5">{c.reason}</p>
               <div className="flex gap-1 mt-1.5">
+                <button className="btn btn-xs"
+                        onClick={() => setPlayhead(Math.max(0, c.time - 1.0))}>
+                  ouvir
+                </button>
                 <button className="btn btn-xs"
                         onClick={async () => {
                           await api.setClap(project.id, c.id, true)
                           const job = await api.autoedit(project.id)
                           setState({ activeJob: job })
                         }}>
-                  é palma
+                  é palma, descarta o take
                 </button>
                 <button className="btn btn-xs"
                         onClick={async () => {
@@ -169,7 +213,7 @@ export default function Inspector({ onChanged, snapshot }: Props) {
                       onClick={async () => {
                         snapshot()
                         try {
-                          const res = await api.splitClip(project.id, block.id, playhead)
+                          const res = await api.splitClip(project.id, block.id, getPlayhead())
                           await onChanged()
                           toast('ok', 'Bloco dividido',
                             `em ${res.src_time.toFixed(3)} s da fonte — os dois lados ` +

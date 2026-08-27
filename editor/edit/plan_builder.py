@@ -339,6 +339,40 @@ def removed_regions(spans: list[Span], duration: float,
     return regions
 
 
+def resync_removed(clips: list, previous: list, duration: float) -> list:
+    """Refaz as regiões removidas a partir das bordas ATUAIS dos clipes.
+
+    Mover (ou desfazer) uma borda muda o que sai do vídeo. Sem isto o vermelho
+    da timeline — e o botão "recuperar trecho" — continuavam descrevendo o
+    corte antigo. O motivo de cada região é herdado da região que ocupava
+    aquele lugar antes.
+    """
+    main = sorted([c for c in clips if c.enabled and c.source == "main"],
+                  key=lambda c: c.src_start)
+
+    def carry(a: float, b: float) -> tuple[str, str]:
+        mid = (a + b) / 2.0
+        for r in previous:
+            if r.start - 0.02 <= mid <= r.end + 0.02:
+                return r.reason, r.detail
+        return "silencio", "pausa acima do limiar do preset"
+
+    out: list[RemovedRegion] = []
+    cursor = 0.0
+    for clip in main:
+        if clip.src_start - cursor > 0.02:
+            reason, detail = carry(cursor, clip.src_start)
+            out.append(RemovedRegion(start=round(cursor, 4),
+                                     end=round(clip.src_start, 4),
+                                     reason=reason, detail=detail))
+        cursor = max(cursor, clip.src_end)
+    if duration - cursor > 0.02:
+        reason, detail = carry(cursor, duration)
+        out.append(RemovedRegion(start=round(cursor, 4), end=round(duration, 4),
+                                 reason=reason, detail=detail))
+    return out
+
+
 def words_removed_by_takes(words: list[dict], takes: list[dict]) -> set[int]:
     ids: set[int] = set()
     for take in takes:

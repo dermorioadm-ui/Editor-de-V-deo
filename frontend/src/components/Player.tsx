@@ -3,7 +3,7 @@ import type { Clip, SubtitleCue } from '../types'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
-import { setState, useStore } from '../state/store'
+import { setPlayhead, usePlayhead } from '../state/store'
 
 interface Props {
   projectId: string
@@ -27,7 +27,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
-  const playhead = useStore((s) => s.playhead)
+  const playhead = usePlayhead()
   const seekingRef = useRef(false)
   const rafRef = useRef<number>()
   // bloco não-main (foto/inserto) tocando "no relógio": {clip, perfStart, offset0}
@@ -52,7 +52,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     if (!el) return
     if (linear) {
       el.currentTime = Math.max(0, Math.min(t, duration - 0.01))
-      setState({ playhead: el.currentTime })
+      setPlayhead(el.currentTime)
       return
     }
     if (!blocks.length) return
@@ -61,7 +61,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     if (block && block.source !== 'main') {
       // caiu numa foto ou num inserto: mostra o quadro da própria mídia
       enterStill(block, clamped - (block.out_start ?? 0))
-      setState({ playhead: clamped })
+      setPlayhead(clamped)
       return
     }
     const wasStill = stillRef.current !== null
@@ -71,7 +71,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     seekingRef.current = true
     el.currentTime = pos.time
     if (block) el.playbackRate = block.speed
-    setState({ playhead: clamped })
+    setPlayhead(clamped)
     // se estava tocando um still e o alvo é vídeo, retoma o vídeo — senão a
     // reprodução ficava congelada com o botão dizendo "pausa"
     if (wasStill && playing) el.play().catch(() => {})
@@ -103,7 +103,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         el.pause()
         leaveStill()
         setPlaying(false)
-        setState({ playhead: duration })
+        setPlayhead(duration)
         return
       }
       if (block.source === 'main') {
@@ -120,7 +120,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       const el = video.current
       const still = stillRef.current
       if (el && linear) {
-        setState({ playhead: el.currentTime })
+        setPlayhead(el.currentTime)
       } else if (el && still && playing) {
         // foto/inserto: o relógio é o performance.now()
         const elapsed = still.offset0 + (performance.now() - still.perfStart) / 1000
@@ -128,7 +128,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         if (elapsed >= dur) {
           advance((still.clip.out_end ?? 0) + 0.001)
         } else {
-          setState({ playhead: (still.clip.out_start ?? 0) + elapsed })
+          setPlayhead((still.clip.out_start ?? 0) + elapsed)
         }
       } else if (el && blocks.length) {
         const src = el.currentTime
@@ -148,7 +148,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           }
           const scale = ((current.out_end ?? 0) - (current.out_start ?? 0)) /
             Math.max(current.src_duration, 1e-9)
-          setState({ playhead: (current.out_start ?? 0) + (src - current.src_start) * scale })
+          setPlayhead((current.out_start ?? 0) + (src - current.src_start) * scale)
         }
       }
       rafRef.current = requestAnimationFrame(tick)
