@@ -225,6 +225,12 @@ def api_project(pid: str) -> dict:
 
 @app.delete("/api/projects/{pid}")
 def api_delete(pid: str) -> dict:
+    # um export em andamento continuaria enchendo a pasta "apagada" de
+    # gigabytes (e no Windows o rmtree nem consegue remover arquivo aberto)
+    queue = get_queue()
+    for job in queue.list(pid):
+        if job.status in ("fila", "rodando"):
+            queue.cancel(job.id)
     svc.delete_project(pid)
     return {"ok": True}
 
@@ -258,6 +264,11 @@ def api_envelope(pid: str, points: int = 4000) -> dict:
 
 # --------------------------------------------------------------------- jobs
 def _run(kind: str, pid: str, fn) -> dict:
+    # dois cliques no mesmo botão não podem virar dois jobs: o segundo
+    # re-analisaria tudo e apagaria as decisões manuais feitas após o primeiro
+    for existing in get_queue().list(pid):
+        if existing.kind == kind and existing.status in ("fila", "rodando"):
+            return existing.to_dict()
     job = get_queue().submit(kind, pid, fn)
     return job.to_dict()
 
@@ -562,7 +573,9 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
     if not (0 <= index < len(issues)):
         raise HTTPException(400, "alerta inválido")
     removed = set(project.analysis.get("removed_word_ids", []))
-    if not apply_fix(project.plan.clips, issues[index], project.words, removed):
+    res = _remapping(project, lambda: apply_fix(
+        project.plan.clips, issues[index], project.words, removed))
+    if not res:
         raise HTTPException(400, "não foi possível aplicar a correção")
     return {"ok": True, "timeline": _after_edit(project)}
 
@@ -782,13 +795,14 @@ def api_insert(pid: str, payload: dict = Body(...)) -> dict:
                     audio=payload.get("audio", "source"),
                     fit=payload.get("fit"))
 
-    placed = tl.at(at)
-    if placed is None:
-        plan.clips.append(clip)
-    else:
+    def insert_clip():
+        placed = tl.at(at)
+        if placed is None:
+            plan.clips.append(clip)
+            return {"ok": True}
         if at - placed.out_start > 0.15 and placed.out_end - at > 0.15:
-            ops.split_clip(plan, placed.clip.id, at)
-            tl2 = Timeline(plan.active_clips)
+            ops.split_clip(plan, placed.clip.id, at, fps=_fps(project))
+            tl2 = Timeline(plan.active_clips, _fps(project))
             target = tl2.at(at)
             idx = plan.clips.index(target.clip) if target else len(plan.clips)
         else:
@@ -796,9 +810,13 @@ def api_insert(pid: str, payload: dict = Body(...)) -> dict:
             if at > (placed.out_start + placed.out_end) / 2:
                 idx += 1
         plan.clips.insert(idx, clip)
+        return {"ok": True}
+
+    # inserir empurra todo o conteúdo seguinte: overlays, cutaways e blurs
+    # posicionados depois do ponto precisam acompanhar o deslocamento
+    res = _remapping(project, insert_clip)
     project.save_plan()
-    return {"ok": True, "clip": clip.to_dict(),
-            "timeline": _after_edit(project)}
+    return {**res, "clip": clip.to_dict(), "timeline": _after_edit(project)}
 
 
 @app.post("/api/projects/{pid}/overlays")
@@ -981,29 +999,24 @@ def api_deesser(pid: str, payload: dict = Body(default={})) -> dict:
 
 @app.post("/api/projects/{pid}/preview")
 def api_preview(pid: str, payload: dict = Body(default={})) -> dict:
-    """Prévia rápida em 480p, sem mexer na configuração da exportação final."""
-    project = _project(pid)
-    original = ExportParams(**project.plan.export.__dict__)
-    project.plan.export = ExportParams(**{
-        **original.__dict__,
+    """Prévia rápida em 480p, sem tocar na configuração da exportação final.
+
+    Os parâmetros degradados vão como override EM MEMÓRIA dentro do job.
+    Persistir antes e restaurar num finally deixava o plano preso em 480p
+    para sempre quando o job era cancelado ainda na fila.
+    """
+    _project(pid)
+    override = {
         "scale": str(payload.get("scale", "480")),
         "crf": int(payload.get("crf", 26)),
         "preset": "veryfast",
         "codec": "h264",
         "audio_bitrate": "128k",
-    })
-    project.save_plan()
-
-    def job(ctx):
-        fresh = svc.load(pid)
-        try:
-            return svc.export(fresh, ctx, {"filename": "previa480.mp4",
-                                           "restart": True})
-        finally:
-            fresh.plan.export = original
-            fresh.save_plan()
-
-    return _run("previa", pid, job)
+    }
+    return _run("previa", pid, lambda ctx: svc.export(
+        svc.load(pid), ctx,
+        {"filename": "previa480.mp4", "restart": True,
+         "export_override": override}))
 
 
 @app.get("/api/projects/{pid}/safe-zone")
@@ -1048,21 +1061,26 @@ def api_photo(pid: str, cid: str, payload: dict = Body(...)) -> dict:
     for clip in project.plan.clips:
         if clip.id != cid or clip.kind != "photo":
             continue
-        photo = dict(clip.photo or {})
-        if "duration" in payload:
-            dur = max(0.3, float(payload["duration"]))
-            photo["duration"] = dur
-            clip.src_start = 0.0
-            clip.src_end = dur
-        if "ken_burns" in payload:
-            photo["ken_burns"] = payload["ken_burns"]
-        if "annotations" in payload:
-            photo["annotations"] = payload["annotations"]
-        clip.photo = photo
-        clip.measured_duration = None
-        project.save_plan()
-        return {"ok": True, "clip": clip.to_dict(),
-                "timeline": svc.timeline_summary(project)}
+
+        def change():
+            photo = dict(clip.photo or {})
+            if "duration" in payload:
+                dur = max(0.3, float(payload["duration"]))
+                photo["duration"] = dur
+                clip.src_start = 0.0
+                clip.src_end = dur
+            if "ken_burns" in payload:
+                photo["ken_burns"] = payload["ken_burns"]
+            if "annotations" in payload:
+                photo["annotations"] = payload["annotations"]
+            clip.photo = photo
+            clip.measured_duration = None
+            return {"ok": True}
+
+        # mudar a duração da foto desloca tudo depois dela
+        res = _remapping(project, change)
+        return {**res, "clip": clip.to_dict(),
+                "timeline": _after_edit(project)}
     raise HTTPException(404, "foto não encontrada")
 
 

@@ -49,6 +49,7 @@ class VideoSegment:
     photo: dict | None = None
     fit: dict | None = None
     out_start: float = 0.0     # preenchido com a soma das durações MEDIDAS
+    t_start: float = 0.0       # posição na linha do tempo das legendas (nominal)
     measured: float | None = None
     file: str = ""
 
@@ -167,10 +168,19 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
         pieces: list[tuple[float, float, object | None]] = []
         cursor = placed.out_start
         for cut in cutaways:
+            if clip.kind == "photo":
+                # cutaway por cima de foto partiria o Ken Burns em pedaços que
+                # reiniciam o zoom do zero; a foto vence
+                break
             if cut.out_end <= placed.out_start or cut.out_start >= placed.out_end:
                 continue
-            a = max(cut.out_start, placed.out_start)
+            # dois cutaways sobrepostos gerariam o MESMO intervalo de saída
+            # duas vezes (duração explode e o A/V dessincroniza): o segundo
+            # começa onde o primeiro terminou
+            a = max(cut.out_start, placed.out_start, cursor)
             b = min(cut.out_end, placed.out_end)
+            if b - a <= 0.02:
+                continue
             if a - cursor > 0.02:
                 pieces.append((cursor, a, None))
             pieces.append((a, b, cut))
@@ -188,6 +198,7 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         index=idx, source_path=str(path), kind="photo",
                         src_start=0.0, src_duration=out_dur, speed=1.0,
                         out_theoretical=out_dur, clip_id=clip.id, info=info,
+                        t_start=out_a,
                         photo=clip.photo or {}, fit=clip.fit))
                 else:
                     frac_a = (out_a - placed.out_start) / max(placed.out_duration, 1e-9)
@@ -199,7 +210,7 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         kind="main" if clip.source == "main" else "insert",
                         src_start=s0, src_duration=s1 - s0, speed=clip.speed,
                         out_theoretical=out_dur, clip_id=clip.id, info=info,
-                        fit=clip.fit))
+                        t_start=out_a, fit=clip.fit))
             else:
                 cpath = sources.get(cut.media_id, {}).get("path")
                 cinfo = sources.get(cut.media_id, {}).get("info")
@@ -208,7 +219,7 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         index=idx, source_path=str(path), kind="main",
                         src_start=clip.src_start, src_duration=out_dur * clip.speed,
                         speed=clip.speed, out_theoretical=out_dur,
-                        clip_id=clip.id, info=info))
+                        clip_id=clip.id, info=info, t_start=out_a))
                 else:
                     offset = (out_a - cut.out_start) * cut.speed
                     segs.append(VideoSegment(
@@ -216,7 +227,7 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         src_start=cut.media_start + offset,
                         src_duration=out_dur * cut.speed, speed=cut.speed,
                         out_theoretical=out_dur, clip_id=clip.id, info=cinfo,
-                        fit=cut.fit))
+                        t_start=out_a, fit=cut.fit))
             idx += 1
     return segs
 
@@ -294,31 +305,35 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     cur_tag = "__v0"
 
     blur_graph, has_blur = F.blur_chain(
-        plan.blurs, seg.out_start, seg.out_start + seg.nominal,
+        plan.blurs, seg.t_start, seg.t_start + seg.nominal,
         width, height, cur_tag, "__vb")
     if has_blur:
         graph_parts.append(blur_graph)
         cur_tag = "__vb"
 
-    overlays = F.overlay_inputs(plan.overlays, seg.out_start,
-                                seg.out_start + seg.nominal)
+    overlays = F.overlay_inputs(plan.overlays, seg.t_start,
+                                seg.t_start + seg.nominal)
     if overlays:
         ov_graph, ov_inputs = F.overlay_chain(
-            overlays, media_paths, seg.out_start, width, height,
+            overlays, media_paths, seg.t_start, width, height,
             first_input_index=1, tag_in=cur_tag, tag_out="__vo")
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
             for p in ov_inputs:
-                pre += ["-i", p]
+                # -loop 1: um PNG entra como UM quadro em t=0; o fade avaliava
+                # o alpha nesse único quadro (0) e a sobreposição com fade —
+                # o padrão — saía 100% invisível no export
+                pre += ["-loop", "1", "-framerate", f"{fps}",
+                        "-t", f"{seg.nominal + 1.0:.3f}", "-i", p]
 
     tail = []
     if plan.export.burn_subtitles and cues:
-        window_end = seg.out_start + seg.nominal + 1.0
+        window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
         ass_mod.write_ass(ass_path, cues, plan.style, width, height,
-                          time_offset=-seg.out_start,
-                          window=(seg.out_start - 0.5, window_end))
+                          time_offset=-seg.t_start,
+                          window=(seg.t_start - 0.5, window_end))
         tail.append(F.subtitle_chain(ass_path))
     tail.append(f"format={plan.export.pix_fmt}")
     graph_parts.append(f"[{cur_tag}]" + ",".join(tail) + "[vout]")
@@ -327,6 +342,11 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     args = [FFMPEG, "-y", "-v", "error", *pre,
             "-filter_complex", filtergraph, "-map", "[vout]"]
     args += encoder_args(plan.export, main, hw)
+    if overlays:
+        # o overlay (framesync) repete o último quadro do principal enquanto a
+        # entrada do PNG tiver quadros — sem esta trava, cada trecho com
+        # sobreposição saía mais longo que o planejado e a soma inflava o vídeo
+        args += ["-t", f"{seg.out_theoretical:.6f}"]
     return args, inputs
 
 

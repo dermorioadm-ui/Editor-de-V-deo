@@ -148,10 +148,15 @@ def phrase_start_before(env: Envelope, t: float,
 
 def resume_point_after(env: Envelope, clap_end: float, words: list,
                        pause: float = PHRASE_PAUSE) -> float:
-    """Onde a refeitura começa: depois da contagem, na próxima pausa."""
+    """Onde a refeitura começa: depois da contagem, na próxima pausa.
+
+    A busca de pausa é LIMITADA pela primeira palavra que não é contagem —
+    procurar até 6 s adiante podia achar uma pausa DENTRO da refeitura e
+    engolir as primeiras palavras dela no take descartado.
+    """
     limit = clap_end + RESUME_MAX_AFTER_CLAP
     cursor = clap_end
-    # engole a contagem ("um, dois, três") logo depois da palma
+    first_word = None       # primeira palavra que já é a refeitura
     for w in words:
         start = float(w["start"] if isinstance(w, dict) else w.start)
         end = float(w["end"] if isinstance(w, dict) else w.end)
@@ -164,11 +169,17 @@ def resume_point_after(env: Envelope, clap_end: float, words: list,
         if start <= cursor + 0.9 and token in COUNT_TOKENS:
             cursor = end
             continue
-        if start > cursor + 0.05:
-            break
-    runs = env.silence_runs(cursor, min(limit, env.duration), min_duration=pause)
+        first_word = start
+        break
+    search_end = min(limit, env.duration)
+    if first_word is not None:
+        search_end = min(search_end, first_word)
+    runs = env.silence_runs(cursor, search_end, min_duration=pause)
     if runs:
-        return runs[0].end
+        # a pausa mais próxima da refeitura, não a primeira depois da contagem
+        return runs[-1].end
+    if first_word is not None:
+        return max(cursor, first_word - 0.05)
     return cursor
 
 

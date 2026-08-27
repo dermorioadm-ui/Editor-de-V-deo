@@ -218,7 +218,9 @@ export default function Editor() {
                   title="Ctrl+Z">↶ desfazer</button>
           <button className="btn btn-xs" disabled={!future.length} onClick={redo}
                   title="Ctrl+Shift+Z">↷ refazer</button>
-          <button className="btn btn-primary btn-xs" onClick={runOneClick}>
+          <button className="btn btn-primary btn-xs" onClick={runOneClick}
+                  disabled={!!activeJob &&
+                            ['fila', 'rodando'].includes(activeJob.status)}>
             {analysed ? 'refazer edição' : 'EDITAR'}
           </button>
         </div>

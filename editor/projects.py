@@ -236,9 +236,27 @@ def analyze(project: Project, ctx) -> dict:
     words = result["words"]
 
     ctx.stage("takes", "aplicando a regra do take")
-    takes = [t.to_dict() for t in build_discarded_takes(env, claps, words)]
 
     fillers = annotate_fillers(words, env)
+    previous = project.analysis or {}
+    # decisões do usuário sobrevivem a uma reanálise: palma confirmada ou
+    # descartada é casada pelo instante do pico; take recuperado, pelo início
+    for clap in claps:
+        for old in previous.get("claps", []):
+            if abs(float(old.get("time", -1)) - clap.time) < 0.05                     and not old.get("suspect", True) is None:
+                if old.get("suspect") is False and clap.suspect:
+                    clap.suspect = False
+                    clap.confirmed = bool(old.get("confirmed", clap.confirmed))
+                    clap.enabled = bool(old.get("enabled", clap.enabled))
+                elif old.get("enabled") is False:
+                    clap.enabled = False
+                    clap.confirmed = False
+                    clap.suspect = False
+    takes = [t.to_dict() for t in build_discarded_takes(env, claps, words)]
+    for take in takes:
+        for old in previous.get("takes", []):
+            if abs(float(old.get("start", -9)) - take["start"]) < 0.2                     and old.get("restored"):
+                take["restored"] = True
     project.analysis = {
         "duration": info.duration,
         "words": words,
@@ -255,6 +273,7 @@ def analyze(project: Project, ctx) -> dict:
                      "speech_threshold": env.speech_threshold,
                      "audit_threshold": env.audit_threshold,
                      "duration": env.duration},
+        "manual_removed_word_ids": previous.get("manual_removed_word_ids", []),
         "analyzed_at": time.time(),
     }
     project.save_analysis()
@@ -392,6 +411,10 @@ def cue_list(project: Project) -> list[dict]:
 def export(project: Project, ctx, options: dict | None = None) -> dict:
     options = options or {}
     plan = project.plan
+    if options.get("export_override"):
+        # só no plano EM MEMÓRIA: o plan_json do banco nunca vê estes valores
+        plan.export = ExportParams(**{**plan.export.__dict__,
+                                      **options["export_override"]})
     if not plan.active_clips:
         raise RuntimeError("o plano está vazio — rode a edição automática antes")
     sources = sources_for(project)
@@ -416,12 +439,12 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
         on_progress=lambda f, m: ctx.progress(f * 0.98, m),
         cancel=ctx.cancelled, hw=hw,
     )
-    # As durações medidas valeram para montar a linha do tempo desta
-    # exportação; guardá-las no plano tornaria a próxima exportação diferente
-    # da anterior e invalidaria o cache de trechos já encodados.
+    # As durações medidas valeram só para esta exportação (mantê-las
+    # invalidaria o cache), e o plano NÃO é regravado aqui: este é o snapshot
+    # do início do job — regravá-lo apagaria qualquer edição que o usuário
+    # salvou enquanto a renderização corria.
     for clip in plan.clips:
         clip.measured_duration = None
-    project.save_plan()
     project.set_status("exportado")
     ctx.progress(1.0, f"pronto: {dest.name}")
     payload = result.to_dict()

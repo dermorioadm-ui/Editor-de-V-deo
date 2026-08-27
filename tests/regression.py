@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 os.environ["EDITOR_DATA_DIR"] = tempfile.mkdtemp(prefix="editor-reg-")
@@ -156,6 +157,49 @@ def main() -> int:
           "desfazer tira a palavra 7 da lista de removidas (estado sincronizado)")
     check(any(7 in s.get("word_ids", []) for s in proj3["timeline"]["subtitles"]),
           "a palavra 7 volta às legendas depois do desfazer")
+
+    # ---- 7) prévia 480p não corrompe os parâmetros da exportação final ----
+    job = client.post(f"/api/projects/{pid}/preview", json={"scale": "480"}).json()
+    for _ in range(240):
+        j = {x["id"]: x for x in client.get("/api/jobs").json()}[job["id"]]
+        if j["status"] in ("ok", "erro", "cancelado"):
+            break
+        time.sleep(0.5)
+    check(j["status"] == "ok", f"prévia 480p roda ({j['status']} {j.get('error','')[:60]})")
+    exp = client.get(f"/api/projects/{pid}").json()["plan"]["export"]
+    check(exp["scale"] == "source" and exp["crf"] != 26,
+          f"exportação final continua intacta (scale={exp['scale']}, crf={exp['crf']})")
+
+    # ---- 8) dois cliques no mesmo botão = um job só --------------------
+    # a exportação é lenta o bastante para o segundo clique chegar com o
+    # primeiro job ainda vivo
+    j1 = client.post(f"/api/projects/{pid}/export", json={"filename": "dd.mp4"}).json()
+    j2 = client.post(f"/api/projects/{pid}/export", json={"filename": "dd.mp4"}).json()
+    check(j1["id"] == j2["id"], "segundo clique devolve o MESMO job (dedup)")
+    for _ in range(600):
+        j = {x["id"]: x for x in client.get("/api/jobs").json()}[j1["id"]]
+        if j["status"] in ("ok", "erro", "cancelado"):
+            break
+        time.sleep(0.5)
+    check(j["status"] == "ok", f"a exportação deduplicada termina ({j['status']})")
+
+    # ---- 9) inserir foto reancoradas overlays --------------------------
+    tlx = client.get(f"/api/projects/{pid}").json()["timeline"]
+    ov_before = tlx["overlays"][0]["out_start"]
+    import subprocess as _sp
+    foto = tmp / "foto.png"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", "color=c=blue:s=640x480", "-frames:v", "1", str(foto)], check=True)
+    mfoto = client.post(f"/api/projects/{pid}/media",
+                        json={"path": str(foto), "kind": "image"}).json()
+    client.post(f"/api/projects/{pid}/insert",
+                json={"media_id": mfoto["id"], "kind": "photo",
+                      "at": 1.0, "duration": 2.0})
+    tly = client.get(f"/api/projects/{pid}").json()["timeline"]
+    ov_after = tly["overlays"][0]["out_start"]
+    check(abs(ov_after - (ov_before + 2.0)) < 0.15,
+          f"overlay acompanhou a foto inserida ({ov_before:.2f}s → {ov_after:.2f}s, "
+          f"esperado ~{ov_before+2.0:.2f}s)")
 
     print()
     if FALHAS:
