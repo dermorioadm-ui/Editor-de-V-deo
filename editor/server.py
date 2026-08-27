@@ -264,14 +264,14 @@ def _run(kind: str, pid: str, fn) -> dict:
 
 @app.post("/api/projects/{pid}/analyze")
 def api_analyze(pid: str) -> dict:
-    project = _project(pid)
-    return _run("analise", pid, lambda ctx: svc.analyze(project, ctx))
+    _project(pid)
+    return _run("analise", pid, lambda ctx: svc.analyze(svc.load(pid), ctx))
 
 
 @app.post("/api/projects/{pid}/autoedit")
 def api_autoedit(pid: str) -> dict:
-    project = _project(pid)
-    return _run("edicao", pid, lambda ctx: svc.auto_edit(project, ctx))
+    _project(pid)
+    return _run("edicao", pid, lambda ctx: svc.auto_edit(svc.load(pid), ctx))
 
 
 @app.post("/api/projects/{pid}/oneclick")
@@ -281,20 +281,22 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
         svc.apply_preset_to_plan(project.plan, payload["preset"])
         db.ex("UPDATE projects SET preset=? WHERE id=?", (payload["preset"], pid))
         project.save_plan()
-    return _run("clique-unico", pid, lambda ctx: svc.one_click(project, ctx))
+    return _run("clique-unico", pid,
+                lambda ctx: svc.one_click(svc.load(pid), ctx))
 
 
 @app.post("/api/projects/{pid}/export")
 def api_export(pid: str, payload: dict = Body(default={})) -> dict:
-    project = _project(pid)
-    return _run("exportacao", pid, lambda ctx: svc.export(project, ctx, payload))
+    _project(pid)
+    return _run("exportacao", pid,
+                lambda ctx: svc.export(svc.load(pid), ctx, payload))
 
 
 @app.post("/api/projects/{pid}/validate")
 def api_validate(pid: str, payload: dict = Body(default={})) -> dict:
-    project = _project(pid)
+    _project(pid)
     return _run("validacao", pid,
-                lambda ctx: svc.validate(project, ctx, payload.get("output")))
+                lambda ctx: svc.validate(svc.load(pid), ctx, payload.get("output")))
 
 
 @app.get("/api/jobs")
@@ -992,12 +994,13 @@ def api_preview(pid: str, payload: dict = Body(default={})) -> dict:
     project.save_plan()
 
     def job(ctx):
+        fresh = svc.load(pid)
         try:
-            return svc.export(project, ctx, {"filename": "previa480.mp4",
-                                             "restart": True})
+            return svc.export(fresh, ctx, {"filename": "previa480.mp4",
+                                           "restart": True})
         finally:
-            project.plan.export = original
-            project.save_plan()
+            fresh.plan.export = original
+            fresh.save_plan()
 
     return _run("previa", pid, job)
 

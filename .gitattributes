@@ -1,0 +1,7 @@
+# .bat precisa de CRLF: o cmd.exe do Windows tem falhas conhecidas de
+# parsing com LF puro (goto, blocos parenteses)
+*.bat text eol=crlf
+*.command text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
