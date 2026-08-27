@@ -351,7 +351,8 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> lis
     words, log = corrected_words(project)
     removed = set(project.analysis.get("removed_word_ids", []))
     words = [w for w in words if w.get("src_i", w["i"]) not in removed]
-    tl = timeline or Timeline(plan.active_clips)
+    fps = project.info.fps if project.info else None
+    tl = timeline or Timeline(plan.active_clips, fps)
     mapped = remap_words(words, tl)
     manual = {s.id: s for s in plan.subtitles if s.edited}
     cues = build_cues(mapped, plan.style, limit=tl.duration)
@@ -424,7 +425,8 @@ def validate(project: Project, ctx, output: str | None = None) -> dict:
 
     words, _ = corrected_words(project)
     removed = set(project.analysis.get("removed_word_ids", []))
-    tl = Timeline(project.plan.active_clips)
+    tl = Timeline(project.plan.active_clips,
+                  project.info.fps if project.info else None)
     expected = [w["text"] for w in words
                 if w.get("src_i", w["i"]) not in removed
                 and (tl.covers(float(w["start"])) or tl.covers(float(w["end"])))]
@@ -448,10 +450,18 @@ def validate(project: Project, ctx, output: str | None = None) -> dict:
     except ImportError:
         can_transcribe = False
 
+    expected_duration = tl.duration
+    last = db.q1("SELECT result_json FROM jobs WHERE project_id=? AND kind='exportacao' "
+                 "AND status='ok' ORDER BY updated_at DESC LIMIT 1", (project.id,))
+    if last:
+        payload = db.jloads(last["result_json"], {})
+        if payload.get("output") == str(target) and payload.get("duration"):
+            expected_duration = float(payload["duration"])
+
     report = validate_export(
         target, expected, cue_list(project), project.plan.audio,
         (project.info.v_bitrate or project.info.bitrate) if project.info else 0,
-        project.plan.duration,
+        expected_duration,
         transcriber=transcriber if can_transcribe else None,
         on_progress=lambda f, m: ctx.progress(f, m),
         work=project.dir,
@@ -463,7 +473,7 @@ def validate(project: Project, ctx, output: str | None = None) -> dict:
 # -------------------------------------------------------------------- views
 def timeline_summary(project: Project) -> dict:
     plan = project.plan
-    tl = Timeline(plan.active_clips)
+    tl = Timeline(plan.active_clips, project.info.fps if project.info else None)
     blocks = []
     for placed in tl:
         c = placed.clip

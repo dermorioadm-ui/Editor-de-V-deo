@@ -6,6 +6,7 @@ deriva de 0,9 s em 36 blocos que a conta ``duração ÷ velocidade`` acumula.
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass
 
 from ..models import Clip
@@ -30,13 +31,24 @@ class Placed:
 
 
 class Timeline:
-    def __init__(self, clips: list[Clip]):
+    """Linha do tempo de saída.
+
+    Com ``fps``, a duração prevista de cada bloco é quantizada em quadros, que
+    é o que o encoder produz de fato. Sem isso a previsão fica curta uns 14 ms
+    por bloco e, em 200 blocos, a conta erra quase 3 s.
+    """
+
+    def __init__(self, clips: list[Clip], fps: float | None = None):
         self.placed: list[Placed] = []
+        self.fps = fps if (fps and fps > 0) else None
         cursor = 0.0
         for i, clip in enumerate(clips):
             if not clip.enabled or clip.src_duration <= 1e-4:
                 continue
             dur = clip.out_duration
+            if clip.measured_duration is None and self.fps:
+                frames = math.ceil(dur * self.fps - 1e-6)
+                dur = max(1, frames) / self.fps
             self.placed.append(Placed(clip, i, cursor, cursor + dur))
             cursor += dur
         self.duration = cursor

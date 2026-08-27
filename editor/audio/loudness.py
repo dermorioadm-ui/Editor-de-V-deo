@@ -93,8 +93,50 @@ def measure_file(path: str | Path, ceiling_db: float = -1.0,
     return report
 
 
-def build_chain(params: AudioParams, include_denoise: bool = True) -> str:
-    """A cadeia da Parte 9.1, na ordem: highpass -> compressor -> loudnorm."""
+def measure_loudnorm(path: str | Path, pre_chain: str, params: AudioParams) -> dict:
+    """Primeira passada do loudnorm: mede o material.
+
+    Sem isso o loudnorm roda no modo dinâmico, erra o alvo em mais de 1 LU e
+    ainda mexe no comprimento da faixa.
+    """
+    chain = f"{pre_chain}," if pre_chain else ""
+    chain += (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
+              f"LRA={params.lra}:print_format=json")
+    proc = subprocess.run(
+        [FFMPEG, "-v", "info", "-nostdin", "-i", str(path), "-af", chain,
+         "-f", "null", "-"],
+        capture_output=True,
+    )
+    text = proc.stderr.decode("utf-8", "replace")
+    start = text.rfind("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        return {}
+    import json as _json
+
+    try:
+        return _json.loads(text[start:end + 1])
+    except _json.JSONDecodeError:
+        return {}
+
+
+def loudnorm_second_pass(params: AudioParams, measured: dict) -> str:
+    """Segunda passada em modo linear: acerta o alvo e preserva o comprimento."""
+    if not measured or "input_i" not in measured:
+        return (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
+                f"LRA={params.lra}")
+    return (
+        f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:LRA={params.lra}:"
+        f"measured_I={measured.get('input_i')}:"
+        f"measured_TP={measured.get('input_tp')}:"
+        f"measured_LRA={measured.get('input_lra')}:"
+        f"measured_thresh={measured.get('input_thresh')}:"
+        f"offset={measured.get('target_offset', 0)}:linear=true:print_format=summary"
+    )
+
+
+def build_pre_chain(params: AudioParams, include_denoise: bool = True) -> str:
+    """Tudo antes do loudnorm."""
     stages: list[str] = []
     if include_denoise and params.denoise_enabled and params.denoise_chain:
         stages.append(params.denoise_chain)
@@ -109,10 +151,15 @@ def build_chain(params: AudioParams, include_denoise: bool = True) -> str:
         stages.append(f"equalizer=f=4000:t=q:w=1.2:g={params.presence_gain}")
     if params.deesser:
         stages.append(f"deesser=i={min(max(params.deesser, 0.0), 1.0)}")
-    stages.append(
-        f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:LRA={params.lra}"
-    )
     return ",".join(stages)
+
+
+def build_chain(params: AudioParams, include_denoise: bool = True) -> str:
+    """A cadeia da Parte 9.1, na ordem: highpass -> compressor -> loudnorm."""
+    pre = build_pre_chain(params, include_denoise)
+    tail = (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
+            f"LRA={params.lra}")
+    return f"{pre},{tail}" if pre else tail
 
 
 def compare(before: LoudnessReport, after: LoudnessReport,

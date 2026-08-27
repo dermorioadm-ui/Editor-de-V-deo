@@ -474,10 +474,20 @@ def _atempo(speed: float) -> str:
 
 def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                   plan: EditPlan, sources: dict, duration: float) -> Path:
-    """Cadeia da Parte 9.1 aplicada UMA vez sobre a faixa inteira."""
-    from ..audio.loudness import build_chain
+    """Cadeia da Parte 9.1 aplicada UMA vez sobre a faixa inteira.
 
-    chain = build_chain(params)
+    O loudnorm roda em duas passadas (mede, depois aplica em modo linear).
+    A passada única erra o alvo em mais de 1 LU e ainda encurta a faixa —
+    medi 3200 amostras a menos numa faixa de 31 s, que é exatamente o tipo de
+    coisa que vira dessincronia.
+    """
+    from ..audio.loudness import (build_pre_chain, loudnorm_second_pass,
+                                  measure_loudnorm)
+
+    pre = build_pre_chain(params)
+    measured = measure_loudnorm(raw_wav, pre, params)
+    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured)) if x)
+
     music = plan.music if plan.music and plan.music.get("enabled") else None
     cmd = [FFMPEG, "-y", "-v", "error", "-i", str(raw_wav)]
     if music:
@@ -494,9 +504,22 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
             music = None
     if not music:
         cmd += ["-af", chain]
-    cmd += ["-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le",
-            "-t", f"{duration:.6f}", str(dest)]
+    cmd += ["-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)]
     run(cmd)
+
+    # Trava o comprimento exato. Qualquer filtro que engula ou acrescente
+    # amostras vira dessincronia acumulada ao longo de dezenas de blocos.
+    target = int(round(duration * AUDIO_SR))
+    from ..ffmpeg_utils import read_wav_mono
+
+    samples, sr = read_wav_mono(dest)
+    if abs(len(samples) - target) > 0:
+        if len(samples) > target:
+            samples = samples[:target]
+        else:
+            samples = np.concatenate(
+                [samples, np.zeros(target - len(samples), dtype=np.float32)])
+        write_wav(dest, samples, AUDIO_SR)
     return dest
 
 

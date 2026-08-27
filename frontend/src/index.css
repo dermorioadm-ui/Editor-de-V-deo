@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-ink-900 text-slate-200 font-sans antialiased;
+    overscroll-behavior: none;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #0f1218; }
+  ::-webkit-scrollbar-thumb { background: #2a3243; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4557; }
+  input[type='range'] { @apply appearance-none h-1 bg-ink-500 rounded-full; }
+  input[type='range']::-webkit-slider-thumb {
+    @apply appearance-none w-3.5 h-3.5 rounded-full bg-accent cursor-pointer;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-md
+           text-sm font-medium border border-line bg-ink-600 text-slate-200
+           hover:bg-ink-500 hover:border-slate-600 transition
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply bg-accent text-ink-900 border-accent hover:bg-sky-300 hover:border-sky-300
+           font-semibold;
+  }
+  .btn-danger { @apply border-red-900/70 text-red-300 hover:bg-red-950/50; }
+  .btn-xs { @apply px-2 py-1 text-xs; }
+  .card { @apply bg-ink-800 border border-line rounded-lg; }
+  .field {
+    @apply w-full bg-ink-700 border border-line rounded-md px-2.5 py-1.5 text-sm
+           text-slate-200 outline-none focus:border-accent/70 transition;
+  }
+  .label { @apply block text-[11px] uppercase tracking-wide text-slate-500 mb-1; }
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]
+           font-medium border;
+  }
+  .tab {
+    @apply px-3 py-2 text-sm font-medium text-slate-400 border-b-2
+           border-transparent hover:text-slate-200 transition whitespace-nowrap;
+  }
+  .tab-active { @apply text-accent border-accent; }
+  .hint { @apply text-xs text-slate-500 leading-relaxed; }
+}

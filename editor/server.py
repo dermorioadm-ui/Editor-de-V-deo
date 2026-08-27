@@ -151,6 +151,52 @@ def browse(path: str = Query("")) -> dict:
             "entries": entries[:2000]}
 
 
+SEARCH_DIRS = ("Videos", "Vídeos", "Movies", "Desktop", "Área de Trabalho",
+               "Downloads", "Documents", "Documentos", "OneDrive")
+
+
+@app.post("/api/locate")
+def locate(payload: dict = Body(...)) -> dict:
+    """Acha o caminho real de um arquivo arrastado para a página.
+
+    O navegador entrega só o nome e o tamanho — nunca o caminho. Em vez de
+    subir 2 GB por HTTP, procuramos o arquivo nas pastas óbvias e usamos o
+    caminho de verdade. O arquivo não sai do lugar.
+    """
+    name = str(payload.get("name", "")).strip()
+    size = int(payload.get("size", 0) or 0)
+    if not name:
+        raise HTTPException(400, "informe o nome do arquivo")
+    home = Path.home()
+    roots = [home, *(home / d for d in SEARCH_DIRS)]
+    extra = payload.get("hints") or []
+    roots += [Path(h).expanduser() for h in extra if h]
+    seen: set[str] = set()
+    matches: list[dict] = []
+    for root in roots:
+        if not root.exists() or str(root) in seen:
+            continue
+        seen.add(str(root))
+        try:
+            for depth, pattern in ((0, name), (1, f"*/{name}"), (2, f"*/*/{name}")):
+                for hit in root.glob(pattern):
+                    if not hit.is_file():
+                        continue
+                    stat = hit.stat()
+                    matches.append({
+                        "path": str(hit.resolve()), "size": stat.st_size,
+                        "exact": size == 0 or stat.st_size == size,
+                        "depth": depth,
+                    })
+        except (PermissionError, OSError):
+            continue
+    matches.sort(key=lambda m: (not m["exact"], m["depth"]))
+    exact = [m for m in matches if m["exact"]]
+    return {"found": bool(exact), "matches": matches[:12],
+            "path": exact[0]["path"] if exact else None,
+            "searched": [str(r) for r in seen]}
+
+
 # ----------------------------------------------------------------- projetos
 @app.get("/api/projects")
 def api_projects() -> list[dict]:

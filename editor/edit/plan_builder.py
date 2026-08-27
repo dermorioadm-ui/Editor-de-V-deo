@@ -19,6 +19,7 @@ from . import speed as speed_mod
 from .snap import NEIGHBOR_GUARD, snap_boundary, snap_end, snap_start
 
 MIN_GAP = 0.08          # abaixo disso não vale a pena cortar: vira contíguo
+MIN_VALLEY_REPAIR = 0.04  # o resgate aceita um vale mais curto que o encaixe
 CONTIGUOUS_EPS = 0.002
 
 
@@ -33,6 +34,7 @@ class Span:
     cut_in: bool = True
     cut_out: bool = True
     gap_has_removed_words: bool = False   # o corte à direita remove palavras?
+    refused_cut: bool = False             # corte recusado por cair em cima de fala
 
     @property
     def duration(self) -> float:
@@ -74,6 +76,14 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
 
         start = s_in.time - params.margin          # folga da Parte 3.2
         end = s_out.time + params.margin
+
+        # A folga só pode crescer DENTRO do vale onde a borda foi encaixada.
+        # Sem esta trava a folga empurra a borda de volta para cima da fala —
+        # o encaixe acerta o vale e a folga de 150 ms desfaz o acerto.
+        if s_in.found_valley and s_in.valley_start is not None:
+            start = max(start, s_in.valley_start + 0.02)
+        if s_out.found_valley and s_out.valley_end is not None:
+            end = min(end, s_out.valley_end - 0.02)
 
         # a folga não pode passar por cima de uma palavra vizinha removida
         if prev_word is not None and prev_word["i"] in removed_ids:
@@ -122,6 +132,55 @@ def _resolve_overlaps(spans: list[Span], env: Envelope, params: CutParams) -> No
         add = min(extra_air, room)
         a.end = round(a.end + add, 4)
         b.start = round(b.start - add, 4)
+        # O resgate é sempre a ÚLTIMA palavra sobre a borda: o ar da 3.3
+        # também é capaz de empurrar uma borda encaixada de volta para cima da
+        # fala, e nesse caso é o ar que cede.
+        if not _repair_edges(a, b, env):
+            mid = round((a.end + b.start) / 2.0, 4)
+            a.end = b.start = mid
+            a.cut_out = b.cut_in = False
+            a.refused_cut = b.refused_cut = True
+
+
+def _repair_edges(a: Span, b: Span, env: Envelope) -> bool:
+    """Dá uma segunda chance a uma borda que caiu em cima de fala.
+
+    Quando a borda ficou acima de piso + 25 dB, a pausa que o Whisper prometeu
+    tem que estar em algum lugar do intervalo removido — procura ali e usa o
+    MEIO do vale (a ponta de um vale de 40 ms já é fala de novo).
+
+    Devolve False quando não dá para salvar: aí o corte não deve existir.
+    Invariante: nenhuma borda de corte real sobra em cima de fala.
+    """
+    if a.gap_has_removed_words:
+        return True         # remoção pedida explicitamente: respeita o pedido
+
+    def bad(t: float) -> bool:
+        return env.value_at(t) > env.audit_threshold
+
+    if not bad(a.end) and not bad(b.start):
+        return True
+
+    lo, hi = a.end, b.start
+    reach = 0.20
+    valleys = env.silence_runs(lo - reach, hi + reach, MIN_VALLEY_REPAIR)
+    if valleys:
+        if bad(a.end):
+            v = valleys[0]
+            a.end = round(min(max((v.start + v.end) / 2.0, lo - reach), hi), 4)
+        if bad(b.start):
+            v = valleys[-1]
+            b.start = round(max(min((v.start + v.end) / 2.0, hi + reach), a.end), 4)
+    else:
+        quietest = env.argmin_time(lo - reach, hi + reach)
+        if bad(a.end):
+            a.end = round(min(quietest, hi), 4)
+        if bad(b.start):
+            b.start = round(max(quietest, a.end), 4)
+
+    if b.start < a.end:
+        return False
+    return not bad(a.end) and not bad(b.start)
 
 
 def enforce_min_block(spans: list[Span], params: CutParams) -> tuple[list[Span], list[dict]]:
@@ -287,7 +346,15 @@ def build_auto_plan(words: list[dict], env: Envelope, cut: CutParams,
     if extra_removed:
         removed_ids |= set(extra_removed)
     spans = build_spans(words, env, cut, removed_ids)
+    refused = [
+        {"type": "refused_cut", "at": round(sp.end, 3),
+         "detail": "corte recusado: o Whisper marcou pausa aqui, mas o envelope "
+                   "não tem nenhum vale e as duas bordas cairiam em cima de "
+                   "fala. O áudio segue contínuo."}
+        for sp in spans if sp.refused_cut
+    ]
     spans, notes = enforce_min_block(spans, cut)
+    notes = refused + notes
     clips = assign_speed(spans, words, env, cut, sp, env.duration)
     regions = removed_regions(spans, env.duration, takes)
     return {"clips": clips, "removed": regions, "notes": notes,

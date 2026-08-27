@@ -38,7 +38,7 @@ def export_project(
             on_progress(lo + (hi - lo) * max(0.0, min(1.0, frac)), msg)
 
     # 1) linha do tempo teórica e legendas de partida
-    timeline = Timeline(plan.active_clips)
+    timeline = Timeline(plan.active_clips, main.fps)
     cues = build_cues(timeline)
 
     # 2) trechos de vídeo (cutaways já aplicados) — UM encode por trecho
@@ -64,7 +64,7 @@ def export_project(
             placed.clip.measured_duration = clip_durations[placed.clip.id]
 
     # 5) legendas refeitas sobre a linha do tempo REAL
-    measured_timeline = Timeline(plan.active_clips)
+    measured_timeline = Timeline(plan.active_clips, main.fps)
     cues_final = build_cues(measured_timeline)
 
     # 6) áudio em PCM, cadeia aplicada uma vez, AAC só no mux
