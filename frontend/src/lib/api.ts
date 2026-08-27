@@ -44,6 +44,10 @@ export const api = {
     post<Job>(`/api/projects/${id}/oneclick`, { preset }),
   exportProject: (id: string, options: any) =>
     post<Job>(`/api/projects/${id}/export`, options),
+  preview: (id: string, scale = '480') =>
+    post<Job>(`/api/projects/${id}/preview`, { scale }),
+  calibrateDeesser: (id: string, payload: any) =>
+    post<any>(`/api/projects/${id}/audio/calibrate-deesser`, payload),
   validate: (id: string, output?: string) =>
     post<Job>(`/api/projects/${id}/validate`, { output }),
   jobs: (project?: string) =>

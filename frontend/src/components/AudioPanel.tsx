@@ -12,6 +12,7 @@ export default function AudioPanel({ onChanged }: Props) {
   const [denoise, setDenoise] = useState(false)
   const [strength, setStrength] = useState(1.0)
   const [params, setParams] = useState<any>(project?.plan?.audio ?? {})
+  const [deesser, setDeesser] = useState<any>(null)
 
   useEffect(() => { setParams(project?.plan?.audio ?? {}) }, [project?.plan?.audio])
   useEffect(() => {
@@ -167,12 +168,47 @@ export default function AudioPanel({ onChanged }: Props) {
                     onClick={() => runPreview(true)}>
               medir com limpeza
             </button>
+            <button className="btn btn-xs" disabled={busy}
+                    onClick={async () => {
+                      setBusy(true)
+                      try {
+                        const r = await api.calibrateDeesser(project.id, {
+                          presence_gain: params.presence_gain ?? 0,
+                          duration: 20,
+                        })
+                        setDeesser(r)
+                        setParams({ ...params, deesser: r.deesser })
+                        await onChanged()
+                        toast(r.needed ? 'ok' : 'info',
+                          `de-esser ${r.deesser}`, r.message)
+                      } catch (e: any) {
+                        toast('error', 'Calibração falhou', String(e.message ?? e))
+                      } finally { setBusy(false) }
+                    }}>
+              calibrar de-esser
+            </button>
             <button className="btn btn-xs btn-primary" disabled={busy} onClick={apply}>
               aplicar
             </button>
           </div>
         </div>
         {!preview && <p className="hint">Rode a medição antes de aplicar qualquer coisa.</p>}
+        {deesser && (
+          <div className="mb-3 text-xs border border-line rounded p-2">
+            <p className="text-slate-300">{deesser.message}</p>
+            <p className="hint mt-1">
+              nível original {deesser.baseline} · com o realce {deesser.without} ·
+              depois do de-esser {deesser.after}
+            </p>
+            <div className="font-mono text-[10px] text-slate-600 mt-1">
+              {deesser.history.map((h: any, i: number) => (
+                <span key={i} className="mr-3">
+                  {h.deesser} → {h.sibilance}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         {preview && (
           <div className="space-y-3">
             <table className="w-full text-xs">

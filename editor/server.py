@@ -900,6 +900,54 @@ def api_audio_preview(pid: str, payload: dict = Body(...)) -> dict:
     }
 
 
+@app.post("/api/projects/{pid}/audio/calibrate-deesser")
+def api_deesser(pid: str, payload: dict = Body(default={})) -> dict:
+    """Ajusta o de-esser até a sibilância voltar ao nível original (Parte 9.2)."""
+    from .audio.denoise import calibrate_deesser
+    from .audio.loudness import build_chain
+
+    project = _project(pid)
+    env = _env_or_404(project)
+    params = AudioParams(**{**project.plan.audio.__dict__,
+                            **{k: v for k, v in payload.items()
+                               if k in AudioParams.__dataclass_fields__}})
+    start = float(payload.get("start", min(2.0, max(0.0, env.duration - 1))))
+    duration = float(payload.get("duration", min(20.0, max(2.0, env.duration - start))))
+    result = calibrate_deesser(project.source_path, start, duration, params,
+                               build_chain)
+    if payload.get("apply", True):
+        project.plan.audio.presence_gain = params.presence_gain
+        project.plan.audio.deesser = result["deesser"]
+        project.save_plan()
+    return result
+
+
+@app.post("/api/projects/{pid}/preview")
+def api_preview(pid: str, payload: dict = Body(default={})) -> dict:
+    """Prévia rápida em 480p, sem mexer na configuração da exportação final."""
+    project = _project(pid)
+    original = ExportParams(**project.plan.export.__dict__)
+    project.plan.export = ExportParams(**{
+        **original.__dict__,
+        "scale": str(payload.get("scale", "480")),
+        "crf": int(payload.get("crf", 26)),
+        "preset": "veryfast",
+        "codec": "h264",
+        "audio_bitrate": "128k",
+    })
+    project.save_plan()
+
+    def job(ctx):
+        try:
+            return svc.export(project, ctx, {"filename": "previa480.mp4",
+                                             "restart": True})
+        finally:
+            project.plan.export = original
+            project.save_plan()
+
+    return _run("previa", pid, job)
+
+
 @app.get("/api/projects/{pid}/safe-zone")
 def api_safe_zone(pid: str) -> dict:
     project = _project(pid)

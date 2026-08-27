@@ -202,3 +202,65 @@ def sibilance(samples: np.ndarray, sr: int) -> float:
     e_lo = (mag[:, lo] ** 2).sum(axis=1) + 1e-12
     ratio = e_hi / e_lo
     return float(np.percentile(ratio, 99))
+
+
+def calibrate_deesser(source: str, start: float, duration: float,
+                      params, build_chain, max_steps: int = 7) -> dict:
+    """Acha a intensidade de de-esser que devolve a sibilância ao nível original.
+
+    Realce de presença que deixa os "s" agressivos é pior que realce nenhum.
+    Aqui o de-esser é procurado por bissecção, medindo de verdade a razão de
+    energia 5,5–9 kHz sobre 300–3.000 Hz no percentil 99.
+    """
+    from dataclasses import replace
+
+    from ..ffmpeg_utils import decode_pcm
+
+    def measure(value: float, presence: float | None = None) -> float:
+        probe = replace(params, deesser=value)
+        if presence is not None:
+            probe = replace(probe, presence_gain=presence)
+        processed = decode_pcm(source, start, start + duration, 48000, 1,
+                               filters=build_chain(probe))
+        return sibilance(processed, 48000)
+
+    # "nível original" = a mesma cadeia SEM o realce de presença. É essa a
+    # comparação honesta: o de-esser existe para desfazer o que o realce criou.
+    baseline = measure(0.0, presence=0.0)
+    without = measure(0.0)
+    history = [{"deesser": 0.0, "sibilance": round(without, 4)}]
+    if without <= baseline * 1.02:
+        return {"deesser": 0.0, "baseline": round(baseline, 4),
+                "without": round(without, 4), "after": round(without, 4),
+                "history": history, "needed": False,
+                "message": "o realce não subiu a sibilância; o de-esser não "
+                           "precisa entrar"}
+
+    lo, hi = 0.0, 1.0
+    best, best_value = 1.0, measure(1.0)
+    history.append({"deesser": 1.0, "sibilance": round(best_value, 4)})
+    if best_value > baseline * 1.02:
+        return {"deesser": 1.0, "baseline": round(baseline, 4),
+                "without": round(without, 4), "after": round(best_value, 4),
+                "history": history, "needed": True,
+                "message": "nem no máximo o de-esser devolve a sibilância ao "
+                           "nível original — diminua o realce de presença"}
+    for _ in range(max_steps - 2):
+        mid = (lo + hi) / 2.0
+        value = measure(mid)
+        history.append({"deesser": round(mid, 3), "sibilance": round(value, 4)})
+        if value <= baseline * 1.02:
+            best, best_value = mid, value
+            hi = mid
+        else:
+            lo = mid
+        if hi - lo < 0.02:
+            break
+    return {
+        "deesser": round(best, 3), "baseline": round(baseline, 4),
+        "without": round(without, 4), "after": round(best_value, 4),
+        "history": history, "needed": True,
+        "message": (f"de-esser em {best:.2f} devolve a sibilância de "
+                    f"{without:.3f} para {best_value:.3f} "
+                    f"(original {baseline:.3f})"),
+    }

@@ -231,6 +231,13 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
   tamanho e posição, calibrar o tamanho por largura em pixels, e o dicionário de
   correções (vale entre projetos).
 - **Ctrl+Z / Ctrl+Shift+Z** — desfazer e refazer, com histórico completo.
+- **Prévia 480p** — a prévia normal toca o arquivo original pulando os cortes,
+  sem renderizar nada. Se o seu navegador não souber tocar o formato do vídeo,
+  clique em **prévia 480p** abaixo do player: ele renderiza uma versão leve só
+  para você assistir. A exportação final continua em qualidade cheia.
+- **Aba Áudio → calibrar de-esser** — se você aumentar o realce de presença, os
+  “s” tendem a ficar agressivos. Esse botão mede a sibilância antes e depois e
+  procura sozinho a intensidade de de-esser que devolve o som ao nível original.
 
 ### O protocolo da palma
 

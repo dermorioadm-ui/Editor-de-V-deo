@@ -11,6 +11,9 @@ interface Props {
   duration: number
   style: any
   safeZone?: { top: number; bottom: number } | null
+  previewUrl?: string | null
+  onRequestPreview?: () => void
+  previewBusy?: boolean
 }
 
 /**
@@ -18,7 +21,8 @@ interface Props {
  * trechos removidos, aplicando a velocidade de cada bloco e desenhando a
  * legenda por cima.
  */
-export default function Player({ projectId, blocks, cues, duration, style, safeZone }: Props) {
+export default function Player({ projectId, blocks, cues, duration, style, safeZone,
+                                 previewUrl, onRequestPreview, previewBusy }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
@@ -26,9 +30,17 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const seekingRef = useRef(false)
   const rafRef = useRef<number>()
 
+  const linear = !!previewUrl
+
   const seekOutput = useCallback((t: number) => {
     const el = video.current
-    if (!el || !blocks.length) return
+    if (!el) return
+    if (linear) {
+      el.currentTime = Math.max(0, Math.min(t, duration - 0.01))
+      setState({ playhead: el.currentTime })
+      return
+    }
+    if (!blocks.length) return
     const clamped = Math.max(0, Math.min(t, duration - 0.01))
     const pos = outputToSource(clamped, blocks)
     if (!pos) return
@@ -38,24 +50,30 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     if (block) el.playbackRate = block.speed
     setState({ playhead: clamped })
     window.setTimeout(() => { seekingRef.current = false }, 60)
-  }, [blocks, duration])
+  }, [blocks, duration, linear])
 
   // segue o playhead vindo da timeline
   useEffect(() => {
     const el = video.current
     if (!el || seekingRef.current || playing) return
+    if (linear) {
+      if (Math.abs(el.currentTime - playhead) > 0.25) el.currentTime = playhead
+      return
+    }
     const pos = outputToSource(playhead, blocks)
     if (pos && Math.abs(el.currentTime - pos.time) > 0.25) {
       el.currentTime = pos.time
     }
-  }, [playhead, blocks, playing])
+  }, [playhead, blocks, playing, linear])
 
   // laço de reprodução: pula os buracos e ajusta a velocidade por bloco
   useEffect(() => {
     if (!playing) return
     const tick = () => {
       const el = video.current
-      if (el && blocks.length) {
+      if (el && linear) {
+        setState({ playhead: el.currentTime })
+      } else if (el && blocks.length) {
         const src = el.currentTime
         let current: Clip | null = null
         for (const b of blocks) {
@@ -85,14 +103,16 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
-  }, [playing, blocks, duration])
+  }, [playing, blocks, duration, linear])
 
   const toggle = () => {
     const el = video.current
     if (!el) return
     if (playing) { el.pause(); setPlaying(false) } else {
-      const pos = outputToSource(playhead, blocks)
-      if (pos) el.currentTime = pos.time
+      if (!linear) {
+        const pos = outputToSource(playhead, blocks)
+        if (pos) el.currentTime = pos.time
+      }
       el.play().then(() => setPlaying(true)).catch(() => {})
     }
   }
@@ -118,8 +138,15 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       <div className="relative flex-1 min-h-0 bg-black rounded-lg overflow-hidden
                       border border-line grid place-items-center">
         <video ref={video} className="max-h-full max-w-full" playsInline muted={muted}
-               src={`/api/projects/${projectId}/source`}
+               key={previewUrl ?? 'source'}
+               src={previewUrl ?? `/api/projects/${projectId}/source`}
                onPause={() => setPlaying(false)} />
+        {linear && (
+          <span className="absolute top-1.5 left-1.5 chip border-accent/60
+                           text-accent bg-ink-900/80">
+            prévia 480p renderizada
+          </span>
+        )}
         {safeZone && (
           <div className="absolute left-0 right-0 border-y border-dashed
                           border-amber-500/50 bg-amber-500/5 pointer-events-none"
@@ -130,7 +157,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             </span>
           </div>
         )}
-        {cue && (
+        {cue && !linear && (
           <div className="absolute left-0 right-0 pointer-events-none px-[6%] text-center"
                style={{ bottom: `${(style?.margin_v ?? 220) / 1920 * 100}%` }}>
             <span className="inline-block whitespace-pre-line leading-tight"
@@ -167,10 +194,21 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       <input type="range" min={0} max={Math.max(duration, 0.1)} step={0.01}
              value={playhead} className="w-full"
              onChange={(e) => seekOutput(Number(e.target.value))} />
-      <p className="hint">
-        Prévia com cortes, velocidades e legendas aplicados — nada é renderizado.
-        Espaço toca/pausa, setas movem 0,1 s (1 s com Shift).
-      </p>
+      <div className="flex items-center gap-2">
+        <p className="hint flex-1">
+          {linear
+            ? 'Tocando a prévia renderizada em 480p. A exportação final continua em '
+              + 'qualidade cheia.'
+            : 'Prévia com cortes, velocidades e legendas aplicados — nada é '
+              + 'renderizado. Espaço toca/pausa, setas movem 0,1 s (1 s com Shift).'}
+        </p>
+        {onRequestPreview && (
+          <button className="btn btn-xs shrink-0" disabled={previewBusy}
+                  onClick={onRequestPreview}>
+            {previewBusy ? 'renderizando…' : (linear ? 'refazer prévia' : 'prévia 480p')}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

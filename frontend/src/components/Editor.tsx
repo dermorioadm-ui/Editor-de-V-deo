@@ -31,12 +31,15 @@ export default function Editor() {
   const [tab, setTab] = useState<string>('texto')
   const [presets, setPresets] = useState<any[]>([])
   const [safeZone, setSafeZone] = useState<any>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
 
   useEffect(() => { api.presets().then(setPresets).catch(() => {}) }, [])
 
   const refresh = useCallback(async () => {
     if (!project) return
     const fresh = await api.project(project.id)
+    setPreviewUrl(null)
     setState({
       project: fresh,
       timeline: fresh.timeline ?? null,
@@ -50,6 +53,16 @@ export default function Editor() {
     }
     return fresh
   }, [project])
+
+  useEffect(() => {
+    if (activeJob?.kind !== 'previa') return
+    if (activeJob.status === 'ok' && activeJob.result?.download) {
+      setPreviewUrl(`${activeJob.result.download}?v=${activeJob.id}`)
+      setPreviewBusy(false)
+      toast('ok', 'Prévia 480p pronta', 'A exportação final continua em qualidade cheia.')
+    }
+    if (['erro', 'cancelado'].includes(activeJob.status)) setPreviewBusy(false)
+  }, [activeJob?.id, activeJob?.status])
 
   // recarrega quando um job termina
   useEffect(() => {
@@ -201,6 +214,14 @@ export default function Editor() {
                   cues={view?.subtitles ?? []}
                   duration={view?.duration ?? project.info?.duration ?? 0}
                   style={project.plan?.style}
+                  previewUrl={previewUrl}
+                  previewBusy={previewBusy}
+                  onRequestPreview={async () => {
+                    setPreviewBusy(true)
+                    setPreviewUrl(null)
+                    const job = await api.preview(project.id)
+                    setState({ activeJob: job })
+                  }}
                   safeZone={safeZone?.band?.found
                     ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null} />
         </aside>
