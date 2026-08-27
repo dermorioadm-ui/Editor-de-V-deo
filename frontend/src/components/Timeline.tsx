@@ -13,6 +13,7 @@ interface Props {
   onRestore: (start: number, end: number) => void
   onToggleTake: (id: string, restored: boolean) => void
   onToggleClap: (id: string, enabled: boolean) => void
+  onSubtitleEdge: (cueId: string, side: 'start' | 'end', outTime: number) => void
 }
 
 const ROW = { wave: 92, blocks: 46, subs: 24, ruler: 18 }
@@ -26,7 +27,10 @@ export default function Timeline(props: Props) {
   const [start, setStart] = useState(0)
   const [size, setSize] = useState({ w: 800, h: 220 })
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
-  const drag = useRef<{ mode: string; t0: number; x0: number; s0: number } | null>(null)
+  const drag = useRef<{ mode: string; t0: number; x0: number; s0: number
+                        cueId?: string } | null>(null)
+  const [subDrag, setSubDrag] = useState<
+    { id: string; side: 'start' | 'end'; t: number } | null>(null)
   const playhead = useStore((s) => s.playhead)
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
@@ -175,7 +179,10 @@ export default function Timeline(props: Props) {
 
     // faixa de legendas
     for (const s of subsOnSource) {
-      const x0 = toX(s.start); const x1 = toX(s.end)
+      const live = subDrag && subDrag.id === s.cue.id
+      const sStart = live && subDrag.side === 'start' ? subDrag.t : s.start
+      const sEnd = live && subDrag.side === 'end' ? subDrag.t : s.end
+      const x0 = toX(sStart); const x1 = toX(sEnd)
       if (x1 < 0 || x0 > size.w) continue
       g.fillStyle = 'rgba(56,189,248,0.22)'
       g.fillRect(x0, ySubs + 3, Math.max(1, x1 - x0), ROW.subs - 8)
@@ -190,6 +197,10 @@ export default function Timeline(props: Props) {
         g.fillText(text, x0 + 4, ySubs + 14)
         g.restore()
       }
+      // alças de arrasto das bordas
+      g.fillStyle = live ? '#38bdf8' : 'rgba(56,189,248,0.85)'
+      g.fillRect(x0, ySubs + 3, 2, ROW.subs - 8)
+      g.fillRect(x1 - 2, ySubs + 3, 2, ROW.subs - 8)
     }
 
     // alertas de auditoria
@@ -240,7 +251,7 @@ export default function Timeline(props: Props) {
       g.closePath(); g.fill()
     }
   }, [size, height, start, span, envelope, view, selection, selectedClip,
-      playheadSource, subsOnSource, toX, toT])
+      playheadSource, subsOnSource, subDrag, toX, toT])
 
   // --------------------------------------------------------- interações
   const onWheel = (e: React.WheelEvent) => {
@@ -268,6 +279,24 @@ export default function Timeline(props: Props) {
     const { x, y } = pos(e)
     const t = toT(x)
     const yBlocks = PAD_TOP + ROW.ruler + ROW.wave
+    const ySubs = yBlocks + ROW.blocks
+    if (y >= ySubs && y < ySubs + ROW.subs && !e.altKey) {
+      // arrastar a borda de uma legenda
+      let best: { id: string; side: 'start' | 'end'; d: number } | null = null
+      for (const s of subsOnSource) {
+        for (const [side, t] of [['start', s.start], ['end', s.end]] as const) {
+          const d = Math.abs(toX(t) - x)
+          if (d <= 7 && (!best || d < best.d)) {
+            best = { id: s.cue.id, side, d }
+          }
+        }
+      }
+      if (best) {
+        drag.current = { mode: 'sub', t0: t, x0: x, s0: start, cueId: best.id }
+        setSubDrag({ id: best.id, side: best.side, t })
+        return
+      }
+    }
     if (e.button === 1 || e.altKey) {
       drag.current = { mode: 'pan', t0: t, x0: x, s0: start }
       return
@@ -295,12 +324,20 @@ export default function Timeline(props: Props) {
       setStart(clamp(d.s0 - (x - d.x0) * span / size.w, 0, Math.max(0, total - span)))
     } else if (d.mode === 'select') {
       setState({ selection: { start: Math.min(d.t0, t), end: Math.max(d.t0, t) } })
+    } else if (d.mode === 'sub') {
+      setSubDrag((prev) => (prev ? { ...prev, t } : prev))
     }
   }
 
   const onMouseUp = (e: React.MouseEvent) => {
     const d = drag.current
     drag.current = null
+    if (d?.mode === 'sub' && subDrag) {
+      const out = sourceToOutput(subDrag.t, view.blocks)
+      if (out != null) props.onSubtitleEdge(subDrag.id, subDrag.side, out)
+      setSubDrag(null)
+      return
+    }
     if (d?.mode === 'select') {
       const { x } = pos(e)
       if (Math.abs(x - d.x0) < 3) {
@@ -393,7 +430,8 @@ export default function Timeline(props: Props) {
           <span className="w-2.5 h-2.5 rounded-full bg-yellow-400" />palma suspeita
         </span>
         <span className="ml-auto">
-          arraste para selecionar · Delete corta · roda dá zoom · Alt+arraste move
+          arraste para selecionar · Delete corta · roda dá zoom · Alt+arraste move ·
+          arraste as bordas azuis para ajustar a legenda
         </span>
       </div>
     </div>

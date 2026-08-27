@@ -908,6 +908,58 @@ def api_safe_zone(pid: str) -> dict:
             "anchor": video_analysis.suggest_anchor(band, project.info)}
 
 
+@app.get("/api/projects/{pid}/frame")
+def api_frame(pid: str, t: float = 0.0, width: int = 360, source: str = "main"):
+    """Um quadro do vídeo, para posicionar elementos com guias."""
+    project = _project(pid)
+    path = project.source_path
+    if source != "main":
+        media = next((m for m in svc.list_media(pid) if m["id"] == source), None)
+        if not media:
+            raise HTTPException(404, "mídia não encontrada")
+        path = media["path"]
+    # o tempo vem da linha do tempo de SAÍDA; converte para a fonte
+    if source == "main":
+        from .edit.timeline import Timeline
+
+        tl = Timeline(project.plan.active_clips,
+                      project.info.fps if project.info else None)
+        found = tl.to_source(t)
+        if found and found[0] == "main":
+            t = found[1]
+    try:
+        data, _mean = video_analysis.frame_jpeg(path, t, "", width)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)[:300]) from exc
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/projects/{pid}/clips/{cid}/photo")
+def api_photo(pid: str, cid: str, payload: dict = Body(...)) -> dict:
+    """Duração, push-in e anotações de uma foto inserida (Parte 7.2)."""
+    project = _project(pid)
+    for clip in project.plan.clips:
+        if clip.id != cid or clip.kind != "photo":
+            continue
+        photo = dict(clip.photo or {})
+        if "duration" in payload:
+            dur = max(0.3, float(payload["duration"]))
+            photo["duration"] = dur
+            clip.src_start = 0.0
+            clip.src_end = dur
+        if "ken_burns" in payload:
+            photo["ken_burns"] = payload["ken_burns"]
+        if "annotations" in payload:
+            photo["annotations"] = payload["annotations"]
+        clip.photo = photo
+        clip.measured_duration = None
+        project.save_plan()
+        return {"ok": True, "clip": clip.to_dict(),
+                "timeline": svc.timeline_summary(project)}
+    raise HTTPException(404, "foto não encontrada")
+
+
 @app.get("/api/projects/{pid}/media/{mid}/tonemap-preview")
 def api_tonemap_preview(pid: str, mid: str, t: float = 0.0, npl: float = 100.0,
                         operator: str = "hable", brightness: float = 0.0,

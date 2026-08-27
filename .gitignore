@@ -8,11 +8,14 @@ build/
 dist/
 node_modules/
 frontend/dist/
-editor/static/
-!editor/static/.gitkeep
+
+# A interface JÁ COMPILADA vai versionada de propósito: quem só quer usar o
+# editor não precisa instalar Node.js. Para recompilar depois de mexer no
+# frontend: cd frontend && npm install && npm run build
 .DS_Store
 Thumbs.db
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
 .pytest_cache/
+frontend/tsconfig.tsbuildinfo

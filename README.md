@@ -391,9 +391,10 @@ O jeito mais garantido é colocar os arquivos em `C:\ffmpeg\bin\` — o editor
 procura ali sozinho.
 
 **A página abre em branco**
-O frontend não foi compilado. Se você baixou o projeto pronto isso não deveria
-acontecer; se você baixou o código-fonte, rode dentro da pasta `frontend`:
-`npm install` e depois `npm run build`.
+A interface já vem compilada no projeto, então isso não deveria acontecer.
+Se você mexeu no código do frontend, recompile: entre na pasta `frontend` e rode
+`npm install` e depois `npm run build`. Fora esse caso, **você não precisa de
+Node.js para nada**.
 
 **“faster-whisper não está instalado”**
 Rode `.venv\Scripts\pip install faster-whisper`.

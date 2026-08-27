@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import FileBrowser from './FileBrowser'
 import TonemapCompare from './TonemapCompare'
+import PhotoPanel from './PhotoPanel'
+import Positioner from './Positioner'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { toast, useStore } from '../state/store'
@@ -333,7 +335,21 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                           await onChanged()
                         }}>remover</button>
               </div>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="flex gap-3">
+                <Positioner
+                  frameUrl={api.frameUrl(project.id, o.out_start + 0.1)}
+                  x={o.x} y={o.y}
+                  label={media.find((m) => m.id === o.media_id)?.name}
+                  aspect={(project.info?.display_width ?? 1080) /
+                          (project.info?.display_height ?? 1920)}
+                  blocked={safeZone?.band?.found
+                    ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null}
+                  onChange={() => { /* posição confirmada no soltar */ }}
+                  onCommit={async (x, y) => {
+                    await api.updateOverlay(project.id, o.id, { x, y })
+                    await onChanged()
+                  }} />
+              <div className="grid grid-cols-4 gap-2 flex-1">
                 {([['out_start', 'início'], ['out_end', 'fim'], ['x', 'x (0–1)'],
                    ['y', 'y (0–1)'], ['scale', 'escala'], ['opacity', 'opacidade'],
                    ['dur_in', 'entrada (s)'], ['dur_out', 'saída (s)']] as const).map(
@@ -370,11 +386,14 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                   </select>
                 </label>
               </div>
+              </div>
             </div>
           )
         })}
         {!view.overlays.length && <p className="hint">Nenhuma sobreposição.</p>}
       </section>
+
+      <PhotoPanel onChanged={onChanged} snapshot={snapshot} safeZone={safeZone} />
 
       {/* ------------------------------------------------------- desfoque */}
       <section className="card p-3">

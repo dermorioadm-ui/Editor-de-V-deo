@@ -80,22 +80,31 @@ def suggest_anchor(band: dict, info: MediaInfo) -> dict:
 
 def frame_jpeg(path: str | Path, time: float, filters: str = "",
                width: int = 360) -> tuple[bytes, float]:
-    """Um quadro em JPEG (para comparação lado a lado) e o brilho médio dele."""
+    """Um quadro em JPEG (para comparação lado a lado) e o brilho médio dele.
+
+    Se o instante pedido não existir — imagem parada, ou tempo além do fim —
+    cai para o começo do arquivo em vez de falhar.
+    """
     chain = ",".join(x for x in (filters, f"scale={width}:-2") if x)
-    proc = subprocess.run(
-        [FFMPEG, "-v", "error", "-nostdin", "-ss", f"{max(0.0, time):.3f}",
-         "-i", str(path), "-vf", chain, "-frames:v", "1",
-         "-f", "image2", "-vcodec", "mjpeg", "-q:v", "3", "pipe:1"],
-        capture_output=True,
-    )
-    if proc.returncode != 0 or not proc.stdout:
-        raise RuntimeError(proc.stderr.decode("utf-8", "replace")[-400:])
-    gray = subprocess.run(
-        [FFMPEG, "-v", "error", "-nostdin", "-ss", f"{max(0.0, time):.3f}",
-         "-i", str(path), "-vf", chain, "-frames:v", "1",
-         "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"],
-        capture_output=True,
-    )
-    arr = np.frombuffer(gray.stdout, dtype=np.uint8)
-    mean = float(arr.mean()) if arr.size else 0.0
-    return proc.stdout, mean
+
+    def shot(seek: float | None, out_args: list[str]) -> bytes:
+        cmd = [FFMPEG, "-v", "error", "-nostdin"]
+        if seek is not None:
+            cmd += ["-ss", f"{max(0.0, seek):.3f}"]
+        cmd += ["-i", str(path), "-vf", chain, "-frames:v", "1", *out_args, "pipe:1"]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or not proc.stdout:
+            detail = proc.stderr.decode("utf-8", "replace").strip()[-300:]
+            raise RuntimeError(detail or "o ffmpeg não devolveu quadro nenhum")
+        return proc.stdout
+
+    jpeg_args = ["-f", "image2", "-vcodec", "mjpeg", "-q:v", "3"]
+    gray_args = ["-pix_fmt", "gray", "-f", "rawvideo"]
+    try:
+        data = shot(time, jpeg_args)
+        raw = shot(time, gray_args)
+    except RuntimeError:
+        data = shot(None, jpeg_args)
+        raw = shot(None, gray_args)
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    return data, (float(arr.mean()) if arr.size else 0.0)

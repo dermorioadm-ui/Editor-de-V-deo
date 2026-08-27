@@ -258,6 +258,12 @@ export default function Editor() {
                   onToggleClap={async (id, enabled) => {
                     await api.setClap(project.id, id, enabled)
                     await refresh()
+                  }}
+                  onSubtitleEdge={async (cueId, side, outTime) => {
+                    snapshot()
+                    await api.editSubtitle(project.id, cueId,
+                      { [side]: Number(outTime.toFixed(3)) })
+                    await refresh()
                   }} />
       )}
     </div>
