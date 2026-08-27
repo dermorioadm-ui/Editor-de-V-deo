@@ -6,7 +6,7 @@ A palma descarta a FRASE em andamento — não tudo que veio antes.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 
 import numpy as np
 

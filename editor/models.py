@@ -108,6 +108,8 @@ class Cutaway:
     speed: float = 1.0
     fit: dict = field(default_factory=lambda: {
         "mode": "blur_pad", "tonemap": "auto",
+        "tonemap_mode": "transferencia", "npl": 100.0,
+        "tonemap_operator": "hable", "desat": 0.0,
         "brightness": 0.0, "saturation": 1.0, "contrast": 1.0,
     })
     enabled: bool = True
@@ -146,7 +148,7 @@ class BlurRegion:
     out_start: float = 0.0
     out_end: float = 2.0
     strength: int = 24
-    shape: str = "rect"             # rect | ellipse (pixel/box)
+    shape: str = "blur"             # blur (gaussiano) | pixel (mosaico)
     keyframes: list = field(default_factory=list)  # [{t,x,y,w,h}] normalizado
     enabled: bool = True
 

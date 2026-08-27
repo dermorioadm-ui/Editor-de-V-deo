@@ -18,6 +18,9 @@ def main() -> int:
                         help="não abrir o navegador automaticamente")
     parser.add_argument("--check", action="store_true",
                         help="só conferir a instalação e sair")
+    parser.add_argument("--test", action="store_true",
+                        help="rodar o autoteste (analisa, corta e exporta um "
+                             "vídeo de teste) e sair")
     args = parser.parse_args()
 
     from .config import HOST, PORT, ensure_dirs, ffmpeg_available
@@ -48,6 +51,14 @@ def main() -> int:
         print("   pip install faster-whisper")
     if args.check:
         return 0 if ok else 1
+    if args.test:
+        if not ok:
+            print("\n Sem ffmpeg não dá para rodar o autoteste.")
+            return 1
+        print("\n Autoteste — isso leva menos de um minuto.\n")
+        from .selftest import run as run_selftest
+
+        return 0 if run_selftest() else 1
     if not ok:
         print("\n Sem ffmpeg o editor não consegue trabalhar. Instale e rode de novo.")
         return 1

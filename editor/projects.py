@@ -1,11 +1,9 @@
 """Serviço de projeto: análise, plano, legendas, exportação e validação."""
 from __future__ import annotations
 
-import json
 import shutil
 import time
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,18 +12,16 @@ import numpy as np
 from . import db, presets as presets_mod
 from .audio.clap import build_discarded_takes, detect_claps
 from .audio.envelope import Envelope, compute_envelope
-from .config import (CACHE_DIR, MEDIA_DIR, PROJECTS_DIR, AudioParams,
-                     CutParams, ExportParams, SpeedParams, SubtitleStyle,
-                     ensure_dirs)
+from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
+                     SpeedParams, SubtitleStyle, ensure_dirs)
 from .edit.audit import audit_edges, audit_summary
 from .edit.plan_builder import build_auto_plan
 from .edit.timeline import Timeline
 from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoders, probe,
                            read_wav_mono)
-from .models import Clip, EditPlan, RemovedRegion, Subtitle
+from .models import EditPlan, Subtitle
 from .render.export import export_project
 from .render.validate import validate_export
-from .subtitles import ass as ass_mod
 from .subtitles.corrections import apply_corrections
 from .subtitles.fillers import annotate as annotate_fillers
 from .subtitles.linebreak import build_cues

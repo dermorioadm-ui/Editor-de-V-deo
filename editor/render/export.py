@@ -1,11 +1,9 @@
 """Orquestra a exportação inteira (Parte 10.3, 10.4)."""
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Callable
 
-from ..config import FFMPEG
 from ..edit.timeline import Timeline
 from ..ffmpeg_utils import MediaInfo, concat_demux, probe, write_wav
 from ..models import EditPlan

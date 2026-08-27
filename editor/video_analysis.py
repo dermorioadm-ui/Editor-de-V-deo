@@ -76,3 +76,26 @@ def suggest_anchor(band: dict, info: MediaInfo) -> dict:
     return {"x": 0.5, "y": round(y, 4),
             "x_px": int(w / 2), "y_px": int(round(y * h)),
             "reason": "âncora única no topo, fora da faixa de legenda"}
+
+
+def frame_jpeg(path: str | Path, time: float, filters: str = "",
+               width: int = 360) -> tuple[bytes, float]:
+    """Um quadro em JPEG (para comparação lado a lado) e o brilho médio dele."""
+    chain = ",".join(x for x in (filters, f"scale={width}:-2") if x)
+    proc = subprocess.run(
+        [FFMPEG, "-v", "error", "-nostdin", "-ss", f"{max(0.0, time):.3f}",
+         "-i", str(path), "-vf", chain, "-frames:v", "1",
+         "-f", "image2", "-vcodec", "mjpeg", "-q:v", "3", "pipe:1"],
+        capture_output=True,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace")[-400:])
+    gray = subprocess.run(
+        [FFMPEG, "-v", "error", "-nostdin", "-ss", f"{max(0.0, time):.3f}",
+         "-i", str(path), "-vf", chain, "-frames:v", "1",
+         "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"],
+        capture_output=True,
+    )
+    arr = np.frombuffer(gray.stdout, dtype=np.uint8)
+    mean = float(arr.mean()) if arr.size else 0.0
+    return proc.stdout, mean

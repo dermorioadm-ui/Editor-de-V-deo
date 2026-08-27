@@ -17,19 +17,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
-from ..audio.envelope import HOP_SECONDS
 from ..config import FFMPEG, AudioParams, ExportParams
 from ..edit.timeline import Timeline
-from ..ffmpeg_utils import (FFmpegError, MediaInfo, concat_demux, decode_pcm,
-                            probe, run, run_with_progress, write_wav)
+from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
+                            run_with_progress, write_wav)
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
 from . import filters as F
@@ -234,8 +231,10 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     pre: list[str] = []
 
     if seg.kind == "photo":
-        pre += ["-loop", "1", "-t", f"{seg.out_theoretical:.6f}",
-                "-i", seg.source_path]
+        # -framerate na ENTRADA: sem isso a imagem entra a 25 fps e a foto sai
+        # com a duração errada depois do zoompan.
+        pre += ["-loop", "1", "-framerate", f"{fps}",
+                "-t", f"{seg.out_theoretical:.6f}", "-i", seg.source_path]
     else:
         pre += ["-ss", f"{max(0.0, seg.src_start):.6f}",
                 "-t", f"{max(0.02, seg.src_duration):.6f}",
@@ -249,9 +248,12 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         photo = seg.photo or {}
         kb = photo.get("ken_burns") or {}
         if kb.get("enabled"):
+            # compõe no dobro do tamanho para o zoom não amolecer a imagem
+            chain.append(F.fit_chain(width * 2, height * 2))
             kb_chain, zoom_expr = F.ken_burns_chain(
-                width, height, seg.out_theoretical,
-                float(kb.get("intensity", 0.12)), str(kb.get("direction", "in")))
+                width, height, seg.nominal,
+                float(kb.get("intensity", 0.12)), str(kb.get("direction", "in")),
+                fps)
             chain.append(kb_chain)
         else:
             zoom_expr = "1"
@@ -260,19 +262,26 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                                  zoom_expr)
         if ann:
             chain.append(ann)
-        chain.append(f"fps={fps}")
+        if not kb.get("enabled"):
+            chain.append(f"fps={fps}")
     else:
         chain.append(f"setpts=(PTS-STARTPTS)/{seg.speed:.6f}")
         chain.append(f"fps={fps}")
         info = seg.info
         needs_fit = bool(info and info.display_size != (width, height))
-        tonemap_mode = (seg.fit or {}).get("tonemap", "auto")
+        fit = seg.fit or {}
+        tonemap_mode = fit.get("tonemap", "auto")
         needs_tonemap = bool(
             info and (tonemap_mode is True
                       or (tonemap_mode == "auto" and info.is_hdr and not main.is_hdr))
         )
         if needs_tonemap:
-            chain.append(F.TONEMAP)
+            chain.append(F.tonemap_chain(
+                str(fit.get("tonemap_mode", "transferencia")),
+                float(fit.get("npl", 100.0)),
+                str(fit.get("tonemap_operator", "hable")),
+                float(fit.get("desat", 0.0)),
+            ))
         color = F.color_chain(seg.fit)
         if color:
             chain.append(color)

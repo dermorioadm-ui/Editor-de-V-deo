@@ -5,7 +5,6 @@ exportado. Se o remapeamento derivasse, este número cresceria ao longo do víde
 """
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 

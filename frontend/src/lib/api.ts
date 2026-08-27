@@ -122,6 +122,10 @@ export const api = {
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
 
+  tonemapPreview: (id: string, mid: string, params: Record<string, string | number>) =>
+    req<any>(`/api/projects/${id}/media/${mid}/tonemap-preview?` +
+      new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))),
+
   audioAnalysis: (id: string) => req<any>(`/api/projects/${id}/audio/analysis`),
   audioPreview: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/audio/preview`, payload),

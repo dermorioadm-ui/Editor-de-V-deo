@@ -12,7 +12,7 @@ from typing import Callable
 
 from ..audio.loudness import measure_file
 from ..config import AudioParams
-from ..ffmpeg_utils import extract_wav, probe, read_wav_mono
+from ..ffmpeg_utils import probe
 
 SUBTITLE_TOLERANCE = 0.26      # desvio médio aceitável
 

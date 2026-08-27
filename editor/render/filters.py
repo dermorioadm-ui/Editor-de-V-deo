@@ -9,8 +9,35 @@ from pathlib import Path
 
 from ..ffmpeg_utils import escape_filter_path
 
-TONEMAP = ("zscale=t=linear:npl=100,format=gbrpf32le,tonemap=hable,"
-           "zscale=p=bt709:t=bt709:m=bt709,format=yuv420p")
+# Conversão só de transferência e primárias. Num teste de ida e volta
+# (SDR -> HLG/BT.2020 -> de volta) esta reconstrói o original com erro médio de
+# 0,22 em 255. É o padrão.
+TONEMAP_TRANSFER = "zscale=t=bt709:p=bt709:m=bt709:r=tv,format=yuv420p"
+TONEMAP = TONEMAP_TRANSFER
+
+
+def tonemap_chain(mode: str = "transferencia", npl: float = 100.0,
+                  operator: str = "hable", desat: float = 0.0) -> str:
+    """HDR (HLG/BT.2020) -> SDR (BT.709).
+
+    ``transferencia`` faz só a conversão de curva e primárias — no teste de ida
+    e volta ela devolve o original quase exato.
+
+    ``operador`` acrescenta um operador de tonemap (hable por padrão). Serve
+    para material cujos altos passam mesmo do alcance SDR; no mesmo teste
+    controlado ele escurece demais, então não é o padrão. Em gravação de
+    celular de verdade o resultado depende do pico da fonte — por isso a
+    comparação lado a lado existe na interface.
+    """
+    if mode in ("", "transferencia", "transfer"):
+        return TONEMAP_TRANSFER
+    op = operator if operator in (
+        "none", "linear", "gamma", "clip", "reinhard", "hable", "mobius") else "hable"
+    return (
+        f"zscale=t=linear:npl={npl:g},format=gbrpf32le,zscale=p=bt709,"
+        f"tonemap=tonemap={op}:desat={desat:g},"
+        f"zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+    )
 
 
 def fit_chain(width: int, height: int, blur_sigma: float = 28.0) -> str:
@@ -59,6 +86,15 @@ def _piecewise(keyframes: list[dict], key: str, t0: float, default: float) -> st
     return f"if(lt(t,{first_t:.6f}),{first_v:.6f},{expr})"
 
 
+def _obscure(mode: str, strength: int, w_px: int, h_px: int) -> str:
+    """Como a região é escondida. Para rosto e documento, pixel é mais seguro."""
+    if mode == "pixel":
+        n = max(2, int(strength))
+        return (f"scale=iw/{n}:ih/{n}:flags=neighbor,"
+                f"scale={w_px}:{h_px}:flags=neighbor")
+    return f"gblur=sigma={max(2, int(strength))}:steps=3"
+
+
 def blur_chain(blurs: list, clip_out_start: float, clip_out_end: float,
                width: int, height: int, tag_in: str, tag_out: str) -> tuple[str, bool]:
     """Desfoque retangular com região que acompanha keyframes (Parte 7.3)."""
@@ -85,8 +121,11 @@ def blur_chain(blurs: list, clip_out_start: float, clip_out_end: float,
         nxt = f"__b{i}o"
         parts.append(f"[{cur}]split=2[{a}][{c}]")
         parts.append(
-            f"[{c}]crop=w={w_px}:h={h_px}:x='{x_px}':y='{y_px}':eval=frame,"
-            f"boxblur={max(2, int(b.strength))}:2[__b{i}bl]"
+            # crop avalia x/y por quadro quando a expressão usa `t`;
+            # a opção eval não existe mais no ffmpeg 6+.
+            f"[{c}]crop=w={w_px}:h={h_px}:x='{x_px}':y='{y_px}',"
+            f"{_obscure(getattr(b, 'shape', 'rect'), b.strength, w_px, h_px)}"
+            f"[__b{i}bl]"
         )
         parts.append(
             f"[{a}][__b{i}bl]overlay=x='{x_px}':y='{y_px}':eval=frame:"
@@ -158,26 +197,31 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
 
 
 def ken_burns_chain(width: int, height: int, duration: float,
-                    intensity: float, direction: str = "in") -> tuple[str, str]:
-    """Push-in lento via scale+crop com expressão em ``t``.
+                    intensity: float, direction: str = "in",
+                    fps: float = 30.0) -> tuple[str, str]:
+    """Push-in lento (Parte 7.2).
 
-    Devolve (cadeia, expressão do zoom) — a expressão é reaproveitada pelas
-    anotações, para que elas acompanhem o movimento.
+    Usa ``zoompan``, não ``crop`` com expressão: o crop avalia largura e altura
+    uma única vez, na inicialização, então um zoom feito com ele fica parado.
+
+    Devolve (cadeia, expressão do zoom em ``t``) — a expressão é reaproveitada
+    pelas anotações, para que elas acompanhem o movimento.
     """
     k = max(0.0, min(0.6, intensity))
     dur = max(duration, 0.1)
+    frames = max(1, int(round(dur * fps)))
     if direction == "out":
-        z = f"(1+{k:.4f}-{k:.4f}*t/{dur:.4f})"
+        z_expr = f"(1+{k:.4f}-{k:.4f}*on/{frames})"
+        z_time = f"(1+{k:.4f}-{k:.4f}*t/{dur:.4f})"
     else:
-        z = f"(1+{k:.4f}*t/{dur:.4f})"
-    big_w, big_h = width * 2, height * 2
+        z_expr = f"(1+{k:.4f}*on/{frames})"
+        z_time = f"(1+{k:.4f}*t/{dur:.4f})"
     chain = (
-        f"scale={big_w}:{big_h}:force_original_aspect_ratio=increase,"
-        f"crop=w='{big_w}/({z})':h='{big_h}/({z})':"
-        f"x='(iw-ow)/2':y='(ih-oh)/2':eval=frame,"
-        f"scale={width}:{height}"
+        f"zoompan=z='{z_expr}':d=1:"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"s={width}x{height}:fps={fps}"
     )
-    return chain, z
+    return chain, z_time
 
 
 _MARK_GLYPH = {"x": "✕", "circle": "◯", "arrow": "➜", "dot": "●"}

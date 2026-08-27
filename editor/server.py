@@ -7,16 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
-import os
 import platform
 import sys
 from pathlib import Path
-from typing import Any
 
 from fastapi import (Body, FastAPI, HTTPException, Query, Request, WebSocket,
                      WebSocketDisconnect)
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               PlainTextResponse, Response, StreamingResponse)
+from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
+                               Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 from . import db, presets as presets_mod, projects as svc, video_analysis
@@ -24,10 +22,10 @@ from .config import (STATIC_DIR, AudioParams, CutParams, ExportParams,
                      SpeedParams, SubtitleStyle, ensure_dirs, ffmpeg_available,
                      WHISPER_MODEL)
 from .edit import ops
-from .edit.audit import apply_fix, audit_edges, audit_summary
-from .ffmpeg_utils import hw_encoders, probe
+from .edit.audit import apply_fix, audit_edges
+from .ffmpeg_utils import hw_encoders
 from .jobs import get_queue, hub
-from .models import BlurRegion, Clip, Cutaway, Overlay, Subtitle, new_id
+from .models import BlurRegion, Clip, Cutaway, Overlay
 from .subtitles import ass as ass_mod
 
 app = FastAPI(title="Editor de Vídeo", docs_url="/api/docs", redoc_url=None)
@@ -814,6 +812,8 @@ def api_blur_update(pid: str, bid: str, payload: dict = Body(...)) -> dict:
                 b.out_end = float(payload["out_end"])
             if "strength" in payload:
                 b.strength = int(payload["strength"])
+            if "shape" in payload:
+                b.shape = str(payload["shape"])
             if "keyframes" in payload:
                 b.keyframes = payload["keyframes"]
             if "enabled" in payload:
@@ -868,7 +868,7 @@ def api_audio_preview(pid: str, payload: dict = Body(...)) -> dict:
     from .audio.denoise import sibilance, snr
     from .audio.envelope import compute_envelope
     from .audio.loudness import build_chain, compare, measure_samples
-    from .ffmpeg_utils import decode_pcm, read_wav_mono
+    from .ffmpeg_utils import decode_pcm
 
     project = _project(pid)
     env = _env_or_404(project)
@@ -906,6 +906,58 @@ def api_safe_zone(pid: str) -> dict:
     band = video_analysis.detect_subtitle_band(project.source_path, project.info)
     return {"band": band,
             "anchor": video_analysis.suggest_anchor(band, project.info)}
+
+
+@app.get("/api/projects/{pid}/media/{mid}/tonemap-preview")
+def api_tonemap_preview(pid: str, mid: str, t: float = 0.0, npl: float = 100.0,
+                        operator: str = "hable", brightness: float = 0.0,
+                        saturation: float = 1.0, contrast: float = 1.0,
+                        main_time: float = 0.0) -> dict:
+    """Comparação lado a lado das conversões HDR -> SDR (Parte 7.1)."""
+    import base64
+
+    from .render.filters import color_chain, tonemap_chain
+
+    project = _project(pid)
+    media = next((m for m in svc.list_media(pid) if m["id"] == mid), None)
+    if not media:
+        raise HTTPException(404, "mídia não encontrada")
+
+    color = color_chain({"brightness": brightness, "saturation": saturation,
+                         "contrast": contrast})
+
+    def shot(label: str, chain: str, note: str) -> dict:
+        full = ",".join(x for x in (chain, color) if x)
+        try:
+            data, mean = video_analysis.frame_jpeg(media["path"], t, full)
+        except RuntimeError as exc:
+            return {"label": label, "error": str(exc)[:300], "chain": full}
+        return {
+            "label": label, "chain": full, "note": note,
+            "mean_luma": round(mean, 2),
+            "image": "data:image/jpeg;base64," + base64.b64encode(data).decode(),
+        }
+
+    variants = [
+        shot("sem conversão", "",
+             "como o inserto entra se nada for feito"),
+        shot("transferência (padrão)", tonemap_chain("transferencia"),
+             "só curva e primárias; num teste de ida e volta devolve o "
+             "original com erro de 0,22 em 255"),
+        shot(f"tonemap {operator} (npl={npl:g})",
+             tonemap_chain("operador", npl, operator),
+             "comprime os altos; use quando o material realmente estourar o "
+             "alcance SDR"),
+    ]
+    try:
+        data, mean = video_analysis.frame_jpeg(project.source_path, main_time)
+        main = {"label": "vídeo principal", "mean_luma": round(mean, 2),
+                "image": "data:image/jpeg;base64," + base64.b64encode(data).decode()}
+    except RuntimeError:
+        main = None
+    return {"variants": variants, "main": main,
+            "media": {"id": mid, "name": media["name"],
+                      "is_hdr": bool(media["info"].get("is_hdr"))}}
 
 
 @app.get("/api/projects/{pid}/bitrate-estimate")

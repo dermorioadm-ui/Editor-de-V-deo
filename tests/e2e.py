@@ -12,12 +12,11 @@ import numpy as np
 
 os.environ.setdefault("EDITOR_DATA_DIR", tempfile.mkdtemp(prefix="editor-test-"))
 
-from editor import db, projects as svc                      # noqa: E402
+from editor import projects as svc                      # noqa: E402
 from editor.audio.clap import build_discarded_takes, detect_claps  # noqa: E402
 from editor.audio.envelope import compute_envelope          # noqa: E402
-from editor.edit.timeline import Timeline                   # noqa: E402
 from editor.ffmpeg_utils import probe, read_wav_mono, extract_wav  # noqa: E402
-from tests.synth import SR, build, write_video              # noqa: E402
+from tests.synth import build, write_video              # noqa: E402
 
 TEXT = ("Presta atenção nisso aqui . "
         "O problema é que você perde cliente todo santo dia . "
@@ -146,7 +145,6 @@ def main() -> int:
     print("   áudio:", json.dumps(report["audio"], ensure_ascii=False)[:220])
 
     print("7) sincronia legenda x corte …")
-    tl = Timeline(project.plan.active_clips)
     subs = out["subtitles"]
     print(f"   {len(subs)} legendas, primeira em {subs[0]['start']:.2f} s, "
           f"última termina em {subs[-1]['end']:.2f} s (vídeo {final.duration:.2f} s)")

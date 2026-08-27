@@ -75,12 +75,15 @@ def delete_output_range(plan, env: Envelope, out_start: float, out_end: float,
     prev_word = _word_before(words, src_a)
     next_word = _word_after(words, src_b)
 
-    left = snap_end(env, src_a,
-                    next_neighbor_start=None, guard=params.snap_neighbor_guard)
-    right = snap_start(env, src_b,
-                       prev_neighbor_end=None, guard=params.snap_neighbor_guard)
+    left = snap_end(env, src_a, guard=params.snap_neighbor_guard)
+    right = snap_start(env, src_b, guard=params.snap_neighbor_guard)
     lo = round(left.time, 4)
     hi = round(right.time, 4)
+    # o encaixe não pode comer as palavras preservadas dos dois lados
+    if prev_word is not None:
+        lo = max(lo, round(float(prev_word["end"]), 4))
+    if next_word is not None:
+        hi = min(hi, round(float(next_word["start"]), 4))
     if hi <= lo:
         hi = lo + 0.02
     plan.clips, _ = cut_source_range(plan.clips, lo, hi, source)

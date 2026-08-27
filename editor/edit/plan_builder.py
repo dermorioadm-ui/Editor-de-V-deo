@@ -16,7 +16,7 @@ from ..audio.segments import split_narrative
 from ..config import CutParams, SpeedParams
 from ..models import Clip, RemovedRegion
 from . import speed as speed_mod
-from .snap import NEIGHBOR_GUARD, snap_boundary, snap_end, snap_start
+from .snap import snap_boundary, snap_end, snap_start
 
 MIN_GAP = 0.08          # abaixo disso não vale a pena cortar: vira contíguo
 MIN_VALLEY_REPAIR = 0.04  # o resgate aceita um vale mais curto que o encaixe

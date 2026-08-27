@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import FileBrowser from './FileBrowser'
+import TonemapCompare from './TonemapCompare'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { toast, useStore } from '../state/store'
@@ -242,9 +243,22 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                           })
                           await onChanged()
                         }}>
-                  <option value="auto">automático</option>
+                  <option value="auto">automático (só se a fonte for HDR)</option>
                   <option value="sim">forçar</option>
                   <option value="nao">desligar</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="label">modo</span>
+                <select className="field"
+                        defaultValue={String(c.fit?.tonemap_mode ?? 'transferencia')}
+                        onChange={async (e) => {
+                          await api.updateCutaway(project.id, c.id,
+                            { fit: { tonemap_mode: e.target.value } })
+                          await onChanged()
+                        }}>
+                  <option value="transferencia">só transferência (padrão)</option>
+                  <option value="operador">com operador de tonemap</option>
                 </select>
               </label>
               {(['brightness', 'saturation', 'contrast'] as const).map((k) => (
@@ -262,6 +276,16 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                 </label>
               ))}
             </div>
+            {media.find((m) => m.id === c.media_id)?.info?.is_hdr && (
+              <TonemapCompare projectId={project.id} mediaId={c.media_id}
+                              fit={c.fit} time={c.media_start + 0.5}
+                              mainTime={c.out_start}
+                              onApply={async (fit) => {
+                                await api.updateCutaway(project.id, c.id, { fit })
+                                await onChanged()
+                                toast('ok', 'Conversão aplicada a este cutaway')
+                              }} />
+            )}
           </div>
         ))}
         {!view.cutaways.length && <p className="hint">Nenhum cutaway.</p>}
@@ -399,7 +423,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                         await onChanged()
                       }}>remover</button>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <label className="block">
                 <span className="label">início</span>
                 <input className="field" type="number" step={0.05} defaultValue={b.out_start}
@@ -423,6 +447,17 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                          await api.updateBlur(project.id, b.id, { strength: +e.target.value })
                          await onChanged()
                        }} />
+              </label>
+              <label className="block">
+                <span className="label">modo</span>
+                <select className="field" defaultValue={b.shape ?? 'blur'}
+                        onChange={async (e) => {
+                          await api.updateBlur(project.id, b.id, { shape: e.target.value })
+                          await onChanged()
+                        }}>
+                  <option value="blur">desfoque gaussiano</option>
+                  <option value="pixel">mosaico (mais seguro)</option>
+                </select>
               </label>
             </div>
             {b.keyframes.map((k: any, i: number) => (
