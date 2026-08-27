@@ -99,9 +99,13 @@ def _range_response(path: Path, request: Request) -> Response:
 @app.get("/api/health")
 def health() -> dict:
     ok, detail = ffmpeg_available()
+    modelo = WHISPER_MODEL
     try:
-        from .transcribe import detect_device
-        device = detect_device().to_dict()
+        from .transcribe import detect_device, resolve_model
+
+        info = detect_device()
+        device = info.to_dict()
+        modelo = resolve_model(WHISPER_MODEL, info.device)
     except Exception as exc:  # noqa: BLE001
         device = {"device": "?", "detail": str(exc)}
     try:
@@ -112,7 +116,7 @@ def health() -> dict:
     return {
         "ffmpeg": {"ok": ok, "detail": detail},
         "faster_whisper": whisper_ok,
-        "whisper_model": WHISPER_MODEL,
+        "whisper_model": modelo,
         "device": device,
         "hw_encoders": hw_encoders(),
         "python": sys.version.split()[0],

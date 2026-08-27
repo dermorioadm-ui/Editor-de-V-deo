@@ -33,7 +33,7 @@ Três coisas. Uma vez só, na primeira vez.
 |---|---|---|
 | **Python 3.10 ou mais novo** | é a linguagem em que o editor foi escrito | ~30 MB |
 | **ffmpeg** | é quem realmente corta, acelera e encoda o vídeo | ~150 MB |
-| **O modelo de transcrição** | é quem escuta o áudio e escreve as palavras | ~1,5 GB (baixa sozinho na primeira vez) |
+| **O modelo de transcrição** | é quem escuta o áudio e escreve as palavras | ~1,6 GB (baixa sozinho na primeira vez) |
 
 Se você nunca instalou nada disso, siga a seção 2 na ordem. Não pule etapas.
 
@@ -172,7 +172,7 @@ O programa mostra um resumo assim:
  Editor de Vídeo — tudo roda na sua máquina
 ==============================================================
  ffmpeg .......... OK  (ffmpeg version 7.1)
- transcrição ..... OK  (faster-whisper, cuda/float16)
+ transcrição ..... OK  (faster-whisper, modelo large-v3, cuda/float16)
    1 GPU(s) CUDA visível(is) para o CTranslate2
 
  Abrindo http://localhost:8000
@@ -271,6 +271,7 @@ Na tela inicial, lá embaixo, aparece uma linha assim:
 
 ```
 transcrição: faster-whisper · modelo large-v3 · cuda/float16 — 1 GPU(s) CUDA visível(is)
+
 ```
 
 - Se aparecer **`cuda/float16`** → está usando a GPU. 
@@ -313,9 +314,14 @@ A tela inicial também lista os encoders de vídeo por GPU que a sua máquina te
 
 ## 7. A transcrição está lenta
 
-O modelo padrão é o `large-v3`, que é o mais preciso e o mais pesado. Numa CPU
-comum ele leva de 4 a 8 minutos para cada minuto de vídeo. Numa GPU decente, uns
-15 segundos por minuto de vídeo.
+O editor escolhe o modelo sozinho pelo seu hardware: **`large-v3`** (o mais
+preciso) quando encontra uma GPU NVIDIA, e **`turbo`** quando vai rodar na CPU.
+O `turbo` tem quase a mesma precisão e é várias vezes mais rápido — numa CPU o
+`large-v3` levaria de 4 a 8 minutos para cada minuto de vídeo, e você acharia
+que travou.
+
+Mesmo com o `turbo`, uma CPU leva algo como 1 a 2 minutos para cada minuto de
+vídeo. Numa GPU decente são uns 15 segundos por minuto.
 
 **Da mais rápida para a mais precisa, escolha uma:**
 
@@ -500,7 +506,7 @@ Para quem quiser mexer. No Windows, no PowerShell, antes de abrir o editor:
 
 | Variável | O que faz | Padrão |
 |---|---|---|
-| `EDITOR_WHISPER_MODEL` | modelo de transcrição | `large-v3` |
+| `EDITOR_WHISPER_MODEL` | modelo de transcrição | `auto` (large-v3 na GPU, turbo na CPU) |
 | `EDITOR_WHISPER_LANGUAGE` | idioma | `pt` |
 | `EDITOR_WHISPER_DEVICE` | `auto`, `cuda` ou `cpu` | `auto` |
 | `EDITOR_PORT` | porta do servidor | `8000` |

@@ -38,7 +38,13 @@ PORT = int(os.environ.get("EDITOR_PORT", "8000"))
 # saturam a máquina sozinhos e concorrência aqui só deixa tudo mais lento.
 WORKERS = int(os.environ.get("EDITOR_WORKERS", "1"))
 
-WHISPER_MODEL = os.environ.get("EDITOR_WHISPER_MODEL", "large-v3")
+# "auto" = large-v3 quando houver GPU, turbo quando for CPU. Numa CPU o
+# large-v3 leva uns 5 minutos por minuto de vídeo, o que na prática faz o
+# usuário achar que travou; o turbo tem quase a mesma precisão numa fração do
+# tempo. Quem quiser fixar um, é só pôr o nome em EDITOR_WHISPER_MODEL.
+WHISPER_MODEL = os.environ.get("EDITOR_WHISPER_MODEL", "auto")
+WHISPER_MODEL_GPU = "large-v3"
+WHISPER_MODEL_CPU = "turbo"
 WHISPER_LANGUAGE = os.environ.get("EDITOR_WHISPER_LANGUAGE", "pt")
 WHISPER_DEVICE = os.environ.get("EDITOR_WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE = os.environ.get("EDITOR_WHISPER_COMPUTE", "")

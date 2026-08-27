@@ -41,9 +41,13 @@ def main() -> int:
         print("   Veja a seção 'Instalar o ffmpeg' do README.")
     try:
         import faster_whisper  # noqa: F401
-        from .transcribe import detect_device
+        from .config import WHISPER_MODEL
+        from .transcribe import detect_device, resolve_model
+
         dev = detect_device()
-        print(f" transcrição ..... OK  (faster-whisper, {dev.device}/{dev.compute_type})")
+        modelo = resolve_model(WHISPER_MODEL, dev.device)
+        print(f" transcrição ..... OK  (faster-whisper, modelo {modelo}, "
+              f"{dev.device}/{dev.compute_type})")
         if dev.detail:
             print(f"   {dev.detail}")
     except ImportError:

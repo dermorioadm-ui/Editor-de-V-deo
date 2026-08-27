@@ -13,7 +13,7 @@ from typing import Callable, Iterable
 import numpy as np
 
 from .config import (WHISPER_COMPUTE, WHISPER_DEVICE, WHISPER_LANGUAGE,
-                     WHISPER_MODEL)
+                     WHISPER_MODEL, WHISPER_MODEL_CPU, WHISPER_MODEL_GPU)
 
 _model_lock = threading.Lock()
 _model_cache: dict[tuple, object] = {}
@@ -55,6 +55,13 @@ def detect_device(preferred: str = WHISPER_DEVICE,
     return DeviceInfo(device=device, compute_type=compute, detail=detail)
 
 
+def resolve_model(model_size: str, device: str) -> str:
+    """``auto`` escolhe pelo hardware: large-v3 na GPU, turbo na CPU."""
+    if model_size not in ("", "auto"):
+        return model_size
+    return WHISPER_MODEL_GPU if device == "cuda" else WHISPER_MODEL_CPU
+
+
 def load_model(model_size: str = WHISPER_MODEL, device_info: DeviceInfo | None = None):
     try:
         from faster_whisper import WhisperModel  # type: ignore
@@ -66,6 +73,7 @@ def load_model(model_size: str = WHISPER_MODEL, device_info: DeviceInfo | None =
         ) from exc
 
     info = device_info or detect_device()
+    model_size = resolve_model(model_size, info.device)
     key = (model_size, info.device, info.compute_type)
     with _model_lock:
         if key not in _model_cache:
@@ -120,6 +128,7 @@ def transcribe(
     do arquivo original.
     """
     info = device_info or detect_device()
+    model_size = resolve_model(model_size, info.device)
     model = load_model(model_size, info)
 
     if isinstance(audio, (str, Path)):
