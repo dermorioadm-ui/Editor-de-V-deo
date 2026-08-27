@@ -62,7 +62,7 @@ Style: Main,{style.font},{style.fontsize},{hex_to_ass(style.primary)},{hex_to_as
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
-    for cue in cues:
+    for cue in sorted(cues, key=lambda c: float(c["start"])):
         start, end = float(cue["start"]), float(cue["end"])
         if window is not None:
             w0, w1 = window
@@ -85,7 +85,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 def build_srt(cues: list[dict], uppercase: bool = False) -> str:
     out = []
-    for i, cue in enumerate(cues, 1):
+    for i, cue in enumerate(sorted(cues, key=lambda c: float(c["start"])), 1):
         text = str(cue["text"])
         if uppercase:
             text = text.upper()
@@ -154,8 +154,9 @@ def calibrate_fontsize(target_px: int, sample: str, style: SubtitleStyle,
     probe = measure_text_width(sample, style, width, height, fontsize=100)
     if probe["width"] <= 0:
         raise RuntimeError(
-            f"a fonte '{style.font}' não foi encontrada pelo renderizador. "
-            "Escolha outra fonte na aba de legendas."
+            f"o texto de teste não produziu nenhum pixel — a fonte "
+            f"'{style.font}' pode não existir nesta máquina, ou a cor/posição "
+            f"deixam o texto invisível. Tente outra fonte na aba de legendas."
         )
     guess = max(8, min(400, int(round(100 * target_px / probe["width"]))))
     history = [probe]

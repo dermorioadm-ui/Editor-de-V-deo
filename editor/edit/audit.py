@@ -103,9 +103,12 @@ def apply_fix(clips: list[Clip], issue: dict,
                             if c.src_end <= clip.src_start + 1e-6), default=0.0)
             t = max(t, prev_end)
             for w in words:
-                if w["i"] in removed_ids and w["end"] <= clip.src_start + 1e-6:
-                    if t < w["end"]:
-                        t = max(t, w["end"] + 0.02)
+                if w["i"] not in removed_ids:
+                    continue
+                # antes ou ATRAVESSANDO a borda: recuar para dentro dela
+                # restauraria a palavra removida
+                if w["start"] < clip.src_start + 1e-6 and t < w["end"]:
+                    t = max(t, w["end"] + 0.02)
             if t < clip.src_end - 0.05:
                 clip.src_start = round(t, 4)
                 return True
@@ -115,9 +118,10 @@ def apply_fix(clips: list[Clip], issue: dict,
                              default=1e12)
             t = min(t, next_start)
             for w in words:
-                if w["i"] in removed_ids and w["start"] >= clip.src_end - 1e-6:
-                    if t > w["start"]:
-                        t = min(t, w["start"] - 0.02)
+                if w["i"] not in removed_ids:
+                    continue
+                if w["end"] > clip.src_end - 1e-6 and t > w["start"]:
+                    t = min(t, w["start"] - 0.02)
             if t > clip.src_start + 0.05:
                 clip.src_end = round(t, 4)
                 return True

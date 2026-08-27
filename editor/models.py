@@ -168,6 +168,13 @@ class Subtitle:
     text: str = ""                  # linhas separadas por "\n"
     word_ids: list = field(default_factory=list)
     edited: bool = False
+    # deslocamentos que o usuário aplicou nos botões de tempo. O rebuild
+    # recalcula os tempos automáticos e REAPLICA estes deltas — sem eles, o
+    # ajuste sumia do burn-in (que sempre rebuilda) enquanto o SRT baixado
+    # ainda o mostrava: o usuário revisava um SRT certo e publicava um vídeo
+    # errado.
+    start_off: float = 0.0
+    end_off: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)

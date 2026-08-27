@@ -36,7 +36,9 @@ BUILTIN = [
     ),
     _preset(
         "Story", "30 s, corte máximo, até 1,25x.",
-        CutParams(silence_min=0.35, air=0.10, margin=0.12, min_block=0.7,
+        # margem <= ar: com margin 0.12 a geometria consumia 0.32 s de cada
+        # pausa e o "corte máximo" só cortava pausas acima de ~0.40 s
+        CutParams(silence_min=0.35, air=0.10, margin=0.08, min_block=0.7,
                   narrative_pause=0.60),
         SpeedParams(ceiling=1.25, max_speed=1.40, warn_above=1.25),
         SubtitleStyle(fontsize=92, max_chars_per_line=18, margin_v=420,

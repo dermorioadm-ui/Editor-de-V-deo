@@ -24,7 +24,7 @@ from .render.export import export_project
 from .render.validate import validate_export
 from .subtitles.corrections import apply_corrections
 from .subtitles.fillers import annotate as annotate_fillers
-from .subtitles.linebreak import build_cues
+from .subtitles.linebreak import build_cues, wrap
 from .subtitles.remap import remap_words
 
 _envelope_cache: dict[str, Envelope] = {}
@@ -379,32 +379,56 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> lis
     fps = project.info.fps if project.info else None
     tl = timeline or Timeline(plan.active_clips, fps)
     mapped = remap_words(words, tl)
-    manual = [s for s in plan.subtitles if s.edited]
+    manual = [s for s in plan.subtitles
+              if s.edited or getattr(s, "start_off", 0.0)
+              or getattr(s, "end_off", 0.0)]
     cues = build_cues(mapped, plan.style, limit=tl.duration)
+    # word_ids em índices ORIGINAIS (src_i): os índices corrigidos renumeram
+    # quando o dicionário de correções muda, e o casamento se perderia
+    src_of = {w["i"]: w.get("src_i", w["i"]) for w in mapped}
     plan.subtitles = [
         Subtitle(start=c["start"], end=c["end"], text=c["text"],
-                 word_ids=[i for i in c["word_ids"] if i is not None])
+                 word_ids=sorted({src_of.get(i, i) for i in c["word_ids"]
+                                  if i is not None}))
         for c in cues
     ]
-    # o texto editado segue as PALAVRAS, não o relógio: cortes anteriores
-    # deslocam todos os tempos, mas os índices das palavras não mudam
-    claimed: set[int] = set()
-    for sub in plan.subtitles:
-        ids = set(sub.word_ids)
-        for k, old in enumerate(manual):
-            if k in claimed or not ids & set(old.word_ids):
-                continue
-            sub.text = old.text
+    # cada cue antigo editado vai para o cue novo de MAIOR sobreposição de
+    # palavras. Primeiro-que-encosta dava o texto inteiro à metade errada num
+    # split e descartava o segundo texto num merge.
+    assignments: dict[int, list] = {}
+    for old in sorted(manual, key=lambda o: o.start):
+        old_ids = set(old.word_ids)
+        best, best_ov = None, 0
+        for ni, sub in enumerate(plan.subtitles):
+            ov = len(old_ids & set(sub.word_ids))
+            if ov > best_ov:
+                best, best_ov = ni, ov
+        if best is not None:
+            assignments.setdefault(best, []).append(old)
+    for ni, olds in assignments.items():
+        sub = plan.subtitles[ni]
+        edited_olds = [o for o in olds if o.edited]
+        if edited_olds:
+            # merge de dois cues editados: concatena em ordem, nunca descarta
+            text = " ".join(o.text.replace("\n", " ") for o in edited_olds)
+            lines = wrap(text, plan.style.max_chars_per_line,
+                         plan.style.max_lines)
+            sub.text = "\n".join(lines) if lines else text
             sub.edited = True
-            claimed.add(k)
-            break
+        s_off = float(getattr(olds[0], "start_off", 0.0) or 0.0)
+        e_off = float(getattr(olds[-1], "end_off", 0.0) or 0.0)
+        if s_off or e_off:
+            sub.start = round(max(0.0, sub.start + s_off), 3)
+            sub.end = round(max(sub.start + 0.2, sub.end + e_off), 3)
+            sub.start_off, sub.end_off = s_off, e_off
     project.analysis["correction_log"] = log
     return [s.to_dict() for s in plan.subtitles]
 
 
 def cue_list(project: Project) -> list[dict]:
-    return [{"start": s.start, "end": s.end, "text": s.text}
-            for s in project.plan.subtitles]
+    return sorted(({"start": s.start, "end": s.end, "text": s.text}
+                   for s in project.plan.subtitles),
+                  key=lambda c: c["start"])
 
 
 # --------------------------------------------------------------- exportação

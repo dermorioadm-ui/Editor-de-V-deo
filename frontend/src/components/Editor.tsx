@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Player from './Player'
 import Timeline from './Timeline'
 import Inspector from './Inspector'
@@ -9,6 +9,7 @@ import AudioPanel from './AudioPanel'
 import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
 import { api } from '../lib/api'
+import { sourceToOutput } from '../lib/timeline'
 import { timecode } from '../lib/format'
 import { getState, pushHistory, setState, toast, useStore } from '../state/store'
 
@@ -40,6 +41,10 @@ export default function Editor() {
     if (!project) return
     const fresh = await api.project(project.id)
     setPreviewUrl(null)
+    const dur = fresh.timeline?.duration ?? 0
+    setState((st) => ({
+      playhead: Math.min(st.playhead, Math.max(0, dur - 0.01)),
+    }))
     setState({
       project: fresh,
       timeline: fresh.timeline ?? null,
@@ -92,8 +97,12 @@ export default function Editor() {
     }
   }, [project])
 
+  const opBusy = useRef(false)
+
   const undo = useCallback(async () => {
-    if (!project || !history.length) return
+    if (!project || !history.length || opBusy.current) return
+    opBusy.current = true
+    try {
     const prev = history[history.length - 1]
     const now = currentEntry()
     setState((s) => ({
@@ -102,10 +111,13 @@ export default function Editor() {
     }))
     await api.replacePlan(project.id, prev)
     await refresh()
+    } finally { opBusy.current = false }
   }, [project, history, refresh, currentEntry])
 
   const redo = useCallback(async () => {
-    if (!project || !future.length) return
+    if (!project || !future.length || opBusy.current) return
+    opBusy.current = true
+    try {
     const next = future[future.length - 1]
     const now = currentEntry()
     setState((s) => ({
@@ -114,6 +126,7 @@ export default function Editor() {
     }))
     await api.replacePlan(project.id, next)
     await refresh()
+    } finally { opBusy.current = false }
   }, [project, future, refresh, currentEntry])
 
   useEffect(() => {
@@ -132,18 +145,12 @@ export default function Editor() {
 
   const deleteSelection = useCallback(async () => {
     if (!project || !selection || !timeline) return
-    // a seleção vem no eixo da FONTE; converte para saída
-    const toOut = (t: number) => {
-      for (const b of timeline.blocks) {
-        if (t >= b.src_start && t <= b.src_end) {
-          const scale = ((b.out_end ?? 0) - (b.out_start ?? 0)) / Math.max(b.src_duration, 1e-9)
-          return (b.out_start ?? 0) + (t - b.src_start) * scale
-        }
-      }
-      return null
-    }
-    const a = toOut(Math.min(selection.start, selection.end))
-    const b = toOut(Math.max(selection.start, selection.end))
+    // a seleção vem no eixo da FONTE PRINCIPAL; blocos de inserto/foto têm
+    // src_start no eixo da própria mídia e casariam com o tempo errado
+    const a = sourceToOutput(Math.min(selection.start, selection.end),
+                             timeline.blocks, 'main')
+    const b = sourceToOutput(Math.max(selection.start, selection.end),
+                             timeline.blocks, 'main')
     if (a == null || b == null) {
       toast('warn', 'Seleção fora de um bloco',
         'A seleção precisa cair sobre um trecho que ainda existe na linha do tempo.')

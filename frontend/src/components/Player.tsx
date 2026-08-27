@@ -169,6 +169,16 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       }
       setPlaying(false)
     } else {
+      if (playhead >= duration - 0.05) {
+        // fim natural: tocar de novo recomeça do zero
+        seekOutput(0)
+        window.setTimeout(() => {
+          const b = !linear ? blockAtOutput(0, blocks) : null
+          if (b && b.source !== 'main') { setPlaying(true); return }
+          video.current?.play().then(() => setPlaying(true)).catch(() => {})
+        }, 80)
+        return
+      }
       const block = !linear ? blockAtOutput(playhead, blocks) : null
       if (block && block.source !== 'main') {
         enterStill(block, playhead - (block.out_start ?? 0))

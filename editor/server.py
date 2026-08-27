@@ -154,7 +154,9 @@ def browse(path: str = Query("")) -> dict:
 
 
 SEARCH_DIRS = ("Videos", "Vídeos", "Movies", "Desktop", "Área de Trabalho",
-               "Downloads", "Documents", "Documentos", "OneDrive")
+               "Downloads", "Documents", "Documentos", "OneDrive",
+               "OneDrive/Vídeos", "OneDrive/Videos", "OneDrive/Desktop",
+               "OneDrive/Documentos", "OneDrive/Documents")
 
 
 @app.post("/api/locate")
@@ -180,7 +182,8 @@ def locate(payload: dict = Body(...)) -> dict:
             continue
         seen.add(str(root))
         try:
-            for depth, pattern in ((0, name), (1, f"*/{name}"), (2, f"*/*/{name}")):
+            for depth, pattern in ((0, name), (1, f"*/{name}"),
+                                   (2, f"*/*/{name}"), (3, f"*/*/*/{name}")):
                 for hit in root.glob(pattern):
                     if not hit.is_file():
                         continue
@@ -227,10 +230,18 @@ def api_project(pid: str) -> dict:
 def api_delete(pid: str) -> dict:
     # um export em andamento continuaria enchendo a pasta "apagada" de
     # gigabytes (e no Windows o rmtree nem consegue remover arquivo aberto)
+    import time as _time
+
     queue = get_queue()
     for job in queue.list(pid):
         if job.status in ("fila", "rodando"):
             queue.cancel(job.id)
+    # espera o worker soltar os arquivos (no Windows, arquivo aberto pelo
+    # ffmpeg não é removível e a pasta viraria zumbi)
+    for _ in range(50):
+        if not any(j.status == "rodando" for j in queue.list(pid)):
+            break
+        _time.sleep(0.1)
     svc.delete_project(pid)
     return {"ok": True}
 
@@ -643,9 +654,16 @@ def api_edit_sub(pid: str, sid: str, payload: dict = Body(...)) -> dict:
                 sub.text = str(payload["text"])
                 sub.edited = True
             if "start" in payload:
-                sub.start = round(float(payload["start"]), 3)
+                new_start = max(0.0, round(float(payload["start"]), 3))
+                sub.start_off = round(sub.start_off + (new_start - sub.start), 3)
+                sub.start = new_start
             if "end" in payload:
-                sub.end = round(float(payload["end"]), 3)
+                new_end = round(float(payload["end"]), 3)
+                sub.end_off = round(sub.end_off + (new_end - sub.end), 3)
+                sub.end = new_end
+            if sub.end < sub.start + 0.2:
+                # nudge não pode produzir legenda invertida/instantânea
+                sub.end = round(sub.start + 0.2, 3)
             project.save_plan()
             return {"ok": True, "subtitle": sub.to_dict()}
     raise HTTPException(404, "legenda não encontrada")

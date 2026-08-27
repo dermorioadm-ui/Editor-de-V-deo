@@ -215,9 +215,15 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                 cpath = sources.get(cut.media_id, {}).get("path")
                 cinfo = sources.get(cut.media_id, {}).get("info")
                 if not cpath:
+                    # a mídia do cutaway sumiu: mostra o trecho CORRESPONDENTE
+                    # do principal (antes voltava ao INÍCIO do clipe e repetia
+                    # conteúdo já exibido)
+                    frac_a = (out_a - placed.out_start) / max(placed.out_duration, 1e-9)
+                    frac_b = (out_b - placed.out_start) / max(placed.out_duration, 1e-9)
                     segs.append(VideoSegment(
                         index=idx, source_path=str(path), kind="main",
-                        src_start=clip.src_start, src_duration=out_dur * clip.speed,
+                        src_start=clip.src_start + frac_a * clip.src_duration,
+                        src_duration=(frac_b - frac_a) * clip.src_duration,
                         speed=clip.speed, out_theoretical=out_dur,
                         clip_id=clip.id, info=info, t_start=out_a))
                 else:
@@ -372,24 +378,32 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
     cursor = 0.0
     for seg in segs:
         seg.out_start = cursor
+        # A chave usa as MESMAS janelas do render (t_start): legendas e estilo
+        # só entram quando são queimadas, e a posição só quando algo posicional
+        # toca o trecho — sem isso, editar uma legenda com burn desligado (ou
+        # qualquer edição noutro ponto) invalidava trechos que não mudaram um
+        # pixel.
+        seg_cues = [(round(c["start"], 3), round(c["end"], 3), c["text"])
+                    for c in cues
+                    if c["end"] > seg.t_start - 0.5
+                    and c["start"] < seg.t_start + seg.nominal + 1.0] \
+            if plan.export.burn_subtitles else []
+        seg_blurs = [b.to_dict() for b in plan.blurs
+                     if b.enabled and b.out_end > seg.t_start
+                     and b.out_start < seg.t_start + seg.nominal]
+        seg_overlays = [o.to_dict() for o in plan.overlays
+                        if o.enabled and o.out_end > seg.t_start
+                        and o.out_start < seg.t_start + seg.nominal]
+        positional = bool(seg_cues or seg_blurs or seg_overlays)
         key = _hash({
             "src": seg.source_path, "start": round(seg.src_start, 4),
             "dur": round(seg.src_duration, 4), "speed": seg.speed,
             "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
-            "out_start": round(seg.out_start, 3),
+            "t_start": round(seg.t_start, 3) if positional else None,
             "nominal": round(seg.nominal, 4),
-            "style": plan.style.__dict__, "export": plan.export.__dict__,
-            "burn": plan.export.burn_subtitles,
-            "cues": [(round(c["start"], 3), round(c["end"], 3), c["text"])
-                     for c in cues
-                     if c["end"] > seg.out_start - 0.5
-                     and c["start"] < seg.out_start + seg.nominal + 1.0],
-            "blurs": [b.to_dict() for b in plan.blurs
-                      if b.out_end > seg.out_start
-                      and b.out_start < seg.out_start + seg.nominal],
-            "overlays": [o.to_dict() for o in plan.overlays
-                         if o.out_end > seg.out_start
-                         and o.out_start < seg.out_start + seg.nominal],
+            "style": plan.style.__dict__ if seg_cues else None,
+            "export": plan.export.__dict__,
+            "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
             "hw": hw, "size": target_size(main, plan.export),
         })
         dest = work / f"seg_{seg.index:04d}_{key}.mp4"
@@ -428,22 +442,43 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
 
 
 # ------------------------------------------------------------------- áudio
-def _resample_exact(samples: np.ndarray, target: int) -> np.ndarray:
+def _resample_exact(samples: np.ndarray, target: int) -> tuple[np.ndarray, bool]:
+    """Ajusta o PCM ao tamanho exato do bloco de vídeo medido.
+
+    O interp existe para absorver deriva de MILISSEGUNDOS. Quando a fonte tem
+    menos áudio que vídeo (trilha que acaba antes, microfone que caiu), esticar
+    o que sobrou viraria um time-stretch grave e dessincronizante — nesses
+    casos o déficit vira silêncio e o chamador é avisado.
+
+    Devolve (pcm, esticou_demais).
+    """
     if target <= 0:
-        return np.zeros(0, dtype=np.float32)
-    if len(samples) == target:
-        return samples.astype(np.float32)
-    if len(samples) == 0:
-        return np.zeros(target, dtype=np.float32)
-    src_x = np.linspace(0.0, 1.0, len(samples), dtype=np.float64)
+        return np.zeros(0, dtype=np.float32), False
+    n = len(samples)
+    if n == target:
+        return samples.astype(np.float32), False
+    if n == 0:
+        return np.zeros(target, dtype=np.float32), True
+    if abs(n - target) > max(2048, int(target * 0.01)):
+        if n < target:
+            out = np.concatenate([samples.astype(np.float32),
+                                  np.zeros(target - n, dtype=np.float32)])
+        else:
+            out = samples[:target].astype(np.float32)
+        return out, True
+    src_x = np.linspace(0.0, 1.0, n, dtype=np.float64)
     dst_x = np.linspace(0.0, 1.0, target, dtype=np.float64)
-    return np.interp(dst_x, src_x, samples).astype(np.float32)
+    return np.interp(dst_x, src_x, samples).astype(np.float32), False
 
 
 def _fade(samples: np.ndarray, ms: int = FADE_MS) -> np.ndarray:
     """Fade de 12 ms na entrada e na saída. Sem isso, emenda em fala estala."""
     n = int(AUDIO_SR * ms / 1000.0)
-    if n <= 0 or len(samples) < 2 * n:
+    if len(samples) < 2 * n:
+        # bloco mais curto que duas rampas: encolhe a rampa em vez de pular o
+        # fade — pular deixava exatamente o estalo que o fade evita
+        n = len(samples) // 2
+    if n <= 0:
         return samples
     ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
     samples = samples.copy()
@@ -453,8 +488,8 @@ def _fade(samples: np.ndarray, ms: int = FADE_MS) -> np.ndarray:
 
 
 def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
-                      clip_durations: dict, on_progress: Callable | None = None
-                      ) -> np.ndarray:
+                      clip_durations: dict, on_progress: Callable | None = None,
+                      warnings: list | None = None) -> np.ndarray:
     """Monta o áudio em PCM, cada bloco com a duração EXATA do vídeo medido."""
     chunks: list[np.ndarray] = []
     total = max(len(timeline), 1)
@@ -478,7 +513,12 @@ def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
                              sample_rate=AUDIO_SR, channels=1, filters=af)
         except FFmpegError:
             pcm = np.zeros(target, dtype=np.float32)
-        pcm = _resample_exact(pcm, target)
+        pcm, stretched = _resample_exact(pcm, target)
+        if stretched and warnings is not None:
+            warnings.append(
+                f"o áudio da fonte é mais curto que o vídeo no bloco que começa "
+                f"em {placed.out_start:.1f} s — o que falta virou silêncio em "
+                f"vez de esticar a voz")
         chunks.append(_fade(pcm))
         if on_progress:
             on_progress((n + 1) / total, f"áudio: bloco {n + 1}/{total}")

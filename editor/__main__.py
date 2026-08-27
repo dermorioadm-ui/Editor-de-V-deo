@@ -67,6 +67,21 @@ def main() -> int:
         print("\n Sem ffmpeg o editor não consegue trabalhar. Instale e rode de novo.")
         return 1
 
+    import socket
+
+    probe_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe_sock.bind((host, port))
+    except OSError:
+        print(f"\n A porta {port} já está em uso.")
+        print(" O editor provavelmente JÁ está aberto — procure a outra janela")
+        print(f" preta, ou abra http://localhost:{port} no navegador.")
+        print(" Para rodar uma segunda instância:  set EDITOR_PORT=8001  e rode de novo.")
+        return 1
+    finally:
+        probe_sock.close()
+
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}"
     print(f"\n Abrindo {url}")
     print(" Para parar: Ctrl+C nesta janela\n")

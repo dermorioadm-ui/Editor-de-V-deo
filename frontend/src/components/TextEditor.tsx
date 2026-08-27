@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { sourceToOutput } from '../lib/timeline'
-import { setState, toast, useStore } from '../state/store'
+import { getState, setState, toast, useStore } from '../state/store'
 
 interface Props { onChanged: () => Promise<any>; snapshot: () => void }
 
@@ -93,6 +93,9 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
       const el = e.target as HTMLElement
       if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA') return
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length) {
+        // com uma seleção ativa na timeline, o Delete é dela — os dois
+        // handlers juntos removiam palavra E trecho num só aperto
+        if (getState().selection) return
         e.preventDefault()
         remove()
       }

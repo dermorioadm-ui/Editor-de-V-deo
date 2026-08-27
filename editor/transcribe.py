@@ -99,14 +99,19 @@ def chunk_bounds(duration: float, silence: Iterable | None = None,
     cursor = 0.0
     while duration - cursor > target * 1.25:
         want = cursor + target
-        best = want
-        best_d = CHUNK_SLACK + 1
+        best = None
+        best_d = None
+        # o silêncio mais próximo do alvo, em qualquer lugar razoável do
+        # intervalo — cortar exatamente em `want` cairia no meio de uma
+        # palavra, que sairia truncada nas DUAS transcrições
         for r in silences:
             mid = (r.start + r.end) / 2.0
+            if not (cursor + target * 0.3 < mid < cursor + target * 1.8):
+                continue
             d = abs(mid - want)
-            if d < best_d and mid > cursor + target * 0.3:
+            if best_d is None or d < best_d:
                 best, best_d = mid, d
-        cursor = best if best_d <= CHUNK_SLACK else want
+        cursor = best if best is not None else want
         bounds.append(cursor)
     bounds.append(duration)
     return list(zip(bounds[:-1], bounds[1:]))
@@ -178,19 +183,16 @@ def transcribe(
                     "start": float(w.start), "end": float(w.end),
                     "text": w.word, "prob": float(getattr(w, "probability", 1.0)),
                 })
-        # Algumas versões devolvem tempo absoluto, outras relativo ao bloco.
-        # Detecta pelo maior tempo visto e corrige só quando é relativo.
-        offset = start
-        if local_words:
-            last = max(w["end"] for w in local_words)
-            if last > chunk_len + 1.0:
-                offset = 0.0
+        # Com entrada ndarray o faster-whisper devolve tempos RELATIVOS ao
+        # bloco, sempre. Um timestamp alucinado além do fim do bloco é erro do
+        # modelo, não sinal de tempo absoluto — é clampado, nunca muda o
+        # offset (zerar o offset jogaria o bloco inteiro no começo do vídeo).
         for w in local_words:
-            w["start"] += offset
-            w["end"] += offset
-        for s in local_segments:
-            s["start"] += offset
-            s["end"] += offset
+            w["start"] = min(max(0.0, w["start"]), chunk_len) + start
+            w["end"] = min(max(0.0, w["end"]), chunk_len + 0.5) + start
+        for seg_item in local_segments:
+            seg_item["start"] = min(max(0.0, seg_item["start"]), chunk_len) + start
+            seg_item["end"] = min(max(0.0, seg_item["end"]), chunk_len + 0.5) + start
         words.extend(local_words)
         segments.extend(local_segments)
 

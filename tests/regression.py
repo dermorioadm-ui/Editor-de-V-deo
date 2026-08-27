@@ -201,6 +201,46 @@ def main() -> int:
           f"overlay acompanhou a foto inserida ({ov_before:.2f}s → {ov_after:.2f}s, "
           f"esperado ~{ov_before+2.0:.2f}s)")
 
+    # ---- 10) nudge de tempo da legenda sobrevive ao rebuild -------------
+    subs = client.get(f"/api/projects/{pid}").json()["timeline"]["subtitles"]
+    alvo2 = subs[0]
+    auto_end = alvo2["end"]
+    for _ in range(3):
+        cur = client.get(f"/api/projects/{pid}").json()["timeline"]["subtitles"][0]
+        client.put(f"/api/projects/{pid}/subtitles/{alvo2['id']}",
+                   json={"end": cur["end"] + 0.1})
+    client.post(f"/api/projects/{pid}/subtitles/rebuild")
+    depois = client.get(f"/api/projects/{pid}").json()["timeline"]["subtitles"][0]
+    check(abs(depois["end"] - (auto_end + 0.3)) < 0.05,
+          f"nudge de +0.3s no fim sobrevive ao rebuild "
+          f"({auto_end:.2f}s auto → {depois['end']:.2f}s)")
+
+    # ---- 11) nudge não inverte a legenda --------------------------------
+    r = client.put(f"/api/projects/{pid}/subtitles/{depois['id']}",
+                   json={"end": depois["start"] - 1.0}).json()
+    check(r["subtitle"]["end"] >= r["subtitle"]["start"] + 0.19,
+          "end nunca fica antes do start (clampado)")
+
+    # ---- 12) texto editado não duplica quando o estilo rechunka ---------
+    subs = client.get(f"/api/projects/{pid}").json()["timeline"]["subtitles"]
+    marcado = next((x for x in subs if len(x.get("word_ids", [])) >= 2), subs[0])
+    print(f"      (marcado: {marcado['text'][:30]!r} ids={marcado['word_ids']})")
+    client.put(f"/api/projects/{pid}/subtitles/{marcado['id']}",
+               json={"text": "FRASE UNICA MARCADA"})
+    client.post(f"/api/projects/{pid}/params",
+                json={"style": {"max_chars_per_line": 12},
+                      "rebuild_subtitles": True})
+    subs2 = client.get(f"/api/projects/{pid}").json()["timeline"]["subtitles"]
+    ocorrencias = sum(1 for x in subs2
+                      if "FRASE UNICA MARCADA" in x["text"].replace("\n", " "))
+    if ocorrencias != 1:
+        print("      novos cues:", [(x["text"][:22], x.get("word_ids")) for x in subs2][:8])
+    check(ocorrencias == 1,
+          f"texto editado aparece exatamente 1x após rechunk ({ocorrencias}x)")
+    client.post(f"/api/projects/{pid}/params",
+                json={"style": {"max_chars_per_line": 24},
+                      "rebuild_subtitles": True})
+
     print()
     if FALHAS:
         print(f"{len(FALHAS)} FALHA(S):")

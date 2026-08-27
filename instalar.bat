@@ -8,13 +8,15 @@ echo   Isso baixa cerca de 400 MB e demora alguns minutos.
 echo  ============================================================
 echo.
 
-where python >nul 2>&1
+REM "where python" acha o ALIAS da Microsoft Store mesmo sem Python instalado;
+REM o unico teste confiavel e rodar --version e conferir a saida
+python --version 2>nul | findstr /B "Python" >nul
 if errorlevel 1 (
-    echo  [X] Python nao encontrado.
+    echo  [X] Python nao encontrado ^(ou e so o atalho da Microsoft Store^).
     echo.
     echo      Instale em https://www.python.org/downloads/windows/
     echo      e MARQUE a caixinha "Add python.exe to PATH".
-    echo      Depois rode este instalador de novo.
+    echo      Depois FECHE esta janela e rode o instalador de novo.
     echo.
     pause
     exit /b 1

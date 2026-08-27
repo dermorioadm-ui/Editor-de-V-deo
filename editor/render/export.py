@@ -25,10 +25,24 @@ def export_project(
     cancel: Callable[[], bool] | None = None,
     hw: str | None = None,
 ) -> RenderResult:
+    import shutil as _shutil
+
     dest = Path(dest)
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
     main: MediaInfo = sources["main"]["info"]
+    pre_warnings: list[str] = []
+    try:
+        free = _shutil.disk_usage(work).free
+        needed = max(int(main.size_bytes * 2.5), 500_000_000)
+        if free < needed:
+            pre_warnings.append(
+                f"pouco espaço em disco: {free/1e9:.1f} GB livres onde a "
+                f"exportação trabalha (~{needed/1e9:.1f} GB recomendados para "
+                f"este vídeo). Apague exportações antigas ou as pastas work/ "
+                f"de projetos velhos.")
+    except OSError:
+        pass
     width, height = target_size(main, plan.export)
 
     def report(frac: float, msg: str, lo: float = 0.0, hi: float = 1.0):
@@ -68,7 +82,8 @@ def export_project(
     # 6) áudio em PCM, cadeia aplicada uma vez, AAC só no mux
     report(0.0, "montando o áudio", 0.66, 0.80)
     track = build_audio_track(plan, measured_timeline, sources, clip_durations,
-                              on_progress=lambda f, m: report(f, m, 0.66, 0.78))
+                              on_progress=lambda f, m: report(f, m, 0.66, 0.78),
+                              warnings=pre_warnings)
     raw_wav = work / "audio_raw.wav"
     write_wav(raw_wav, track, AUDIO_SR)
     processed = work / "audio.wav"
@@ -95,7 +110,7 @@ def export_project(
                         encoding="utf-8")
     ass_mod.write_ass(ass_path, cues_final, plan.style, width, height)
 
-    warnings: list[str] = []
+    warnings: list[str] = list(pre_warnings)
     src_bitrate = main.v_bitrate or main.bitrate
     out_bitrate = final.v_bitrate or final.bitrate
     if src_bitrate and out_bitrate:

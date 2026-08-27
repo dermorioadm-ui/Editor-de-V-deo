@@ -150,8 +150,10 @@ export default function Timeline(props: Props) {
       g.fillRect(x0, yWave, x1 - x0, ROW.wave)
     }
 
-    // blocos coloridos por seção
+    // blocos coloridos por seção — só os da fonte principal: um inserto tem
+    // src_start no eixo da PRÓPRIA mídia e desenharia no lugar errado
     for (const b of view.blocks) {
+      if (b.source !== 'main') continue
       const x0 = toX(b.src_start); const x1 = toX(b.src_end)
       if (x1 < 0 || x0 > size.w) continue
       const color = SECTIONS[b.section]?.color ?? '#64748b'
@@ -302,7 +304,8 @@ export default function Timeline(props: Props) {
       return
     }
     if (y >= yBlocks && y < yBlocks + ROW.blocks) {
-      const block = view.blocks.find((b) => t >= b.src_start && t <= b.src_end)
+      const block = view.blocks.find((b) =>
+        b.source === 'main' && t >= b.src_start && t <= b.src_end)
       setState({ selectedClip: block?.id ?? null })
       if (block) {
         const out = sourceToOutput(t, view.blocks)
@@ -407,7 +410,17 @@ export default function Timeline(props: Props) {
                 onMouseDown={onMouseDown}
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
-                onMouseLeave={() => { setHover(null); drag.current = null }} />
+                onMouseLeave={() => {
+                  setHover(null)
+                  if (drag.current?.mode === 'sub' && subDrag) {
+                    // o mouse escapou do canvas no meio do arrasto: comita o
+                    // ajuste em vez de descartá-lo em silêncio
+                    const out = sourceToOutput(subDrag.t, view.blocks)
+                    if (out != null) props.onSubtitleEdge(subDrag.id, subDrag.side, out)
+                    setSubDrag(null)
+                  }
+                  drag.current = null
+                }} />
       </div>
       <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] text-slate-500
                       border-t border-line flex-wrap">

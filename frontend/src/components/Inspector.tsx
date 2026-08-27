@@ -14,6 +14,7 @@ export default function Inspector({ onChanged, snapshot }: Props) {
   const storedGlobal = project?.plan?.speed?.global_multiplier ?? 1
   const [globalSpeed, setGlobalSpeed] = useState(storedGlobal)
   const [busy, setBusy] = useState(false)
+  const [dragSpeed, setDragSpeed] = useState<number | null>(null)
   useEffect(() => { setGlobalSpeed(storedGlobal) }, [storedGlobal])
 
   const block = useMemo(
@@ -138,16 +139,26 @@ export default function Inspector({ onChanged, snapshot }: Props) {
             <div>
               <label className="label">
                 Velocidade · <span className="font-mono text-slate-300">
-                  {block.speed.toFixed(2)}x</span>
+                  {(dragSpeed ?? block.speed).toFixed(2)}x</span>
                 {block.speed > warnAbove && (
                   <span className="text-amber-400 normal-case ml-1">
                     acima de {warnAbove}x soa artificial
                   </span>
                 )}
               </label>
-              <input type="range" min={0.9} max={1.4} step={0.01} value={block.speed}
-                     disabled={busy} className="w-full"
-                     onChange={(e) => setSpeed(Number(e.target.value))} />
+              <input type="range" min={0.9} max={1.4} step={0.01}
+                     value={dragSpeed ?? block.speed} className="w-full"
+                     onChange={(e) => setDragSpeed(Number(e.target.value))}
+                     onMouseUp={(e) => {
+                       const v = Number((e.target as HTMLInputElement).value)
+                       setDragSpeed(null)
+                       setSpeed(v)
+                     }}
+                     onTouchEnd={(e) => {
+                       const v = Number((e.target as HTMLInputElement).value)
+                       setDragSpeed(null)
+                       setSpeed(v)
+                     }} />
               <div className="flex justify-between text-[10px] text-slate-600 font-mono">
                 <span>0,90x</span><span>1,25x</span><span>1,40x</span>
               </div>

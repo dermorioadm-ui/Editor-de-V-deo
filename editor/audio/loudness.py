@@ -122,7 +122,18 @@ def measure_loudnorm(path: str | Path, pre_chain: str, params: AudioParams) -> d
 
 def loudnorm_second_pass(params: AudioParams, measured: dict) -> str:
     """Segunda passada em modo linear: acerta o alvo e preserva o comprimento."""
-    if not measured or "input_i" not in measured:
+    def finite(key: str) -> bool:
+        try:
+            v = float(measured.get(key))
+            return v == v and abs(v) != float("inf")
+        except (TypeError, ValueError):
+            return False
+
+    # faixa digitalmente silenciosa mede "-inf": interpolar isso na string do
+    # filtro derruba o ffmpeg — nesse caso a passada dinâmica resolve
+    if not measured or not all(finite(k) for k in
+                               ("input_i", "input_tp", "input_lra",
+                                "input_thresh")):
         return (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
                 f"LRA={params.lra}")
     return (
