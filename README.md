@@ -154,10 +154,69 @@ Para abrir o editor depois: `.venv/bin/python -m editor`
 
 ---
 
+## 3.5 — Onde isso roda, afinal?
+
+Curto: **roda no seu computador.** A tela é uma página de navegador, mas quem
+serve essa página é um programa rodando no seu próprio PC. Por isso o endereço
+é `localhost` — que quer dizer, literalmente, "esta máquina aqui".
+
+```
+   seu PC
+   ┌─────────────────────────────────────────────┐
+   │  iniciar.bat  →  programa Python + ffmpeg   │
+   │        │                                    │
+   │        ├── lê o vídeo direto da sua pasta   │
+   │        ├── transcreve, corta, encoda        │
+   │        └── serve a tela em localhost:8000 ──┼──→ seu navegador
+   └─────────────────────────────────────────────┘
+              nada disso passa pela internet
+```
+
+A internet é usada **uma única vez**: no primeiro EDITAR, para baixar o modelo
+de transcrição. Depois disso você pode desligar o wi-fi que continua
+funcionando.
+
+### Três jeitos de usar
+
+| Modo | Como | Quando serve |
+|---|---|---|
+| **Só neste PC** (padrão) | `iniciar.bat` → `localhost:8000` | o normal |
+| **Abrir do celular** | `iniciar-rede.bat` → o endereço que ele mostrar | revisar o corte deitado no sofá; o vídeo continua no PC |
+| **100% na internet** | não é este programa — veja abaixo | outra ferramenta, outro preço |
+
+### E rodar tudo na internet?
+
+Dá para fazer, mas seria **um produto diferente**, e ele briga com a primeira
+regra deste aqui: *o arquivo nunca sai da minha máquina*.
+
+Para funcionar na nuvem, cada vídeo teria que **subir inteiro** antes de
+qualquer coisa acontecer:
+
+| Seu upload | 2 GB demoram |
+|---|---|
+| 50 Mbps (fibra boa) | ~5 minutos |
+| 20 Mbps | ~14 minutos |
+| 10 Mbps | ~27 minutos |
+
+E isso é só a subida — antes de transcrever, cortar ou encodar. Depois você
+ainda baixa o resultado. Hoje esse tempo é **zero**, porque o programa lê o
+arquivo direto da pasta onde ele já está.
+
+Fora o upload, um servidor que aguente 1080x1920 a CRF 15 com GPU custa por
+hora, e o código todo é construído em cima de caminho de arquivo local
+(`C:\Users\...\vsl.mp4`) — não existe nem endpoint de upload.
+
+**O meio-termo que resolve quase sempre:** rode no PC e abra do celular com o
+`iniciar-rede.bat`. Você revisa e ajusta de onde quiser dentro de casa, e o
+arquivo de 2 GB nunca sai do lugar.
+
 ## 4. Abrir o editor
 
 **Windows:** duplo clique em **`iniciar.bat`**.
 **macOS:** duplo clique em **`iniciar.command`**.
+
+Para abrir também do celular (mesma rede): **`iniciar-rede.bat`**. Ele mostra
+o endereço a digitar no outro aparelho, tipo `http://192.168.0.15:8000`.
 
 Ou, no terminal, dentro da pasta do projeto:
 

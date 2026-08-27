@@ -8,6 +8,24 @@ import time
 import webbrowser
 
 
+def _lan_ip() -> str:
+    """IP desta máquina na rede local (o que se digita no celular)."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # não envia nada; só faz o sistema escolher a interface de saída
+        sock.connect(("10.255.255.255", 1))
+        return sock.getsockname()[0]
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "127.0.0.1"
+    finally:
+        sock.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="python -m editor",
@@ -16,6 +34,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--no-browser", action="store_true",
                         help="não abrir o navegador automaticamente")
+    parser.add_argument("--rede", action="store_true",
+                        help="permitir abrir de outro aparelho da MESMA rede "
+                             "(celular, notebook). O vídeo continua no PC.")
     parser.add_argument("--check", action="store_true",
                         help="só conferir a instalação e sair")
     parser.add_argument("--test", action="store_true",
@@ -25,7 +46,7 @@ def main() -> int:
 
     from .config import HOST, PORT, ensure_dirs, ffmpeg_available
 
-    host = args.host or HOST
+    host = args.host or ("0.0.0.0" if args.rede else HOST)
     port = args.port or PORT
     ensure_dirs()
 
@@ -84,6 +105,13 @@ def main() -> int:
 
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}"
     print(f"\n Abrindo {url}")
+    if host == "0.0.0.0":
+        print(f"\n Nesta máquina:      {url}")
+        print(f" De outro aparelho:  http://{_lan_ip()}:{port}")
+        print("   (celular ou notebook na MESMA rede/wifi)")
+        print("   O vídeo continua no disco deste PC — o outro aparelho só vê a tela.")
+        print("   Enquanto o modo rede estiver ligado, qualquer um no mesmo wifi")
+        print("   consegue abrir o editor. Não use em rede pública.")
     print(" Para parar: Ctrl+C nesta janela\n")
 
     if not args.no_browser:
