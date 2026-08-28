@@ -7,6 +7,7 @@ import SubtitlePanel from './SubtitlePanel'
 import MediaPanel from './MediaPanel'
 import LookPanel from './LookPanel'
 import AudioPanel from './AudioPanel'
+import AIPanel from './AIPanel'
 import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
 import { api } from '../lib/api'
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'midia', label: 'Mídia' },
   { id: 'filtro', label: 'Filtro' },
   { id: 'audio', label: 'Áudio' },
+  { id: 'ia', label: 'IA' },
   { id: 'exportar', label: 'Exportar' },
 ] as const
 
@@ -397,6 +399,7 @@ export default function Editor() {
             {analysed && tab === 'midia' && <MediaPanel onChanged={refresh} snapshot={snapshot} safeZone={safeZone} />}
             {analysed && tab === 'filtro' && <LookPanel onChanged={refresh} snapshot={snapshot} />}
             {analysed && tab === 'audio' && <AudioPanel onChanged={refresh} />}
+            {analysed && tab === 'ia' && <AIPanel onChanged={refresh} />}
             {analysed && tab === 'exportar' && <ExportPanel onChanged={refresh} />}
           </div>
         </main>

@@ -171,6 +171,16 @@ export const api = {
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
 
+  // IA — a chave NUNCA volta por aqui, só se ela existe e os quatro últimos
+  // caracteres, o bastante para o usuário reconhecer qual chave está lá
+  aiConfig: () => req<any>('/api/ai/config'),
+  setAiConfig: (payload: any) => post<any>('/api/ai/config', payload),
+  testAi: () => post<any>('/api/ai/test'),
+  aiPlan: (id: string, anexos = true) =>
+    post<Job>(`/api/projects/${id}/ai/plan`, { anexos }),
+  applyAiPlan: (id: string, plano: any) =>
+    post<any>(`/api/projects/${id}/ai/apply`, { plano }),
+
   frameUrl: (id: string, t: number, source = 'main', width = 360, look = '') =>
     `/api/projects/${id}/frame?t=${t.toFixed(3)}&source=${source}&width=${width}`
     + (look ? `&look=${look}` : ''),

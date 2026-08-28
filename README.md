@@ -8,6 +8,13 @@ do lugar.
 existe limite de tamanho. O programa roda no seu computador e lê o vídeo direto
 da pasta onde ele já está.
 
+> Uma ressalva honesta, e só uma: a aba **IA** é opcional, vem desligada e não
+> funciona sem uma chave do Gemini que você mesmo cole. Ligada, ela manda o
+> **texto** da transcrição — e, se você pedir ajuda com anexos, um quadro de
+> 360 px de cada anexo seu. **O vídeo continua não saindo**, nem o arquivo nem
+> o caminho dele. Detalhes, inclusive o que a Google faz com isso no plano
+> gratuito, em [12. A aba IA](#12-a-aba-ia).
+
 ---
 
 ## Índice
@@ -22,6 +29,8 @@ da pasta onde ele já está.
 8. [Onde ficam os arquivos](#8-onde-ficam-os-arquivos)
 9. [Problemas comuns](#9-problemas-comuns)
 10. [Como funciona por dentro](#10-como-funciona-por-dentro)
+11. [Ajustes por variável de ambiente](#ajustes-por-variável-de-ambiente)
+12. [A aba IA](#12-a-aba-ia)
 
 ---
 
@@ -174,7 +183,8 @@ serve essa página é um programa rodando no seu próprio PC. Por isso o endere�
 
 A internet é usada **uma única vez**: no primeiro EDITAR, para baixar o modelo
 de transcrição. Depois disso você pode desligar o wi-fi que continua
-funcionando.
+funcionando — a não ser que você ligue a aba IA, que é a única parte do
+programa que fala com fora. Ver [12. A aba IA](#12-a-aba-ia).
 
 ### Três jeitos de usar
 
@@ -763,3 +773,78 @@ $env:EDITOR_WHISPER_MODEL="turbo"
 $env:EDITOR_PORT="8080"
 .venv\Scripts\python -m editor
 ```
+
+
+---
+
+## 12. A aba IA
+
+Opcional. Desligada por padrão. Sem ela o editor faz tudo o que fazia.
+
+### Para que serve
+
+A IA **opina**, o programa **executa**. Ela lê o texto do que você falou,
+bloco a bloco, e responde três coisas:
+
+1. **Em que etapa cada bloco está** — gancho, dor, mecanismo, explicação,
+   revelação, prova, monetização, oferta, garantia, CTA.
+2. **Onde o ritmo pede um plano mais fechado** — o pico da argumentação fecha,
+   o respiro abre, e a alternância é o que dá dinâmica.
+3. **Onde cada anexo seu entra** e por quanto tempo, se você marcar a caixa
+   dos anexos.
+
+O que ela **não** faz: escolher tempo de corte, valor de zoom, posição em
+pixels, ou mexer em qualquer coisa sozinha. Ela responde por *índice de bloco*
+justamente para não precisar acertar um instante — um índice sempre cai numa
+fronteira de bloco, que é onde um anexo pode entrar sem partir frase no meio.
+
+Todo o resto é o mesmo maquinário determinístico de sempre. A etapa vira
+enquadramento pela tabela `SECTIONS`, com as mesmas seis invariantes de
+`editor/edit/zoom.py` (troca só em corte, cena mínima de 2 s, passo mínimo de
+0,05, teto pela resolução da fonte, âncora alcançável, bloco travado
+intocado). O anexo passa inteiro por `editor/anexos.py`. **Se a sugestão não
+couber, ela é recusada com o motivo escrito na tela** — nunca aplicada pela
+metade.
+
+Um bloco que **você** travou é intocável para a IA, e isso aparece na lista de
+recusas.
+
+### O que sai da sua máquina
+
+| | sai? |
+|---|---|
+| o arquivo de vídeo | **não** |
+| o caminho do arquivo | **não** |
+| qualquer segundo de imagem sua | **não** |
+| o texto transcrito, em blocos | sim |
+| um quadro de 360 px de cada **anexo** seu | só se você marcar a caixa |
+
+### O aviso que não dá para esconder
+
+No **plano gratuito** do Gemini, os termos da Google dizem que ela usa o que
+entra e o que sai para melhorar os produtos dela, e que **revisores humanos
+podem ler e anotar** essa entrada e essa saída. Só no plano **pago**
+(faturamento ligado na conta Google) ela garante que não usa seus prompts nem
+suas respostas para melhorar produtos.
+
+Autorizar uma IA a ver não é a mesma coisa que autorizar um revisor humano a
+ler. A escolha é sua — mas ela está escrita aqui e está escrita na tela, antes
+do botão.
+
+### Como ligar
+
+1. Pegue uma chave no Google AI Studio.
+2. Aba **IA** → cole a chave → **guardar** → **testar**.
+3. O campo de modelo pode ficar em branco: o programa pergunta ao Google quais
+   modelos aquela chave alcança e escolhe. Nome de modelo chumbado no código
+   é um app que quebra sozinho — os identificadores do Gemini mudaram quatro
+   vezes em menos de dois anos.
+4. **Ler o roteiro** → veja a sugestão → **Aplicar** ou **Descartar**.
+
+A chave fica guardada no banco local do programa. Ela **nunca** volta por
+nenhuma rota da API — só um "tem chave: sim" e os quatro últimos caracteres,
+o bastante para você reconhecer qual é. Isso importa porque o
+`iniciar-rede.bat` existe justamente para você revisar do celular, e aí
+qualquer um na sua rede local alcança as rotas.
+
+Sem internet, a aba IA avisa e o resto do editor continua igual.

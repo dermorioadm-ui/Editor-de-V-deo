@@ -23,6 +23,7 @@ Cada teste aqui corresponde a um bug que existiu:
 from __future__ import annotations
 
 import shutil
+import json
 import os
 import sys
 import tempfile
@@ -285,6 +286,8 @@ def main() -> int:
     testar_anexo_nao_come_palavra()
     testar_legenda_na_mesma_regua()
     testar_controle_manual_de_zoom()
+    testar_ia_opina_codigo_executa()
+    testar_chave_da_ia_nao_vaza()
     testar_presets_atualizam()
 
     print()
@@ -1242,6 +1245,135 @@ def testar_controle_manual_de_zoom() -> None:
     picado = [Falso(0.0, 4.0), Falso(4.0, 5.0), Falso(11.0, 12.0)]
     check(_restaurar_travados(picado, guardados) == 0,
           "trava não é chutada num bloco que sobrou pela metade")
+
+
+def testar_ia_opina_codigo_executa() -> None:
+    """A IA nunca escreve edição direto — e o que não cabe é RECUSADO.
+
+    Sem chamar a rede: a resposta do modelo é montada à mão, inclusive as
+    respostas ruins que um modelo dá de verdade (bloco que não existe, etapa
+    inventada, ênfase em tudo, anexo maior que a mídia, dois anexos no mesmo
+    lugar, mídia do tipo errado, bloco travado pelo usuário).
+    """
+    from editor.ai.roteiro import ENFASES, aplicar, blocos_do_plano, montar_pedido
+    from editor.models import SECTIONS, Clip, EditPlan
+
+    plan = EditPlan()
+    plan.clips = [Clip(id=f"c{i}", source="main", src_start=i * 4.0,
+                       src_end=i * 4.0 + 3.5) for i in range(6)]
+    plan.clips[4].zoom_locked = True         # o usuário travou este
+    plan.clips[4].zoom = 1.15
+    palavras = [{"start": i * 4.0 + 0.2, "end": i * 4.0 + 3.0, "id": i,
+                 "text": f"frase{i}"} for i in range(6)]
+
+    blocos = blocos_do_plano(plan, palavras)
+    check(len(blocos) == 6, f"seis blocos com fala ({len(blocos)})")
+    check(all(b.texto for b in blocos), "todo bloco leva o texto que caiu nele")
+
+    midias = [
+        {"id": "mv", "kind": "video", "name": "b-roll.mp4",
+         "info": {"duration": 2.0}},
+        {"id": "mi", "kind": "image", "name": "print.png", "info": {}},
+    ]
+    pedido = montar_pedido(blocos, midias, 24.0)
+    check("b-roll.mp4" in pedido and "frase0" in pedido,
+          "o pedido leva o texto e a lista de mídias")
+    check("/" not in pedido.replace("Facebook/Instagram", ""),
+          "nenhum caminho de arquivo vai no pedido")
+
+    resposta = {
+        "leitura": "vende um método de tráfego",
+        "blocos": [
+            {"i": 0, "etapa": "gancho", "enfase": "fechado", "porque": "abre"},
+            {"i": 1, "etapa": "dor", "enfase": "aberto", "porque": "contexto"},
+            {"i": 2, "etapa": "cta", "enfase": "fechado", "porque": "pico"},
+            {"i": 3, "etapa": "prova", "enfase": "fechado", "porque": "numero"},
+            {"i": 4, "etapa": "oferta", "enfase": "fechado", "porque": "preco"},
+            {"i": 5, "etapa": "inventada", "enfase": "fechado", "porque": "?"},
+            {"i": 99, "etapa": "gancho", "enfase": "normal", "porque": "?"},
+        ],
+        "anexos": [
+            {"midia": 0, "bloco": 1, "tipo": "cobertura", "segundos": 5.0,
+             "porque": "ilustra"},
+            {"midia": 1, "bloco": 2, "tipo": "cobertura", "segundos": 3.0,
+             "porque": "tipo errado"},
+            {"midia": 7, "bloco": 0, "tipo": "sobreposicao", "segundos": 2.0,
+             "porque": "mídia que não existe"},
+        ],
+    }
+    rel = aplicar(plan, resposta, midias, duracao_saida=24.0)
+
+    # 1) o que não existe e o que é inventado são RECUSADOS, com motivo
+    motivos = " | ".join(r["motivo"] for r in rel["recusados"])
+    check(any("não existe" in r["motivo"] for r in rel["recusados"]),
+          "bloco inexistente recusado")
+    check(any("etapa desconhecida" in r["motivo"] for r in rel["recusados"]),
+          "etapa inventada recusada")
+    check(any("travou" in r["motivo"] for r in rel["recusados"]),
+          "bloco travado pelo usuário é intocável para a IA")
+    check(plan.clips[4].zoom_locked and abs(plan.clips[4].zoom - 1.15) < 1e-9,
+          "a trava do usuário continua exatamente como estava")
+    check(plan.clips[4].section != "oferta", "e a etapa dele não foi trocada")
+
+    # 2) etapa e ênfase entraram nos blocos válidos, marcadas como da IA
+    check(plan.clips[0].section == "gancho" and plan.clips[0].section_source == "ia",
+          "a etapa da IA entrou e ficou marcada como dela")
+    check(plan.clips[1].emphasis == "aberto", "respiro virou plano aberto")
+    check(plan.clips[1].emphasis in ("", *ENFASES), "ênfase sempre de um valor válido")
+
+    # 3) ênfase com parcimônia: 4 "fechado" em 6 blocos viram no máximo 2
+    fechados = [c for c in plan.clips if c.emphasis == "fechado"]
+    check(len(fechados) <= max(1, len(plan.clips) // 3),
+          f"ponto alto em no máximo um terço dos blocos ({len(fechados)} de 6)")
+    check(any("nada" in r["motivo"] for r in rel["recusados"]),
+          "e o excesso de ênfase é dito, não cortado calado")
+
+    # 4) anexos: a janela ENCOLHE para o que a mídia cobre; tipo errado e
+    #    mídia inexistente são recusados
+    check(len(rel["anexos"]) == 1, f"só um anexo entrou ({len(rel['anexos'])})")
+    a = rel["anexos"][0]
+    check(abs((a["out_end"] - a["out_start"]) - 2.0) < 0.01,
+          f"os 5 s pedidos viraram os 2 s que a mídia tem "
+          f"({a['out_end'] - a['out_start']:.1f} s)")
+    check("é uma imagem" in motivos, "imagem como cobertura recusada")
+    check("mídia 7 não existe" in motivos, "mídia inventada recusada")
+
+    # 5) a etapa vira enquadramento pela tabela de sempre, não por número da IA
+    check(all(SECTIONS.get(c.section) for c in plan.clips if c.section),
+          "toda etapa aplicada existe na tabela")
+
+
+def testar_chave_da_ia_nao_vaza() -> None:
+    """A chave fica em texto puro no SQLite. Ela não pode sair por rota nenhuma.
+
+    O app escuta em 127.0.0.1, mas o iniciar-rede.bat existe justamente para
+    revisar do celular — e aí qualquer um na rede local alcança as rotas.
+    """
+    from editor.server import app
+
+    cliente = TestClient(app)
+    marca = "AIzaSyCHAVE-DE-TESTE-QUE-NAO-PODE-VAZAR-9876"
+    try:
+        cliente.post("/api/ai/config", json={"chave": marca})
+        cfg = cliente.get("/api/ai/config").json()
+        check("AIzaSy" not in json.dumps(cfg),
+              "a rota de config devolve o estado, nunca a chave")
+        check(cfg["tem_chave"] and cfg["final"] == "9876",
+              f"mas devolve o final, para reconhecer qual chave está lá ({cfg['final']})")
+
+        for rota in ("/api/health", "/api/projects", "/api/presets"):
+            corpo = cliente.get(rota).text
+            check(marca not in corpo and "AIzaSy" not in corpo,
+                  f"a chave não aparece em {rota}")
+
+        # e o erro de chave inválida sai em português, não como stack trace
+        r = cliente.post("/api/ai/test")
+        detalhe = str(r.json().get("detail", ""))
+        check(r.status_code == 400 and "chave" in detalhe.lower()
+              and marca not in detalhe,
+              f"chave recusada com motivo legível e sem eco da chave: {detalhe[:60]}")
+    finally:
+        cliente.post("/api/ai/config", json={"chave": ""})
 
 
 def testar_presets_atualizam() -> None:

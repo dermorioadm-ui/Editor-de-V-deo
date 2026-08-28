@@ -900,6 +900,95 @@ def _restaurar_travados(clips: list, travados: list[dict]) -> int:
     return voltaram
 
 
+# ---------------------------------------------------------------------- IA
+def plano_da_ia(project: Project, ctx, com_anexos: bool = True) -> dict:
+    """Pede a leitura do roteiro ao Gemini e devolve a SUGESTÃO.
+
+    Nada é aplicado aqui. O usuário vê o que a IA propôs, com o motivo de cada
+    escolha, e decide. Aplicar é outro passo, outra rota.
+    """
+    from . import db
+    from .ai import gemini, roteiro
+
+    chave = str(db.get_setting("gemini_api_key", "") or "").strip()
+    if not chave:
+        raise ValueError("sem chave do Gemini")
+    plan = project.plan
+    palavras = project.analysis.get("words") or []
+    if not palavras:
+        raise ValueError("rode a edição automática antes: sem transcrição a IA "
+                         "não tem o que ler")
+
+    ctx.stage("roteiro", "reunindo o texto de cada bloco")
+    blocos = roteiro.blocos_do_plano(plan, palavras)
+    if not blocos:
+        raise ValueError("nenhum bloco com fala para a IA olhar")
+
+    midias, quadros = [], []
+    if com_anexos:
+        ctx.stage("anexos", "olhando as mídias que você anexou")
+        midias = [m for m in list_media(project.id)
+                  if m.get("kind") in ("video", "image")]
+        midias = midias[:roteiro.MAX_QUADROS]
+        for m in midias:
+            try:
+                dur = float((m.get("info") or {}).get("duration") or 0.0)
+                img, _ = video_analysis.frame_jpeg(m["path"], dur * 0.4, width=360)
+                quadros.append(img)
+            except Exception as exc:  # noqa: BLE001
+                ctx.progress(0.2, f"não consegui ler um quadro de "
+                                  f"{m.get('name', '')}: {exc}")
+        # uma mídia sem quadro desalinharia a lista numerada do pedido
+        midias = midias[:len(quadros)]
+
+    ctx.stage("ia", f"perguntando ao Gemini sobre {len(blocos)} blocos")
+    ctx.progress(0.35, "o vídeo NÃO é enviado — só o texto"
+                       + (f" e {len(quadros)} quadro(s) dos seus anexos"
+                          if quadros else ""))
+    try:
+        resposta = roteiro.pedir(chave, db.get_setting("gemini_model", "") or "",
+                                 blocos, midias, duracao_de_saida(project),
+                                 quadros)
+    except gemini.ErroDaIA as exc:
+        raise ValueError(str(exc)) from exc
+
+    ctx.progress(0.9, f"o {resposta.get('_modelo', 'modelo')} respondeu")
+    return {"plano": resposta, "blocos": len(blocos), "midias": len(midias),
+            "modelo": resposta.get("_modelo", ""),
+            "leitura": str(resposta.get("leitura", ""))[:300]}
+
+
+def aplicar_plano_da_ia(project: Project, plano: dict) -> dict:
+    """Aplica a sugestão — e recusa o que não couber, com o motivo escrito."""
+    from .ai import roteiro
+    from .models import Cutaway, Overlay
+
+    if not plano:
+        raise ValueError("nada para aplicar")
+    plan = project.plan
+    midias = [m for m in list_media(project.id)
+              if m.get("kind") in ("video", "image")]
+    relatorio = roteiro.aplicar(plan, plano, midias, duracao_de_saida(project))
+
+    for a in relatorio["anexos"]:
+        if a["tipo"] == "cobertura":
+            plan.cutaways.append(Cutaway(media_id=a["media_id"],
+                                         out_start=a["out_start"],
+                                         out_end=a["out_end"]))
+        else:
+            plan.overlays.append(Overlay(media_id=a["media_id"],
+                                         out_start=a["out_start"],
+                                         out_end=a["out_end"]))
+
+    # a etapa e a ênfase só viram imagem depois disto — e é aqui que TODAS as
+    # invariantes do enquadramento são impostas, exatamente como quando quem
+    # escolheu a etapa foi a regra de palavras-chave
+    resumo = recalcular_zoom(project)
+    project.save_plan()
+    return {"ok": True, **relatorio, "zoom": resumo,
+            "timeline": timeline_summary(project)}
+
+
 def recalcular_zoom(project: Project) -> dict:
     """Refaz os enquadramentos — SEMPRE com o teto da resolução da fonte.
 

@@ -1521,6 +1521,86 @@ def index() -> HTMLResponse:
         "<code>frontend/</code>.</p>", status_code=200)
 
 
+# ------------------------------------------------------------------------- IA
+# A IA OPINA, O CÓDIGO EXECUTA. Ela devolve etapa, ênfase e onde um anexo
+# ajuda; quem traduz isso em enquadramento e em janela de anexo é a maquinaria
+# determinística de sempre, com todas as invariantes. Ver editor/ai/.
+#
+# Estas rotas ficam ANTES do catch-all @app.get("/{path:path}") de propósito:
+# rota registrada depois dele simplesmente não existe, e o sintoma é um 404
+# confuso em vez de um erro de rota.
+CHAVE_IA = "gemini_api_key"
+
+
+def _chave_ia() -> str:
+    chave = str(db.get_setting(CHAVE_IA, "") or "").strip()
+    if not chave:
+        raise HTTPException(400, "sem chave do Gemini. Cole a sua em Ajustes > IA.")
+    return chave
+
+
+@app.get("/api/ai/config")
+def api_ia_config() -> dict:
+    """O estado da IA — NUNCA a chave.
+
+    A chave fica em texto puro no SQLite (é o que dá para fazer num app local),
+    então ela não pode sair por rota nenhuma: o app roda em 127.0.0.1, mas o
+    iniciar-rede.bat existe justamente para revisar do celular, e aí qualquer
+    um na rede local alcança as rotas.
+    """
+    chave = str(db.get_setting(CHAVE_IA, "") or "")
+    return {
+        "tem_chave": bool(chave.strip()),
+        "final": chave[-4:] if len(chave) > 8 else "",
+        "modelo": db.get_setting("gemini_model", "") or "",
+    }
+
+
+@app.post("/api/ai/config")
+def api_ia_config_set(payload: dict = Body(...)) -> dict:
+    if "chave" in payload:
+        chave = str(payload.get("chave") or "").strip()
+        db.set_setting(CHAVE_IA, chave)
+    if "modelo" in payload:
+        db.set_setting("gemini_model", str(payload.get("modelo") or "").strip())
+    return api_ia_config()
+
+
+@app.post("/api/ai/test")
+def api_ia_test() -> dict:
+    """Botão 'testar': diz que modelo esta chave alcança de verdade."""
+    from .ai import gemini as gem
+
+    try:
+        return gem.testar_chave(_chave_ia(), db.get_setting("gemini_model", "") or "")
+    except gem.ErroDaIA as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/ai/plan")
+def api_ia_plan(pid: str, payload: dict = Body(...)) -> dict:
+    """Pede a leitura do roteiro. Roda como JOB, nunca dentro da rota.
+
+    Chamada de rede síncrona no laço de eventos congelaria a barra de progresso
+    de TODOS os trabalhos — a exportação em andamento inclusive.
+    """
+    _project(pid)
+    _chave_ia()
+    com_anexos = bool(payload.get("anexos", True))
+    return _run("ia", pid, lambda ctx: svc.plano_da_ia(svc.load(pid), ctx,
+                                                       com_anexos=com_anexos))
+
+
+@app.post("/api/projects/{pid}/ai/apply")
+def api_ia_apply(pid: str, payload: dict = Body(...)) -> dict:
+    """Aplica o que a IA sugeriu — depois de o usuário ver e concordar."""
+    project = _project(pid)
+    try:
+        return svc.aplicar_plano_da_ia(project, payload.get("plano") or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/{path:path}", response_class=HTMLResponse)
 def spa(path: str) -> HTMLResponse:
     if path.startswith("api/"):

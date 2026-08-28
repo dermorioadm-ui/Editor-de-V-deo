@@ -7,4 +7,11 @@ python-multipart>=0.0.9
 # Transcrição — obrigatório para o clique único
 faster-whisper>=1.0.0
 
+# IA (Gemini) — OPCIONAL. Sem ele o editor funciona inteiro; só a aba IA fica
+# fora. Está declarado aqui porque hoje ele só existe de carona no
+# huggingface_hub (que vem com o faster-whisper): no dia em que aquele projeto
+# trocar de cliente HTTP, a IA quebraria numa instalação limpa com um erro de
+# import que ninguém relacionaria.
+httpx>=0.27
+
 # ffmpeg NÃO é pacote Python. Veja a seção "Instalar o ffmpeg" do README.

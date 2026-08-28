@@ -81,6 +81,9 @@ class Clip:
     measured_duration: float | None = None   # medida real do render
     zoom: float = 1.0               # enquadramento (recorte concêntrico no rosto)
     zoom_locked: bool = False       # travado: o recálculo automático não mexe
+    emphasis: str = ""              # "", "aberto" ou "fechado" — só ESCOLHE
+    section_source: str = ""        # "" (regra), "ia" ou "usuario"
+    emphasis_source: str = ""
     label: str = ""
     photo: dict | None = None       # {duration, ken_burns, annotations}
     fit: dict | None = None         # {tonemap, brightness, saturation, contrast}

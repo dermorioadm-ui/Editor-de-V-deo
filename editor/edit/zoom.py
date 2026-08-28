@@ -217,9 +217,27 @@ def _valorar(grupos: list[list[Clip]], escada: list[float], teto: float,
         crua = float(SECTIONS.get(grupo[0].section, {}).get("zoom_base", 1.0))
         base = 1.0 + (crua - 1.0) * fator
         deg = [1.0 + (z - 1.0) * fator for z in escada]
+
+        # ÊNFASE. Ela reordena qual degrau da escada é tentado primeiro, e só
+        # isso. Não entra na base, não entra no fator, não entra no teto.
+        #
+        # A tentação era transformar ênfase num multiplicador — e ela custa
+        # caro: basta um bloco pedir mais fechamento para fator_teto reduzir
+        # PROPORCIONALMENTE a amplitude do vídeo INTEIRO (medido: 0,0638 para
+        # 0,0573, uns 10% a menos de movimento em todas as cenas). Como
+        # critério de escolha entre candidatos que a escada já produziu e já
+        # clampou, ela não tem esse efeito colateral: o conjunto de valores
+        # possíveis é exatamente o mesmo, muda só a ordem de preferência.
+        enfase = (grupo[0].emphasis or "").strip()
+        ordem = list(range(len(deg)))
+        if enfase in ("fechado", "aberto"):
+            ordem.sort(key=lambda k: deg[k], reverse=(enfase == "fechado"))
+        else:
+            ordem = [(indice + salto) % len(deg) for salto in range(len(deg))]
+
         escolhido: float | None = None
-        for salto in range(len(escada)):
-            cand = clamp(base * deg[(indice + salto) % len(deg)], 1.0, teto)
+        for salto, k in enumerate(ordem):
+            cand = clamp(base * deg[k], 1.0, teto)
             if anterior is None or abs(cand - anterior) >= MIN_STEP:
                 escolhido = cand
                 indice += salto + 1
