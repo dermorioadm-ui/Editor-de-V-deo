@@ -1521,6 +1521,38 @@ def index() -> HTMLResponse:
         "<code>frontend/</code>.</p>", status_code=200)
 
 
+@app.get("/api/janela")
+def api_janela() -> dict:
+    """A janela do sistema pode ser aberta nesta máquina?"""
+    from . import nativo
+
+    return {"disponivel": nativo.disponivel()}
+
+
+@app.post("/api/escolher")
+def api_escolher(payload: dict = Body(...)) -> dict:
+    """Abre a JANELA DO SISTEMA e devolve o caminho escolhido.
+
+    O navegador entrega só nome e tamanho de um arquivo, nunca o caminho —
+    por isso existia aqui um explorador próprio, em HTML, que o usuário tinha
+    de aprender a usar. Mas o servidor roda na máquina dele: ele pode abrir a
+    janela de sempre, a mesma de qualquer programa. O arquivo continua sem
+    sair do lugar; o que atravessa é uma string com o caminho.
+    """
+    from . import nativo
+
+    kind = str(payload.get("kind", "video"))
+    try:
+        achados = nativo.escolher(kind, bool(payload.get("varios")),
+                                  str(payload.get("titulo", "")))
+    except nativo.SemJanela as exc:
+        # 501: a máquina não tem como abrir a janela. O front cai no explorador
+        # de dentro do app, que continua existindo como rede de segurança.
+        raise HTTPException(501, str(exc)) from exc
+    return {"ok": True, "cancelado": not achados,
+            "path": achados[0] if achados else "", "paths": achados}
+
+
 # ---------------------------------------------------------------- assobio
 @app.post("/api/projects/{pid}/whistles/{wid}")
 def api_whistle(pid: str, wid: str, payload: dict = Body(...)) -> dict:

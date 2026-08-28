@@ -29,6 +29,14 @@ export const api = {
   locate: (name: string, size: number) =>
     post<any>('/api/locate', { name, size }),
 
+  // A JANELA DO SISTEMA — a de verdade. O servidor roda na máquina do usuário,
+  // então ele pode abrir o mesmo diálogo de qualquer programa e devolver o
+  // caminho. Nada é enviado: o que atravessa é uma string.
+  janela: () => req<{ disponivel: boolean }>('/api/janela'),
+  escolher: (kind: 'video' | 'audio' | 'image', titulo?: string, varios = false) =>
+    post<{ ok: boolean; cancelado: boolean; path: string; paths: string[] }>(
+      '/api/escolher', { kind, titulo, varios }),
+
   projects: () => req<any[]>('/api/projects'),
   project: (id: string) => req<Project>(`/api/projects/${id}`),
   createProject: (source_path: string, name: string, preset: string) =>

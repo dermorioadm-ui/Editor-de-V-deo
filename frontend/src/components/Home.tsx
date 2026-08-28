@@ -64,6 +64,26 @@ export default function Home() {
     }
   }
 
+  /** Abre a JANELA DO SISTEMA — a de verdade, a mesma de qualquer programa.
+   *  O explorador escrito em HTML continua existindo, mas só como recuo para
+   *  a máquina onde a janela não abre. Ninguém quer aprender um explorador de
+   *  arquivos novo para abrir um MP4. */
+  async function escolherNoDisco() {
+    try {
+      const r = await api.escolher('video', 'Escolher o vídeo para editar')
+      if (r.cancelado) return
+      setPath(r.path)
+      await start(r.path)
+    } catch (e: any) {
+      // 501 = esta máquina não tem como abrir a janela do sistema
+      setBrowsing(true)
+      if (!String(e.message ?? '').includes('janela')) {
+        toast('warn', 'Abri o explorador de dentro do app',
+          String(e.message ?? e))
+      }
+    }
+  }
+
   async function onDrop(ev: React.DragEvent) {
     ev.preventDefault()
     setDragging(false)
@@ -77,11 +97,10 @@ export default function Home() {
         setPath(res.path)
         await start(res.path)
       } else {
-        toast('warn', 'Não achei esse arquivo nas pastas conhecidas',
-          `O navegador não entrega o caminho de um arquivo arrastado, e para não ` +
-          `copiar ${bytes(file.size)} à toa eu procuro pelo nome. ` +
-          `Use "Escolher no disco" e aponte o arquivo.`)
-        setBrowsing(true)
+        toast('info', `Não achei "${file.name}" nas pastas de sempre`,
+          `Abrindo a janela do Windows para você apontar. Nada é copiado — ` +
+          `eu só preciso do caminho.`)
+        await escolherNoDisco()
       }
     } catch (e: any) {
       setLocating('')
@@ -131,9 +150,9 @@ export default function Home() {
             <div className="text-4xl mb-3 opacity-40">⬇</div>
             <p className="text-base font-medium">Arraste o vídeo para cá</p>
             <p className="hint mt-1 max-w-lg mx-auto">
-              O navegador não entrega o caminho do arquivo arrastado, então eu procuro
-              pelo nome nas suas pastas de vídeo. Se não achar, é só apontar no disco —
-              em nenhum dos dois casos o arquivo é copiado.
+              Ou clique em <b>Escolher no computador</b> e use a janela de sempre.
+              Nos dois casos o arquivo <b>não é copiado nem enviado</b>: o editor
+              lê ele direto de onde já está.
             </p>
             {locating && <p className="text-xs text-accent mt-2">{locating}</p>}
             <div className="flex items-center gap-2 justify-center mt-5">
@@ -141,8 +160,8 @@ export default function Home() {
                      placeholder="C:\Users\voce\Videos\vsl.mp4"
                      onChange={(e) => setPath(e.target.value)}
                      onKeyDown={(e) => { if (e.key === 'Enter') start(path) }} />
-              <button className="btn" onClick={() => setBrowsing(true)}>
-                Escolher no disco
+              <button className="btn btn-primary" onClick={escolherNoDisco}>
+                Escolher no computador…
               </button>
             </div>
           </div>

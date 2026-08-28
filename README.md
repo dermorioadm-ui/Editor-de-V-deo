@@ -186,20 +186,68 @@ de transcrição. Depois disso você pode desligar o wi-fi que continua
 funcionando — a não ser que você ligue a aba IA, que é a única parte do
 programa que fala com fora. Ver [12. A aba IA](#12-a-aba-ia).
 
-### A prévia é leve de propósito
+### Dois jeitos de importar, e os dois não copiam nada
+
+**Arrastando.** Solta o arquivo na página (ou no trilho certo, se for música ou
+anexo). O editor procura ele pelo nome nas suas pastas de sempre.
+
+**Pela janela do Windows.** Botão **Escolher no computador** — abre o diálogo de
+sempre, o mesmo de qualquer programa. É também o que aparece sozinho quando o
+arrasto não acha o arquivo.
+
+Nos dois casos **o arquivo não é copiado nem enviado**: o que o editor guarda é
+o caminho. Por isso o arrasto precisa achar o arquivo — o navegador entrega só
+o nome e o tamanho, nunca o caminho, e copiar 2 GB à toa está fora de questão.
+A janela do sistema não tem esse problema: ela devolve o caminho de verdade.
+
+### A prévia é feia de propósito
 
 Tocar um arquivo de 2 GB direto no navegador engasga. Na primeira análise o
-editor faz uma **cópia leve** da fonte (854 px no lado maior, 30 fps) e é ela
-que toca na prévia — o mesmo truque do CapCut. A exportação continua saindo da
-fonte, em qualidade cheia; a cópia leve serve só para você navegar sem travar.
-Um chip **prévia leve** aparece no canto do player quando ela está em uso.
+editor faz uma **cópia leve** da fonte e é ela que toca — o mesmo truque do
+CapCut. Medido num vídeo de 60 s, 1080x1920 a 13 Mbps (98 MB):
+
+| lado maior | tamanho | custo de buscar |
+|---|---|---|
+| 854 | 3,18 MB | 74 ms |
+| **480** | **1,76 MB** | **64 ms** |
+| 360 | 1,40 MB | 64 ms |
+
+480 é onde a curva vira: **56x menor** que a fonte, e ainda dá para reconhecer
+rosto e boca — que é tudo o que a prévia precisa. A exportação continua saindo
+da fonte, em qualidade cheia. Um chip **prévia leve** aparece no canto quando
+ela está em uso.
+
+A prévia toca a **edição**, não o arquivo cru: ela pula o que foi cortado e
+mostra a legenda no lugar, então dá para ir editando e conferindo ao mesmo
+tempo.
+
+### A legenda da prévia é a mesma da exportação
+
+Isso deu trabalho e vale explicar. O fontsize do ASS **não é** font-size de CSS:
+o libass imita o GDI e escala a fonte para que *ascent − descent* caiba no
+fontsize, enquanto o CSS escala pelo *em*. Para Arial dá 2048/2288 = **0,895**.
+Medido com o filtro `ass` do próprio ffmpeg:
+
+| | medido |
+|---|---|
+| altura de maiúscula | 0,640 × fontsize |
+| avanço de linha | 1,000 × fontsize (exato) |
+| contorno | cresce 1,0 × outline **para fora** de cada lado |
+| base da tinta | margin_v + 0,172 × fontsize do fundo |
+
+Com essas quatro constantes a prévia bate com a exportação dentro de **1,9% na
+altura e 0,8 px na posição** — e tem regressão medindo isso a cada rodada.
+
+O erro grande, porém, era outro: a régua era a altura do **elemento de vídeo**.
+Com a prévia leve tocando, o elemento tem 480 de altura contra 1920 da fonte, e
+o estilo está medido na fonte — a legenda saía **4x maior**. A régua certa é a
+resolução da fonte, que é a mesma PlayRes que o ASS usa.
 
 ### Trilha de fundo
 
-Arraste o arquivo de música para o trilho **Trilha** (A1) da linha do tempo.
-Ele é procurado no seu disco pelo nome — em Música, Downloads, Documentos e nas
-outras pastas de sempre — e **não é copiado nem enviado a lugar nenhum**: o
-editor só guarda o caminho.
+Três jeitos: arraste o MP3 para o trilho **Trilha** (A1), clique no **+** do
+trilho, ou vá em **Mídia → + música**. Os dois últimos abrem a janela do
+Windows. O arquivo **não é copiado nem enviado**: o editor só guarda o caminho.
 
 Depois, no painel da direita: volume, **mudo**, e o *ducking* (a trilha abaixa
 sozinha quando você fala). Para mudar onde ela entra e onde termina, arraste o

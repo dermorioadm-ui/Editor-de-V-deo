@@ -355,6 +355,10 @@ export default function Editor() {
                   cues={view?.subtitles ?? []}
                   duration={view?.duration ?? project.info?.duration ?? 0}
                   style={project.plan?.style}
+                  sourceSize={project.info
+                    ? [project.info.display_width || project.info.width,
+                       project.info.display_height || project.info.height]
+                    : null}
                   previewUrl={previewUrl}
                   proxyUrl={proxyUrl}
                   previewBusy={previewBusy}
@@ -476,12 +480,24 @@ export default function Editor() {
                     toast('info', `Procurando ${file.name} no seu disco…`,
                       'O arquivo não sai do lugar — só preciso do caminho.')
                     try {
-                      const achado = await api.locate(file.name, file.size)
-                      if (!achado.path) {
-                        toast('warn', 'Não achei esse arquivo nas pastas conhecidas',
-                          'Use a aba Mídia e aponte o arquivo no disco.')
-                        setTab('midia')
-                        return
+                      let caminho = (await api.locate(file.name, file.size)).path
+                      if (!caminho) {
+                        // não achou pelo nome: abre a janela do Windows já no
+                        // tipo certo, em vez de largar o usuário na aba Mídia
+                        toast('info', `Não achei "${file.name}" nas pastas de sempre`,
+                          'Abrindo a janela do seu computador para você apontar.')
+                        try {
+                          const r = await api.escolher(
+                            kind as 'video' | 'audio' | 'image',
+                            kind === 'audio' ? 'Escolher a música' : 'Escolher o arquivo')
+                          if (r.cancelado) return
+                          caminho = r.path
+                        } catch {
+                          toast('warn', 'Aponte o arquivo pela aba Mídia',
+                            'Esta máquina não conseguiu abrir a janela do sistema.')
+                          setTab('midia')
+                          return
+                        }
                       }
                       // O modelo suporta UMA trilha (plan.music é um
                       // dicionário, não uma lista): soltar a segunda SUBSTITUI
@@ -490,7 +506,7 @@ export default function Editor() {
                       const jaTem = trackId === 'A1'
                         && !!project.plan?.music?.media_id
                       snapshot()
-                      const m = await api.addMedia(project.id, achado.path, kind)
+                      const m = await api.addMedia(project.id, caminho, kind)
                       const mid = m?.id ?? m?.media?.id
                       if (trackId === 'A1') {
                         const antes = project.plan?.music ?? {}
@@ -536,12 +552,44 @@ export default function Editor() {
                         String(e.message ?? e))
                     }
                   }}
-                  onAddToTrack={(trackId) => {
-                    setTab(trackId === 'A1' ? 'audio' : 'midia')
-                    toast('info', 'Escolha a mídia',
-                      trackId === 'A1'
-                        ? 'Importe o áudio e clique em "usar como trilha".'
-                        : 'Importe o arquivo e escolha como ele entra.')
+                  onAddToTrack={async (trackId) => {
+                    // o "+" do trilho abre a JANELA DO SISTEMA já no tipo certo
+                    const kind = trackId === 'A1' ? 'audio' : 'video'
+                    try {
+                      const r = await api.escolher(kind as 'video' | 'audio',
+                        trackId === 'A1' ? 'Escolher a música' : 'Escolher o vídeo')
+                      if (r.cancelado) return
+                      snapshot()
+                      const m = await api.addMedia(project.id, r.path, kind)
+                      const mid = m?.id ?? m?.media?.id
+                      if (trackId === 'A1') {
+                        const antes = project.plan?.music ?? {}
+                        await api.setMusic(project.id, {
+                          media_id: mid,
+                          gain_db: antes.gain_db ?? -18,
+                          ducking: antes.ducking ?? true,
+                          duck_amount: antes.duck_amount ?? 12,
+                          fade_in: antes.fade_in ?? 1, fade_out: antes.fade_out ?? 2,
+                          muted: antes.muted ?? false, enabled: true,
+                          out_start: 0, out_end: timeline?.duration ?? 0,
+                        })
+                        toast('ok', 'Música no trilho',
+                          'Já entra abaixando na fala. O volume e o mudo ficam '
+                          + 'no painel da direita.')
+                      } else {
+                        await api.addCutaway(project.id, {
+                          media_id: mid, out_start: getPlayhead(),
+                          out_end: Math.min(timeline?.duration ?? 0,
+                                            getPlayhead() + 5),
+                          media_start: 0,
+                        })
+                        toast('ok', 'Vídeo por cima no ponto atual')
+                      }
+                      await refresh()
+                    } catch (e: any) {
+                      toast('warn', 'Use a aba Mídia', String(e.message ?? e))
+                      setTab(trackId === 'A1' ? 'midia' : 'midia')
+                    }
                   }}
                   onResizeRemoved={async (a, b, na, nb) => {
                     snapshot()

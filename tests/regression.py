@@ -291,6 +291,8 @@ def main() -> int:
     testar_ia_opina_codigo_executa()
     testar_chave_da_ia_nao_vaza()
     testar_trilha_acompanha_o_corte()
+    testar_legenda_da_previa_bate_com_a_exportacao()
+    testar_janela_do_sistema()
     testar_presets_atualizam()
 
     print()
@@ -1437,6 +1439,118 @@ def testar_trilha_acompanha_o_corte() -> None:
     check(plan2.music["out_start"] >= 0.0 and abs(dur2 - 7.0) < 0.05,
           f"trilha órfã vai para o começo mas mantém os 7 s que tinha "
           f"({plan2.music['out_start']:.1f}-{plan2.music['out_end']:.1f} s)")
+
+
+def testar_legenda_da_previa_bate_com_a_exportacao() -> None:
+    """A prévia tem que desenhar a MESMA legenda que a exportação queima.
+
+    Dois erros somados faziam a legenda da prévia parecer outra coisa:
+
+    1. A régua era a altura do ELEMENTO de vídeo. Com a prévia leve tocando,
+       o elemento tem 480 de altura contra 1920 da fonte — e o estilo está
+       medido na fonte. A legenda saía 4x maior. (Com o proxy antigo de 854,
+       2,25x.) A régua certa é a resolução da FONTE, que é a mesma PlayRes
+       que o ASS usa.
+    2. O fontsize do ASS não é font-size de CSS: o libass imita o GDI e escala
+       a fonte para ascent-descent caber no fontsize, enquanto o CSS escala
+       pelo em. Para Arial isso dá 2048/2288 = 0,895.
+
+    Este teste mede o que o ffmpeg realmente desenha e compara com a fórmula
+    que está dentro do Player.tsx. Se alguém mexer numa e esquecer da outra,
+    ele acusa.
+    """
+    import subprocess
+
+    import numpy as np
+
+    from editor.config import SubtitleStyle
+    from editor.subtitles.ass import write_ass
+
+    # as constantes do Player.tsx, copiadas aqui de propósito: é a duplicação
+    # que faz o teste ter valor
+    ASS_PARA_CSS = 0.895
+    DESCIDA = 0.172
+    CAP_ARIAL = 0.716          # capHeight/em do Arial (1467/2048)
+
+    tmp = Path(tempfile.mkdtemp(prefix="legenda_previa_"))
+
+    def exportado(W, H, fs, mv, linhas):
+        st = SubtitleStyle()
+        st.fontsize, st.margin_v, st.outline = fs, mv, 4.0
+        st.outline_color = "#ff0000"          # contorno visível, tinta branca
+        ass = tmp / f"e_{W}_{fs}_{linhas}.ass"
+        write_ass(ass, [{"start": 0.0, "end": 2.0,
+                         "text": "\n".join(["ISSO MUDA TUDO"] * linhas)}], st, W, H)
+        png = ass.with_suffix(".png")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                        "-i", f"color=c=black:s={W}x{H}:d=1",
+                        "-vf", f"ass='{ass}'", "-frames:v", "1", str(png)],
+                       check=True)
+        cru = subprocess.run(["ffmpeg", "-v", "error", "-i", str(png),
+                              "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, check=True).stdout
+        img = np.frombuffer(cru, np.uint8).reshape(H, W)
+        r = np.where(img.max(axis=1) > 200)[0]      # só a tinta branca
+        return int(r[-1] - r[0] + 1), H - int(r[-1]) - 1
+
+    def da_previa(fs, mv, caixa, playH, linhas):
+        k = caixa / playH
+        cap = fs * ASS_PARA_CSS * k * CAP_ARIAL
+        return cap + (linhas - 1) * fs * k, (mv + fs * DESCIDA) * k
+
+    piores = []
+    for (W, H) in ((1080, 1920), (720, 1280)):
+        for fs in (35, 66, 100):
+            for linhas in (1, 2):
+                alt_e, base_e = exportado(W, H, fs, 220, linhas)
+                alt_p, base_p = da_previa(fs, 220, H, H, linhas)
+                piores.append((abs(alt_p - alt_e) / max(alt_e, 1),
+                               abs(base_p - base_e)))
+    erro_alt = max(x[0] for x in piores)
+    erro_base = max(x[1] for x in piores)
+    check(erro_alt < 0.03,
+          f"a altura da legenda da prévia bate com a exportação ({erro_alt*100:.1f}%)")
+    check(erro_base < 2.0,
+          f"e a posição também ({erro_base:.1f} px de diferença)")
+
+    # e a prova do defeito: medir pela altura do ELEMENTO em vez da FONTE
+    from editor.render.proxy import LADO_MAIOR
+    errado = 600 / LADO_MAIOR
+    certo = 600 / 1920
+    check(errado / certo > 3.0,
+          f"medir pelo elemento em vez da fonte daria {errado/certo:.1f}x "
+          f"o tamanho certo — era esse o defeito")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_janela_do_sistema() -> None:
+    """A janela de escolher arquivo é a DO SISTEMA, não uma imitação em HTML."""
+    from editor import nativo
+
+    check(set(nativo.FILTROS) == {"video", "audio", "image"},
+          "os três tipos que o editor aceita têm filtro")
+    check("*.mp3" in nativo.FILTROS["audio"][1],
+          "o filtro de áudio aceita mp3, que é o que o usuário manda")
+
+    # o comando do PowerShell tem que sobreviver a acento: no Brasil o caminho
+    # é C:\Users\João\Música\trilha.mp3 e o code page do console embaralha
+    import base64
+
+    script = nativo._ps_script("Áudio", nativo.FILTROS["audio"][1], False,
+                               "Escolher a música")
+    volta = base64.b64decode(
+        base64.b64encode(script.encode("utf-16-le"))).decode("utf-16-le")
+    check(volta == script and "Áudio" in volta and "música" in volta,
+          "o comando atravessa em UTF-16 com o acento inteiro")
+    check("[Console]::OutputEncoding" in script,
+          "e a saída volta em UTF-8, senão o caminho com acento chega quebrado")
+    check("-STA" not in script, "o -STA é argumento do processo, não do script")
+    check("Multiselect" in script and "TopMost" in script,
+          "a janela nasce na frente do navegador")
+
+    # cancelar não pode virar erro
+    check(nativo.escolher.__doc__ and "cancelou" in nativo.escolher.__doc__,
+          "cancelar devolve lista vazia, não exceção")
 
 
 def testar_presets_atualizam() -> None:

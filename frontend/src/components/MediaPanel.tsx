@@ -39,6 +39,28 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
 
   const mainHdr = project.info?.is_hdr
 
+  /** A JANELA DO SISTEMA. O explorador de dentro do app fica só como recuo
+   *  para quando ela não abrir — importar um MP3 não pode custar aprender um
+   *  explorador de arquivos novo. */
+  async function abrirJanela(kind: 'video' | 'audio' | 'image') {
+    const titulo = kind === 'audio' ? 'Escolher a música'
+      : kind === 'image' ? 'Escolher a imagem' : 'Escolher o vídeo'
+    try {
+      const r = await api.escolher(kind, titulo)
+      if (r.cancelado) return
+      await addMedia(r.path, kind)
+      if (kind === 'audio') {
+        toast('info', 'Música importada',
+          'Clique em "usar como trilha" no card dela para pôr no trilho.')
+      }
+    } catch (e: any) {
+      setPicking(kind)          // 501: esta máquina não abre a janela
+      if (!String(e.message ?? '').includes('janela')) {
+        toast('warn', 'Abri o explorador de dentro do app', String(e.message ?? e))
+      }
+    }
+  }
+
   return (
     <div className="p-4 space-y-5 max-w-5xl">
       {/* --------------------------------------------------- biblioteca */}
@@ -48,9 +70,12 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
             Mídia do projeto
           </h3>
           <div className="ml-auto flex gap-1.5">
-            <button className="btn btn-xs" onClick={() => setPicking('video')}>+ vídeo</button>
-            <button className="btn btn-xs" onClick={() => setPicking('image')}>+ foto/PNG</button>
-            <button className="btn btn-xs" onClick={() => setPicking('audio')}>+ trilha</button>
+            <button className="btn btn-xs" onClick={() => abrirJanela('video')}>
+              + vídeo</button>
+            <button className="btn btn-xs" onClick={() => abrirJanela('image')}>
+              + foto/PNG</button>
+            <button className="btn btn-xs btn-primary"
+                    onClick={() => abrirJanela('audio')}>+ música</button>
           </div>
         </div>
         {!media.length && <p className="hint">Nada importado ainda.</p>}

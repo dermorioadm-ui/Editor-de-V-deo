@@ -20,13 +20,27 @@ from pathlib import Path
 from ..config import FFMPEG
 from ..ffmpeg_utils import probe, run_with_progress
 
-LADO_MAIOR = 854         # 480p na vertical: 480x854
+# PRÓPOSITO: ser FEIA e leve. A prévia serve para você ver ONDE cortar, não
+# para julgar qualidade de imagem — quem julga isso é o arquivo exportado.
+# Medido num vídeo de 60 s, 1080x1920 a 13 Mbps (98 MB):
+#
+#   lado  crf  gop |    MB   custo de buscar
+#    854   30   15 |  3,18       74 ms
+#    640   31   12 |  2,35       76 ms
+#    480   32   10 |  1,76       64 ms   <- escolhido
+#    360   33   10 |  1,40       64 ms
+#
+# 480 é onde a curva vira: 56x menor que a fonte, busca mais rápida, e ainda
+# dá para reconhecer o rosto e a boca — que é tudo o que a prévia precisa.
+# O GOP de 10 (um terço de segundo) é o que faz o pulo de bloco em bloco ser
+# barato: tocar a edição é buscar o tempo todo.
+LADO_MAIOR = 480         # 270x480 num vídeo 9:16
 FPS = 30
-CRF = 30
-GOP = 15                 # keyframe a cada 0,5 s: scrub rápido no navegador
+CRF = 32
+GOP = 10                 # keyframe a cada 0,33 s: pulo de bloco barato
 
 # Abaixo disto o arquivo já é leve e o proxy só gastaria tempo e disco.
-MIN_PIXELS = 640 * 1136
+MIN_PIXELS = 480 * 854
 MIN_FPS = 31.0
 
 
@@ -50,13 +64,13 @@ def build_proxy(source: str | Path, dest: Path, duration: float,
     tmp = dest.with_suffix(".parcial.mp4")
     args = [
         FFMPEG, "-y", "-v", "error", "-nostdin", "-i", str(source),
-        # a caixa de 854 preserva a proporção e serve tanto vertical quanto
+        # a caixa quadrada preserva a proporção e serve tanto vertical quanto
         # horizontal; o segundo scale garante dimensão par para o yuv420p
         "-vf", (f"scale={LADO_MAIOR}:{LADO_MAIOR}:force_original_aspect_ratio=decrease,"
                 f"scale=trunc(iw/2)*2:trunc(ih/2)*2"),
         "-r", str(FPS),
         "-c:v", "libx264", "-preset", "veryfast", "-crf", str(CRF),
-        "-g", str(GOP), "-pix_fmt", "yuv420p",
+        "-g", str(GOP), "-sc_threshold", "0", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "96k", "-ac", "1",
         "-movflags", "+faststart", str(tmp),
     ]

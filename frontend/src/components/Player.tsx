@@ -8,6 +8,12 @@ import { setPlayhead, setState, usePlayhead, useStore } from '../state/store'
 interface Props {
   projectId: string
   blocks: Clip[]
+  /** Resolução da FONTE, [largura, altura]. É a régua em que fontsize, margem
+   *  e contorno do estilo estão escritos — e a mesma que o ASS usa como
+   *  PlayRes na exportação. NÃO é a resolução do que está tocando: com a
+   *  prévia leve, o elemento de vídeo tem 854 de altura contra 1920 da fonte,
+   *  e usar a dele deixava a legenda 2,25x maior. */
+  sourceSize?: [number, number] | null
   cues: SubtitleCue[]
   duration: number
   style: any
@@ -26,6 +32,7 @@ interface Props {
  * legenda por cima.
  */
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
+                                sourceSize,
                                  previewUrl, onRequestPreview, previewBusy,
                                  proxyUrl }: Props) {
   const video = useRef<HTMLVideoElement>(null)
@@ -295,8 +302,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         {!linear && proxyUrl && (
           <span className="absolute top-1.5 left-1.5 chip border-emerald-800/70
                            text-emerald-300 bg-ink-900/80"
-                title="Tocando uma cópia leve para não engasgar. A exportação lê o
-                       arquivo original em qualidade cheia.">
+                title="Tocando uma cópia de 480p, feia de propósito, para a edição
+                       não engasgar. A exportação lê o arquivo original em
+                       qualidade cheia.">
             prévia leve
           </span>
         )}
@@ -312,31 +320,63 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           </div>
         )}
         {cue && !linear && box.height > 0 && (() => {
-          // O ASS usa PlayResY = altura do vídeo, então fontsize, margem e
-          // contorno estão todos na régua do vídeo. Basta a mesma proporção
-          // aqui para a prévia sair igual à exportação.
-          const k = box.height / Math.max(box.vh, 1)
+          // A RÉGUA É A DA FONTE. O ASS é escrito com PlayRes = resolução da
+          // fonte, e é nela que fontsize, margem e contorno estão medidos.
+          // Usar a altura do ELEMENTO era o bug: com a prévia leve tocando, o
+          // elemento tem 854 de altura contra 1920 da fonte, e a legenda saía
+          // 2,25x maior que na exportação.
+          const playH = sourceSize?.[1] || box.vh || 1920
+          const k = box.height / Math.max(playH, 1)
+          const fs = style?.fontsize ?? 35
+
+          // Medido com o filtro ass do próprio ffmpeg, Arial/Liberation:
+          //
+          //   altura de maiúscula = 0,640 x fontsize   (em 35, 50, 64, 80, 100)
+          //   avanço de linha     = 1,000 x fontsize   (exato)
+          //   contorno cresce     = 1,0 x outline PARA FORA de cada lado
+          //   base da tinta fica  = margin_v + 0,172 x fontsize do fundo
+          //
+          // O fontsize do ASS NÃO é font-size de CSS: o libass imita o GDI e
+          // escala a fonte para que ascent-descent caiba no fontsize, enquanto
+          // o CSS escala pelo em. Para Arial isso dá 2048/2288 = 0,895 — sem
+          // esse fator a prévia sai 11% maior que a exportação.
+          const ASS_PARA_CSS = 0.895
+          const DESCIDA = 0.172
           return (
             <div className="absolute pointer-events-none text-center"
                  style={{
                    left: box.left + (style?.margin_l ?? 60) * k,
                    width: Math.max(
                      10, box.width - ((style?.margin_l ?? 60) + (style?.margin_r ?? 60)) * k),
+                   // margin_v é medido do fundo do quadro até a base da CAIXA
+                   // DE LINHA; a tinta para 0,172 x fontsize acima disso
                    bottom: `calc(100% - ${box.top + box.height}px + ${
-                     (style?.margin_v ?? 220) * k}px)`,
+                     ((style?.margin_v ?? 220) + fs * DESCIDA) * k}px)`,
                  }}>
-              <span className="inline-block leading-tight"
+              <span className="inline-block"
                     style={{
                       // 'pre': o ASS está em WrapStyle 2, que NÃO quebra linha
                       // sozinho. Quem decide a quebra é o linebreak.py; o CSS
                       // não pode inventar mais nenhuma.
                       whiteSpace: 'pre',
-                      fontSize: `${Math.max(6, (style?.fontsize ?? 35) * k)}px`,
-                      fontWeight: style?.bold ? 800 : 500,
+                      fontFamily: `"${style?.font ?? 'Arial'}", Arial, Helvetica, sans-serif`,
+                      fontSize: `${Math.max(6, fs * ASS_PARA_CSS * k)}px`,
+                      // o avanço de linha do ASS é o fontsize cravado; usar
+                      // leading-tight (1,25) esticava a legenda de 2 linhas 12%
+                      lineHeight: `${Math.max(7, fs * k)}px`,
+                      fontWeight: style?.bold ? 700 : 400,
                       color: style?.primary ?? '#fff',
+                      // -webkit-text-stroke é CENTRADO (metade entra no glifo);
+                      // o contorno do ASS cresce inteiro para fora. Daí o 2x.
                       WebkitTextStroke: `${Math.max(
-                        0.5, (style?.outline ?? 4) * k)}px ${style?.outline_color ?? '#000'}`,
+                        0.5, (style?.outline ?? 4) * 2 * k)}px ${
+                        style?.outline_color ?? '#000'}`,
                       paintOrder: 'stroke fill',
+                      // sombra: deslocamento de S px para a direita e para
+                      // baixo, que a prévia simplesmente não desenhava
+                      textShadow: (style?.shadow ?? 0) > 0
+                        ? `${(style.shadow ?? 0) * k}px ${(style.shadow ?? 0) * k}px 0 rgba(0,0,0,.75)`
+                        : undefined,
                       textTransform: style?.uppercase ? 'uppercase' : 'none',
                     }}>
                 {cue.text}
