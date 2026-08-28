@@ -247,6 +247,14 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                          cues: list[dict], ass_dir: Path,
                          media_paths: dict, hw: str | None) -> tuple[list[str], list[str]]:
     width, height = target_size(main, plan.export)
+    # RÉGUA DA LEGENDA: o ASS é escrito sempre na resolução da FONTE, nunca na
+    # do render. O fontsize, o contorno e as margens do estilo são pixels
+    # absolutos, calibrados para a fonte por escalar_legenda(); PlayRes na
+    # resolução do render fazia a mesma legenda ocupar 47% da largura no
+    # export 1080, 71% no 720 e 100% no 480 — de ponta a ponta da tela. Com
+    # PlayRes fixo, o libass escala tudo junto e dá 47,5% nas três. (Medido
+    # com o filtro ass do próprio ffmpeg, texto "ISSO MUDA TUDO".)
+    play_w, play_h = main.display_size
     fps = main.fps or 30.0
     inputs: list[str] = []
     pre: list[str] = []
@@ -356,7 +364,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     if plan.export.burn_subtitles and cues:
         window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
-        ass_mod.write_ass(ass_path, cues, plan.style, width, height,
+        ass_mod.write_ass(ass_path, cues, plan.style, play_w, play_h,
                           time_offset=-seg.t_start,
                           window=(seg.t_start - 0.5, window_end))
         tail.append(F.subtitle_chain(ass_path))

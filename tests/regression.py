@@ -22,6 +22,7 @@ Cada teste aqui corresponde a um bug que existiu:
 """
 from __future__ import annotations
 
+import shutil
 import os
 import sys
 import tempfile
@@ -131,8 +132,18 @@ def main() -> int:
     # ---- 4) overlay reancorado depois de um corte anterior -------------
     tl = client.get(f"/api/projects/{pid}").json()["timeline"]
     fim = tl["duration"]
-    client.post(f"/api/projects/{pid}/overlays",
-                json={"media_id": "x", "out_start": fim - 3.0, "out_end": fim - 1.0})
+    # media_id de mentira era aceito e o overlay sumia calado no render;
+    # agora a rota recusa, então o teste usa uma imagem de verdade
+    import subprocess as _sp0
+    selo = tmp / "selo.png"
+    _sp0.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+              "-i", "color=c=red:s=200x200", "-frames:v", "1", str(selo)], check=True)
+    mselo = client.post(f"/api/projects/{pid}/media",
+                        json={"path": str(selo), "kind": "image"}).json()
+    r_ov = client.post(f"/api/projects/{pid}/overlays",
+                       json={"media_id": mselo["id"], "out_start": fim - 3.0,
+                             "out_end": fim - 1.0})
+    check(r_ov.status_code == 200, f"overlay com mídia real entra ({r_ov.status_code})")
     blocos = tl["blocks"]
     b0 = blocos[0]
     r = client.post(f"/api/projects/{pid}/ops/delete-range",
@@ -271,6 +282,8 @@ def main() -> int:
     testar_assobio_nao_vira_palma()
     testar_marcador_nao_desfaz()
     testar_retomada_sem_teto()
+    testar_anexo_nao_come_palavra()
+    testar_legenda_na_mesma_regua()
     testar_presets_atualizam()
 
     print()
@@ -1046,6 +1059,144 @@ def testar_retomada_sem_teto() -> None:
         sobra = (2.0 + espera) - t
         check(sobra <= 0.35,
               f"espera de {espera:.0f} s: sobra {sobra * 1000:.0f} ms de vazio")
+
+
+def testar_anexo_nao_come_palavra() -> None:
+    """Cobertura mais curta que a janela cortava o fim da frase.
+
+    O caminho: o ffmpeg entrega um segmento curto, render_video_segments grava
+    a duração medida, export soma essa duração menor, build_audio_track pede um
+    alvo menor e _resample_exact corta o PCM em samples[:alvo]. O fim da frase
+    some, e o único sintoma era um aviso de texto invertido. Regra 3, quebrada
+    em silêncio, sem nenhum teste em cima.
+    """
+    from editor.anexos import AnexoInvalido, encaixar, sem_sobreposicao, validar
+
+    video = {"id": "v1", "kind": "video", "name": "corte.mp4",
+             "info": {"duration": 2.0}}
+    imagem = {"id": "i1", "kind": "image", "name": "selo.png", "info": {}}
+    midias = [video, imagem]
+
+    # 1) a janela ENCOLHE para o que a mídia cobre — nunca o contrário
+    j = encaixar(video, out_start=10.0, out_end=16.0, limite=60.0)
+    check(abs((j.out_end - j.out_start) - 2.0) < 0.01,
+          f"janela de 6 s com mídia de 2 s virou {j.out_end - j.out_start:.2f} s")
+    check(any("encurtei" in a for a in j.ajustes),
+          "o encurtamento é dito, não feito escondido")
+
+    # e com velocidade: 2x consome o dobro da mídia por segundo de saída
+    j2 = encaixar(video, 10.0, 16.0, speed=2.0, limite=60.0)
+    check(abs((j2.out_end - j2.out_start) - 1.0) < 0.01,
+          f"a 2x a mesma mídia cobre metade ({j2.out_end - j2.out_start:.2f} s)")
+
+    # já o media_start come da sobra
+    j3 = encaixar(video, 10.0, 16.0, media_start=1.5, limite=60.0)
+    check(abs((j3.out_end - j3.out_start) - 0.5) < 0.01,
+          f"entrando em 1,5 s sobra 0,5 s ({j3.out_end - j3.out_start:.2f} s)")
+
+    # 2) mídia que não existe: erro na hora de pedir, não no render
+    for alvo, esperado in (("", "faltou"), ("nao_existe", "não está no projeto")):
+        try:
+            validar(midias, alvo, "video")
+            check(False, f"mídia '{alvo}' deveria ter sido recusada")
+        except AnexoInvalido as exc:
+            check(esperado in str(exc), f"mídia '{alvo}' recusada: {exc}")
+
+    # 3) tipo trocado nos dois sentidos
+    try:
+        validar(midias, "i1", "video")
+        check(False, "imagem como cobertura deveria ser recusada")
+    except AnexoInvalido as exc:
+        check("imagem" in str(exc), f"imagem não vira cobertura: {exc}")
+    try:
+        validar(midias, "v1", "image")
+        check(False, "vídeo como sobreposição deveria ser recusado")
+    except AnexoInvalido as exc:
+        check("vídeo" in str(exc), f"vídeo não vira sobreposição: {exc}")
+
+    # 4) fora do vídeo
+    try:
+        encaixar(video, 70.0, 72.0, limite=60.0)
+        check(False, "instante fora do vídeo deveria ser recusado")
+    except AnexoInvalido as exc:
+        check("fora do vídeo" in str(exc), f"anexo fora do vídeo recusado: {exc}")
+    j4 = encaixar(video, 59.0, 62.0, limite=60.0)
+    check(j4.out_end <= 60.0 and any("passava" in a for a in j4.ajustes),
+          f"o que passava do fim foi aparado ({j4.out_end:.1f} s)")
+
+    # 5) duas coberturas no mesmo lugar: o render descartava a segunda calado
+    class Falso:
+        def __init__(self, a, b):
+            self.id, self.out_start, self.out_end, self.enabled = "c1", a, b, True
+    try:
+        sem_sobreposicao([Falso(4.0, 8.0)], 6.0, 10.0)
+        check(False, "cobertura sobreposta deveria ser recusada")
+    except AnexoInvalido as exc:
+        check("no mesmo lugar" in str(exc), f"cobertura sobreposta recusada: {exc}")
+    sem_sobreposicao([Falso(4.0, 8.0)], 8.0, 12.0)
+    check(True, "encostar não é sobrepor")
+    sem_sobreposicao([Falso(4.0, 8.0)], 6.0, 10.0, ignorar="c1")
+    check(True, "arrastar a própria cobertura não colide consigo mesma")
+
+    # 6) sobra curta demais vira erro, não sujeira no concat
+    try:
+        encaixar({"id": "v", "kind": "video", "info": {"duration": 0.1}},
+                 1.0, 5.0, limite=60.0)
+        check(False, "janela de 0,1 s deveria ser recusada")
+    except AnexoInvalido as exc:
+        check("curta demais" in str(exc), f"janela mínima respeitada: {exc}")
+
+
+def testar_legenda_na_mesma_regua() -> None:
+    """A legenda queimada tem que ocupar a MESMA fatia da tela em toda saída.
+
+    O ASS era escrito com PlayRes = resolução do RENDER, mas fontsize, contorno
+    e margens do estilo são pixels absolutos calibrados para a FONTE. Medido
+    com o filtro ass do ffmpeg, texto "ISSO MUDA TUDO", estilo de 1080x1920:
+
+        export 1080x1920 -> 47,4% da largura
+        export  720x1280 -> 71,1%
+        export  480x854  -> 100,0%   (de ponta a ponta da tela)
+
+    A prévia 480p renderizada passava pelo mesmo caminho — é parte do motivo
+    de a legenda aparecer gigante nela.
+    """
+    import subprocess
+
+    import numpy as np
+
+    from editor.config import SubtitleStyle
+    from editor.subtitles.ass import write_ass
+
+    tmp = Path(tempfile.mkdtemp(prefix="legenda_regua_"))
+    st = SubtitleStyle()
+    st.fontsize, st.margin_v, st.outline, st.shadow = 66, 414, 7.5, 1.9
+    cues = [{"start": 0.0, "end": 2.0, "text": "ISSO MUDA TUDO"}]
+
+    def fatia(w: int, h: int) -> float:
+        ass = tmp / f"s_{w}.ass"
+        write_ass(ass, cues, st, 1080, 1920)   # PlayRes = a FONTE, sempre
+        png = tmp / f"s_{w}.png"
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                        "-i", f"color=c=black:s={w}x{h}:d=1",
+                        "-vf", f"ass='{ass}'", "-frames:v", "1", str(png)],
+                       check=True)
+        cru = subprocess.run(["ffmpeg", "-v", "error", "-i", str(png),
+                              "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, check=True).stdout
+        img = np.frombuffer(cru, np.uint8).reshape(h, w)
+        cols = np.where(img.max(axis=0) > 40)[0]
+        return (cols[-1] - cols[0] + 1) / w if cols.size else 0.0
+
+    medidas = {f"{w}x{h}": fatia(w, h)
+               for w, h in ((1080, 1920), (720, 1280), (480, 854))}
+    espalha = max(medidas.values()) - min(medidas.values())
+    check(espalha < 0.02,
+          "a legenda ocupa a mesma fatia em toda resolução ("
+          + ", ".join(f"{k} {v*100:.1f}%" for k, v in medidas.items()) + ")")
+    check(all(v < 0.60 for v in medidas.values()),
+          f"nenhuma saída tem legenda de ponta a ponta (máx {max(medidas.values())*100:.0f}%)")
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_presets_atualizam() -> None:

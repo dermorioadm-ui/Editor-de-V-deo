@@ -538,10 +538,13 @@ export default function Timeline(props: Props) {
     return best?.clap ?? null
   }
 
+  // O trilho de Desfoque declara accepts: [] — não recebe arquivo nenhum, e
+  // por isso não pode acender como alvo de drop.
   const trilhoEm = (y: number): string | null => {
     for (let i = 0; i < extras.length; i++) {
       const y0 = yTracks + i * (ROW.track + 2)
-      if (y >= y0 - 2 && y <= y0 + ROW.track + 2) return extras[i].id
+      if (y < y0 - 2 || y > y0 + ROW.track + 2) continue
+      return (extras[i].accepts ?? []).length ? extras[i].id : null
     }
     return null
   }
@@ -809,12 +812,15 @@ export default function Timeline(props: Props) {
                 }}
                 onDragLeave={() => setDropAlvo(null)}
                 onDrop={(e) => {
+                  // preventDefault SEMPRE, antes de qualquer decisão: sem ele,
+                  // soltar o arquivo fora de um trilho faz o NAVEGADOR ABRIR o
+                  // arquivo, e a sessão de edição morre junto com a página.
+                  e.preventDefault()
                   const { y } = pos(e as unknown as React.MouseEvent)
                   const alvo = trilhoEm(y)
                   setDropAlvo(null)
                   const f = e.dataTransfer.files?.[0]
                   if (!alvo || !f) return
-                  e.preventDefault()
                   props.onDropFile(alvo, f)
                 }}
                 onMouseDown={onMouseDown}

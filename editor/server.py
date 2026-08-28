@@ -17,7 +17,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
                                Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
-from . import config as _config, db, presets as presets_mod, \
+from . import anexos, config as _config, db, presets as presets_mod, \
     projects as svc, video_analysis
 from .config import (STATIC_DIR, AudioParams, CutParams, ExportParams,
                      SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs,
@@ -154,10 +154,16 @@ def browse(path: str = Query("")) -> dict:
             "entries": entries[:2000]}
 
 
+# Música ficou de fora na primeira versão, e era justamente a pasta de quem
+# arrasta uma trilha para o trilho A1: o arquivo estava em ~/Música e o app
+# dizia "não achei nas pastas conhecidas".
 SEARCH_DIRS = ("Videos", "Vídeos", "Movies", "Desktop", "Área de Trabalho",
-               "Downloads", "Documents", "Documentos", "OneDrive",
-               "OneDrive/Vídeos", "OneDrive/Videos", "OneDrive/Desktop",
-               "OneDrive/Documentos", "OneDrive/Documents")
+               "Downloads", "Documents", "Documentos",
+               "Music", "Música", "Musicas", "Músicas", "Pictures", "Imagens",
+               "OneDrive", "OneDrive/Vídeos", "OneDrive/Videos",
+               "OneDrive/Desktop", "OneDrive/Documentos", "OneDrive/Documents",
+               "OneDrive/Música", "OneDrive/Music", "OneDrive/Imagens",
+               "OneDrive/Pictures")
 
 
 @app.post("/api/locate")
@@ -1021,16 +1027,27 @@ def api_add_media(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/cutaways")
 def api_cutaway(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    cut = Cutaway(media_id=payload["media_id"],
-                  out_start=float(payload["out_start"]),
-                  out_end=float(payload["out_end"]),
-                  media_start=float(payload.get("media_start", 0.0)),
-                  speed=float(payload.get("speed", 1.0)))
+    try:
+        midia = anexos.validar(svc.list_media(pid),
+                               str(payload.get("media_id") or ""), "video")
+        janela = anexos.encaixar(
+            midia, float(payload.get("out_start", 0.0)),
+            float(payload.get("out_end", 0.0)),
+            float(payload.get("media_start", 0.0)),
+            float(payload.get("speed", 1.0)),
+            limite=svc.duracao_de_saida(project))
+        anexos.sem_sobreposicao(project.plan.cutaways,
+                                janela.out_start, janela.out_end)
+    except anexos.AnexoInvalido as exc:
+        raise HTTPException(400, str(exc)) from exc
+    cut = Cutaway(media_id=midia["id"],
+                  out_start=janela.out_start, out_end=janela.out_end,
+                  media_start=janela.media_start, speed=janela.speed)
     if payload.get("fit"):
         cut.fit.update(payload["fit"])
     project.plan.cutaways.append(cut)
     project.save_plan()
-    return {"ok": True, "cutaway": cut.to_dict(),
+    return {"ok": True, "cutaway": cut.to_dict(), "ajustes": janela.ajustes,
             "timeline": svc.timeline_summary(project)}
 
 
@@ -1039,13 +1056,28 @@ def api_cutaway_update(pid: str, cid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     for c in project.plan.cutaways:
         if c.id == cid:
-            for k in ("out_start", "out_end", "media_start", "speed"):
-                if k in payload:
-                    setattr(c, k, float(payload[k]))
             if "enabled" in payload:
                 c.enabled = bool(payload["enabled"])
             if payload.get("fit"):
                 c.fit.update(payload["fit"])
+            if any(k in payload for k in
+                   ("out_start", "out_end", "media_start", "speed")):
+                # arrastar a borda passa pela MESMA trava do POST: encolher a
+                # janela para além do que a mídia cobre corta o áudio junto
+                try:
+                    midia = anexos.validar(svc.list_media(pid), c.media_id, "video")
+                    j = anexos.encaixar(
+                        midia, float(payload.get("out_start", c.out_start)),
+                        float(payload.get("out_end", c.out_end)),
+                        float(payload.get("media_start", c.media_start)),
+                        float(payload.get("speed", c.speed)),
+                        limite=svc.duracao_de_saida(project))
+                    anexos.sem_sobreposicao(project.plan.cutaways,
+                                            j.out_start, j.out_end, ignorar=c.id)
+                except anexos.AnexoInvalido as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                c.out_start, c.out_end = j.out_start, j.out_end
+                c.media_start, c.speed = j.media_start, j.speed
             project.save_plan()
             return {"ok": True, "cutaway": c.to_dict()}
     raise HTTPException(404, "cutaway não encontrado")
@@ -1119,9 +1151,17 @@ def api_insert(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/overlays")
 def api_overlay(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    o = Overlay(media_id=payload["media_id"],
-                out_start=float(payload.get("out_start", 0.0)),
-                out_end=float(payload.get("out_end", 3.0)),
+    try:
+        midia = anexos.validar(svc.list_media(pid),
+                               str(payload.get("media_id") or ""), "image")
+        janela = anexos.encaixar(midia, float(payload.get("out_start", 0.0)),
+                                 float(payload.get("out_end", 3.0)),
+                                 limite=svc.duracao_de_saida(project))
+    except anexos.AnexoInvalido as exc:
+        raise HTTPException(400, str(exc)) from exc
+    o = Overlay(media_id=midia["id"],
+                out_start=janela.out_start,
+                out_end=janela.out_end,
                 x=float(payload.get("x", 0.5)), y=float(payload.get("y", 0.2)),
                 scale=float(payload.get("scale", 1.0)),
                 opacity=float(payload.get("opacity", 1.0)),
@@ -1131,7 +1171,7 @@ def api_overlay(pid: str, payload: dict = Body(...)) -> dict:
                 dur_out=float(payload.get("dur_out", 0.35)))
     project.plan.overlays.append(o)
     project.save_plan()
-    return {"ok": True, "overlay": o.to_dict()}
+    return {"ok": True, "overlay": o.to_dict(), "ajustes": janela.ajustes}
 
 
 @app.put("/api/projects/{pid}/overlays/{oid}")

@@ -870,6 +870,18 @@ def build_tracks(project: "Project", blocks: list[dict],
     ]
 
 
+def duracao_de_saida(project: Project) -> float:
+    """Quanto dura o vídeo montado — 0 quando ainda não há plano nenhum.
+
+    Antes da análise não existe bloco, e a duração do resumo é 0: sem o recuo
+    para a duração da fonte, todo anexo cairia "fora do vídeo".
+    """
+    d = float(timeline_summary(project).get("duration") or 0.0)
+    if d <= 0.01 and project.info:
+        d = float(project.info.duration or 0.0)
+    return d
+
+
 def timeline_summary(project: Project) -> dict:
     plan = project.plan
     tl = Timeline(plan.active_clips, project.info.fps if project.info else None)

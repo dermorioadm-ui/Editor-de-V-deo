@@ -108,7 +108,9 @@ def export_project(
     ass_path = dest.with_suffix(".ass")
     srt_path.write_text(ass_mod.build_srt(cues_final, plan.style.uppercase),
                         encoding="utf-8")
-    ass_mod.write_ass(ass_path, cues_final, plan.style, width, height)
+    # o .ass entregue ao lado do MP4 usa a MESMA régua do que foi queimado:
+    # a resolução da fonte, não a do render (ver renderer.py)
+    ass_mod.write_ass(ass_path, cues_final, plan.style, *main.display_size)
 
     warnings: list[str] = list(pre_warnings)
     src_bitrate = main.v_bitrate or main.bitrate
