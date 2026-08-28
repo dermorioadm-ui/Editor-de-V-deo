@@ -24,7 +24,26 @@ def _default_data_dir() -> Path:
     return base / APP_NAME
 
 
+def _default_output_dir() -> Path:
+    """Onde o vídeo pronto é salvo.
+
+    NUNCA dentro da pasta de dados do app: no Windows ela fica em
+    AppData\\Local, que é oculta por padrão — o usuário exportava e não
+    achava o arquivo. O vídeo pronto vai para a pasta de Vídeos, que é onde
+    uma pessoa procura um vídeo.
+    """
+    env = os.environ.get("EDITOR_OUTPUT_DIR")
+    if env:
+        return Path(env).expanduser()
+    casa = Path.home()
+    for nome in ("Vídeos", "Videos", "Movies", "Filmes"):
+        if (casa / nome).is_dir():
+            return casa / nome / "Editor de Vídeo"
+    return casa / "Editor de Vídeo"
+
+
 DATA_DIR = _default_data_dir()
+OUTPUT_DIR = _default_output_dir()
 PROJECTS_DIR = DATA_DIR / "projects"
 CACHE_DIR = DATA_DIR / "cache"
 MEDIA_DIR = DATA_DIR / "media"
@@ -53,6 +72,19 @@ WHISPER_COMPUTE = os.environ.get("EDITOR_WHISPER_COMPUTE", "")
 def ensure_dirs() -> None:
     for d in (DATA_DIR, PROJECTS_DIR, CACHE_DIR, MEDIA_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def output_dir() -> Path:
+    """A pasta de saída ATUAL (o usuário pode ter mudado)."""
+    from . import db
+
+    try:
+        escolhida = db.get_setting("output_dir")
+    except Exception:  # noqa: BLE001 — antes do banco existir
+        escolhida = None
+    alvo = Path(escolhida).expanduser() if escolhida else OUTPUT_DIR
+    alvo.mkdir(parents=True, exist_ok=True)
+    return alvo
 
 
 def _find_bin(name: str) -> str:

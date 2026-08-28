@@ -17,9 +17,12 @@ export default function ExportPanel({ onChanged }: Props) {
   const [presetName, setPresetName] = useState('')
   const [hw, setHw] = useState('')
   const [health, setHealth] = useState<any>(null)
+  const [outDir, setOutDir] = useState<any>(null)
+  const [editandoPasta, setEditandoPasta] = useState(false)
 
   useEffect(() => { setParams(project?.plan?.export ?? {}) }, [project?.plan?.export])
   useEffect(() => { api.health().then(setHealth).catch(() => {}) }, [])
+  useEffect(() => { api.outputDir().then(setOutDir).catch(() => {}) }, [])
 
   // colhe o resultado dos jobs de exportação/validação
   useEffect(() => {
@@ -60,6 +63,58 @@ export default function ExportPanel({ onChanged }: Props) {
 
   return (
     <div className="p-4 space-y-5 max-w-4xl">
+      {/* ------------------------------------------------ onde o vídeo cai */}
+      <section className="card border-emerald-900/50 bg-emerald-950/15 p-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-xs font-semibold text-emerald-300 uppercase
+                         tracking-wide">
+            O vídeo pronto vai para
+          </h3>
+          <button className="btn btn-xs ml-auto"
+                  onClick={async () => {
+                    try { await api.reveal(outDir?.path) } catch {
+                      toast('warn', 'Não deu para abrir', outDir?.path ?? '')
+                    }
+                  }}>
+            📁 abrir a pasta
+          </button>
+          <button className="btn btn-xs"
+                  onClick={() => setEditandoPasta((v) => !v)}>
+            {editandoPasta ? 'cancelar' : 'trocar'}
+          </button>
+        </div>
+        <p className="font-mono text-[11px] text-emerald-200 mt-1 break-all">
+          {outDir?.path ?? 'carregando…'}
+        </p>
+        {editandoPasta && (
+          <div className="flex gap-1.5 mt-2">
+            <input className="field py-1 text-xs flex-1"
+                   defaultValue={outDir?.path ?? ''}
+                   placeholder="cole o caminho da pasta"
+                   onKeyDown={async (e) => {
+                     if (e.key !== 'Enter') return
+                     try {
+                       const r = await api.setOutputDir(
+                         (e.target as HTMLInputElement).value)
+                       setOutDir({ ...outDir, path: r.path })
+                       setEditandoPasta(false)
+                       toast('ok', 'Pasta de saída trocada', r.path)
+                     } catch (err: any) {
+                       toast('error', 'Pasta inválida', String(err.message ?? err))
+                     }
+                   }} />
+            <button className="btn btn-xs"
+                    onClick={async () => {
+                      const r = await api.setOutputDir('')
+                      setOutDir({ ...outDir, path: r.path })
+                      setEditandoPasta(false)
+                    }}>
+              voltar ao padrão
+            </button>
+          </div>
+        )}
+      </section>
+
       <section className="card p-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
           Parâmetros de saída
@@ -183,8 +238,18 @@ export default function ExportPanel({ onChanged }: Props) {
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
               Resultado
             </h3>
-            <a className="btn btn-xs ml-auto" href={result.download} download>
-              baixar / abrir
+            <button className="btn btn-xs btn-primary ml-auto" disabled={busy}
+                    onClick={async () => {
+                      try {
+                        await api.reveal(result.output)
+                      } catch {
+                        toast('warn', 'Não deu para abrir a pasta', result.output)
+                      }
+                    }}>
+              📁 abrir a pasta
+            </button>
+            <a className="btn btn-xs" href={result.download} download>
+              baixar cópia
             </a>
             <button className="btn btn-xs btn-primary" disabled={busy}
                     onClick={async () => {
@@ -204,7 +269,10 @@ export default function ExportPanel({ onChanged }: Props) {
                     ok={Math.abs(result.drift) < 0.05} />
             <Metric label="trechos" value={String(result.segments?.length ?? 0)} />
           </div>
-          <p className="font-mono text-[10px] text-slate-500 mt-2 break-all">
+          <p className="text-xs text-slate-300 mt-2">
+            O arquivo está em:
+          </p>
+          <p className="font-mono text-[11px] text-emerald-300 mt-0.5 break-all">
             {result.output}
           </p>
           {result.warnings?.map((w: string, i: number) => (

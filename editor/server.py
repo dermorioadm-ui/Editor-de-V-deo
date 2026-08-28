@@ -17,7 +17,8 @@ from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
                                Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
-from . import db, presets as presets_mod, projects as svc, video_analysis
+from . import config as _config, db, presets as presets_mod, \
+    projects as svc, video_analysis
 from .config import (STATIC_DIR, AudioParams, CutParams, ExportParams,
                      SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs,
                      ffmpeg_available, WHISPER_MODEL)
@@ -408,6 +409,65 @@ def api_look(pid: str, payload: dict = Body(...)) -> dict:
     return {"ok": True, "look": look,
             "vignette": project.plan.look_vignette,
             "timeline": svc.timeline_summary(project)}
+
+
+@app.get("/api/output-dir")
+def api_output_dir() -> dict:
+    """Onde o vídeo pronto é salvo."""
+    from .config import output_dir
+
+    d = output_dir()
+    return {"path": str(d), "exists": d.is_dir(),
+            "default": str(_config.OUTPUT_DIR)}
+
+
+@app.post("/api/output-dir")
+def api_set_output_dir(payload: dict = Body(...)) -> dict:
+    """Muda a pasta de saída."""
+    from .config import OUTPUT_DIR, output_dir
+
+    caminho = str(payload.get("path", "")).strip()
+    if not caminho:
+        db.set_setting("output_dir", None)
+        return {"path": str(output_dir())}
+    alvo = Path(caminho).expanduser()
+    try:
+        alvo.mkdir(parents=True, exist_ok=True)
+        teste = alvo / ".escrita-ok"
+        teste.write_text("ok", encoding="utf-8")
+        teste.unlink()
+    except OSError as exc:
+        raise HTTPException(400, f"não dá para escrever em {alvo}: {exc}") from exc
+    db.set_setting("output_dir", str(alvo))
+    return {"path": str(alvo), "default": str(OUTPUT_DIR)}
+
+
+@app.post("/api/reveal")
+def api_reveal(payload: dict = Body(...)) -> dict:
+    """Abre a pasta do arquivo no explorador de arquivos do sistema.
+
+    O usuário exporta e quer VER o arquivo. Mandar ele procurar um caminho
+    escrito na tela não é entregar nada.
+    """
+    import subprocess
+
+    alvo = Path(str(payload.get("path", ""))).expanduser()
+    if not alvo.exists():
+        raise HTTPException(404, f"não existe: {alvo}")
+    try:
+        if sys.platform.startswith("win"):
+            if alvo.is_file():
+                subprocess.Popen(["explorer", "/select,", str(alvo)])
+            else:
+                subprocess.Popen(["explorer", str(alvo)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R" if alvo.is_file() else "", str(alvo)]
+                             if alvo.is_file() else ["open", str(alvo)])
+        else:
+            subprocess.Popen(["xdg-open", str(alvo if alvo.is_dir() else alvo.parent)])
+    except OSError as exc:
+        raise HTTPException(500, f"não deu para abrir: {exc}") from exc
+    return {"ok": True, "path": str(alvo)}
 
 
 @app.get("/api/presets")

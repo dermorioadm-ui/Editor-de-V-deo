@@ -15,7 +15,8 @@ from .audio.segments import split_narrative
 from .audio.clap import build_discarded_takes, detect_claps
 from .audio.envelope import Envelope, compute_envelope
 from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
-                     SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs)
+                     SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs,
+                     output_dir)
 from .edit.audit import audit_edges, audit_summary, settle_edges
 from .edit.plan_builder import (build_auto_plan, resync_removed,
                                 words_removed_by_takes)
@@ -536,6 +537,12 @@ def cue_list(project: Project) -> list[dict]:
 
 
 # --------------------------------------------------------------- exportação
+def _nome_de_arquivo(nome: str) -> str:
+    """Nome de projeto -> nome de arquivo que o Windows aceita."""
+    limpo = "".join(c for c in nome if c not in '\\/:*?"<>|').strip()
+    return (limpo or "video") + "_editado"
+
+
 def export(project: Project, ctx, options: dict | None = None) -> dict:
     options = options or {}
     plan = project.plan
@@ -546,10 +553,19 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
     if not plan.active_clips:
         raise RuntimeError("o plano está vazio — rode a edição automática antes")
     sources = sources_for(project)
-    out_dir = project.dir / "exports"
+    # A pasta de Vídeos, não a pasta de dados do app: no Windows ela fica em
+    # AppData\Local, que é oculta, e o usuário exportava sem achar o arquivo.
+    out_dir = Path(options["output_dir"]).expanduser() if options.get("output_dir") \
+        else output_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = options.get("filename") or f"{project.name}_editado.mp4"
+    name = options.get("filename") or f"{_nome_de_arquivo(project.name)}.mp4"
     dest = out_dir / Path(name).name
+    if dest.exists() and not options.get("overwrite"):
+        # não sobrescreve a exportação anterior em silêncio
+        base, i = dest.with_suffix(""), 2
+        while dest.exists():
+            dest = base.with_name(f"{base.name} ({i})").with_suffix(".mp4")
+            i += 1
     work = project.dir / "work"
     if options.get("restart"):
         shutil.rmtree(work, ignore_errors=True)

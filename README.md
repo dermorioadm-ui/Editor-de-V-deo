@@ -480,6 +480,23 @@ usa **voltar** em “Saiu sozinho”.
 
 ### Exportar
 
+### Onde o vídeo pronto aparece
+
+No topo da aba **Exportar** está escrito, em verde, a pasta de saída — e ela é
+uma pasta que uma pessoa acha:
+
+| sistema | pasta |
+|---|---|
+| Windows | `C:\Users\<você>\Vídeos\Editor de Vídeo\` |
+| macOS | `~/Movies/Editor de Vídeo/` |
+| Linux | `~/Vídeos/Editor de Vídeo/` |
+
+O botão **📁 abrir a pasta** abre o Explorer (ou o Finder) já com o arquivo
+selecionado. **trocar** muda a pasta para onde você quiser.
+
+Junto do `.mp4` saem o `.srt` e o `.ass` com o mesmo nome. Exportar de novo
+**não sobrescreve**: vira `nome (2).mp4`.
+
 Aba **Exportar** → **EXPORTAR**. Antes disso vale clicar em **estimar** para ver
 o bitrate que vai sair comparado com o do original; se cair mais de 40%, aparece
 um aviso em destaque e você baixa o CRF.

@@ -109,6 +109,10 @@ export const api = {
   lockZoom: (id: string, clip_id: string, locked: boolean) =>
     post<any>(`/api/projects/${id}/ops/zoom`, { clip_id, locked }),
 
+  outputDir: () => req<{ path: string; default: string }>('/api/output-dir'),
+  setOutputDir: (path: string) => post<any>('/api/output-dir', { path }),
+  reveal: (path: string) => post<any>('/api/reveal', { path }),
+
   looks: () => req<any[]>('/api/looks'),
   setLook: (id: string, look: string, vignette?: number | null) =>
     post(`/api/projects/${id}/ops/look`,
