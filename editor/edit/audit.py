@@ -152,7 +152,8 @@ MAX_GIVE_UP = 0.35      # quanto de conteúdo uma correção pode custar
 
 def settle_edges(clips: list[Clip], env: Envelope, words: list[dict],
                  removed_ids: set[int] | None = None,
-                 rounds: int = 3) -> tuple[list[dict], list[dict]]:
+                 rounds: int = 3,
+                 markers: list[float] | None = None) -> tuple[list[dict], list[dict]]:
     """Resolve sozinho as bordas que dá para resolver.
 
     O usuário não quer clicar em "corrigir com um clique" quatro vezes antes
@@ -161,9 +162,14 @@ def settle_edges(clips: list[Clip], env: Envelope, words: list[dict],
     aqui. Sobra na lista só o que exige decisão de verdade: borda no meio de
     fala contínua, onde qualquer escolha come palavra.
 
+    ``markers`` são os instantes de palma e assobio. A emenda que nasce de um
+    marcador é INTOCÁVEL para o _uncut: ela está colada de propósito, e desfazer
+    o corte ali devolveria exatamente o vazio que o usuário mandou tirar.
+
     Devolve (alertas que sobraram, correções aplicadas).
     """
     removed_ids = removed_ids or set()
+    marcadores = sorted(markers or [])
     applied: list[dict] = []
     issues = audit_edges(clips, env, words, removed_ids)
     for _ in range(rounds):
@@ -200,7 +206,7 @@ def settle_edges(clips: list[Clip], env: Envelope, words: list[dict],
     # que importa ("corte não pode comer palavra") continua de pé. Perder
     # meio segundo de pausa é muito melhor do que perder meia palavra.
     for issue in list(issues):
-        undone = _uncut(clips, env, words, removed_ids, issue)
+        undone = _uncut(clips, env, words, removed_ids, issue, marcadores)
         if undone:
             applied.append(undone)
     issues = audit_edges(clips, env, words, removed_ids)
@@ -278,12 +284,17 @@ def _least_bad(clips: list[Clip], env: Envelope, words: list[dict],
 
 
 def _uncut(clips: list[Clip], env: Envelope, words: list[dict],
-           removed_ids: set[int], issue: dict) -> dict | None:
+           removed_ids: set[int], issue: dict,
+           markers: list[float] | None = None) -> dict | None:
     """Desfaz o corte de silêncio adjacente a uma borda suja, se der.
 
     Só quando o buraco é silêncio puro: se houver palavra lá dentro (removida
     de propósito ou engolida por um take), fechar o buraco traria a fala de
     volta, e isso o usuário não pediu.
+
+    E NUNCA num buraco que nasceu de palma ou assobio. Ali o vazio foi tirado
+    a pedido — o marcador é a ordem explícita "colou aqui". Fechar esse buraco
+    era o caminho silencioso pelo qual o corte rente voltava atrás sozinho.
     """
     main = sorted([c for c in clips if c.enabled and c.source == "main"],
                   key=lambda c: c.src_start)
@@ -300,6 +311,9 @@ def _uncut(clips: list[Clip], env: Envelope, words: list[dict],
     a, b = left.src_end, right.src_start
     if b - a <= 0.02 or b - a > 6.0:
         return None
+    for m in (markers or []):
+        if a - 0.30 <= m <= b + 0.30:
+            return None                 # buraco de marcador: não se desfaz
     for w in words:
         if min(w["end"], b) - max(w["start"], a) > 0.02:
             return None                 # tem palavra no buraco: não fecha

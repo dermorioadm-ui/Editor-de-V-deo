@@ -30,6 +30,19 @@ PEAK_MIN_DBFS = -9.0        # pico absoluto mínimo
 MAX_RISE_MS = 12.0          # palma sobe quase instantaneamente
 MIN_FLATNESS = 0.25         # palma é ruído de banda larga; voz é harmônica
 MIN_HF_RATIO = 1.0          # energia 2–7 kHz sobre 150–1200 Hz
+# Palma é ESTOURO DE BANDA LARGA: a energia dela se espalha por todo o espectro.
+# Assobio é o oposto — quase tudo cabe num punhado de hertz em volta de um tom.
+# Medido (palma sintética com sala, contra assobio de 1,2 a 3,8 kHz com sopro de
+# 2% a 35%, fala, /s/, /f/ e /ʃ/):
+#     palma      0,073–0,081
+#     fala       0,103
+#     fricativas 0,057–0,077
+#     ASSOBIO    0,464–0,966
+# Sem este limite, um assobio com sopro numa sala viva passa em planura e em
+# razão agudo/grave, faz timbre_score 2, entra como palma e APAGA a frase que
+# ele tinha acabado de aprovar — a regra 3 quebrada pelo marcador que existe
+# para protegê-la. Reproduzido em 6 de 12 combinações de duração e sopro.
+MAX_CONCENTRACAO = 0.20     # acima disto é tom, não mão
 JUMP_MIN_DB = 30.0          # salto sobre a mediana do entorno
 CONTEXT = 1.0               # 1 s antes e depois formam o "entorno"
 MAX_DURATION = 0.60         # palma é curta
@@ -41,7 +54,13 @@ COUNT_TOKENS = {
     "um", "uma", "dois", "duas", "tres", "três", "1", "2", "3",
     "one", "two", "three",
 }
-RESUME_MAX_AFTER_CLAP = 6.0
+# Quanto tempo o usuário pode levar para recomeçar depois do marcador.
+# Era 6,0 s, e essa era a reclamação: "SE EU FALAR EM 10 S O CORTE TEM QUE SER
+# NO LIMITE". Passados os 6 s, o take terminava no meio do vazio e o resto do
+# silêncio caía na regra comum — que devolve ar dos dois lados. Agora a busca
+# vai até a PRÓXIMA PALAVRA, esteja ela onde estiver: o vazio inteiro sai,
+# sejam 3 s ou 60 s. O teto que sobra é só uma trava contra arquivo corrompido.
+RESUME_MAX_AFTER_CLAP = 600.0
 
 
 @dataclass
@@ -59,6 +78,7 @@ class ClapEvent:
     rise_ms: float = 0.0        # tempo de subida 10→90% do pico
     flatness: float = 0.0       # planura espectral (ruído x harmônico)
     hf_ratio: float = 0.0       # razão agudo/grave
+    concentracao: float = 0.0   # potência em ±4% do pico (tom x banda larga)
     timbre_score: int = 0       # quantos dos 3 critérios de timbre passaram
     reason: str = ""
     enabled: bool = True        # o usuário pode desligar uma palma suspeita
@@ -88,7 +108,7 @@ def timbre_features(samples: np.ndarray, sample_rate: int,
     i0 = max(0, int(t_start * sample_rate) - int(0.01 * sample_rate))
     i1 = min(len(samples), int(t_end * sample_rate) + int(0.02 * sample_rate))
     x = np.asarray(samples[i0:i1], dtype=np.float32)
-    out = {"rise_ms": 99.0, "flatness": 0.0, "hf_ratio": 0.0}
+    out = {"rise_ms": 99.0, "flatness": 0.0, "hf_ratio": 0.0, "concentracao": 0.0}
     if x.size < 128:
         return out
 
@@ -117,6 +137,16 @@ def timbre_features(samples: np.ndarray, sample_rate: int,
         return float((spec[sel] ** 2).sum()) if sel.any() else 0.0
 
     out["hf_ratio"] = band(2000, 7000) / max(band(150, 1200), 1e-12)
+
+    # concentração: quanto da potência cabe em ±4% da frequência de pico.
+    # É a medida direta de "isto é um tom" — e, ao contrário da planura, não
+    # depende do piso de ruído da gravação.
+    pot = spec ** 2
+    acima = freqs >= 200.0
+    if acima.any():
+        f_pico = float(freqs[acima][int(np.argmax(spec[acima]))])
+        perto = np.abs(freqs - f_pico) <= 0.04 * f_pico
+        out["concentracao"] = float(pot[perto].sum() / max(pot.sum(), 1e-12))
     return out
 
 
@@ -185,6 +215,13 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
         crit_rise = tf["rise_ms"] <= MAX_RISE_MS
         crit_flat = tf["flatness"] >= MIN_FLATNESS
         crit_hf = tf["hf_ratio"] >= MIN_HF_RATIO
+
+        # PORTA DURA, não ponto de pontuação: som tonal não é palma, ponto.
+        # Dois de três critérios bastavam para apagar uma frase, e um assobio
+        # com sopro marcava exatamente dois. Aqui ele nem entra na lista.
+        if tf["concentracao"] > MAX_CONCENTRACAO:
+            continue
+
         score = int(crit_rise) + int(crit_flat) + int(crit_hf)
 
         if score <= 1:
@@ -223,6 +260,7 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
             rise_ms=round(tf["rise_ms"], 2),
             flatness=round(tf["flatness"], 4),
             hf_ratio=round(tf["hf_ratio"], 3),
+            concentracao=round(tf["concentracao"], 4),
             timbre_score=score,
             confirmed=confirmed,
             suspect=not confirmed,
@@ -257,11 +295,15 @@ def phrase_start_before(env: Envelope, t: float, words: list | None = None,
 
 def resume_point_after(env: Envelope, clap_end: float, words: list,
                        pause: float = PHRASE_PAUSE) -> float:
-    """Onde a refeitura começa: depois da contagem, na próxima pausa.
+    """Onde a refeitura começa: depois da contagem, na próxima palavra.
 
-    A busca de pausa é LIMITADA pela primeira palavra que não é contagem —
-    procurar até 6 s adiante podia achar uma pausa DENTRO da refeitura e
-    engolir as primeiras palavras dela no take descartado.
+    A busca é LIMITADA pela primeira palavra que não é contagem — sem isso,
+    procurar adiante acharia uma pausa DENTRO da refeitura e engoliria as
+    primeiras palavras dela no take descartado.
+
+    Não existe mais teto de tempo. Se o usuário bate palma e leva quarenta
+    segundos bebendo água, os quarenta segundos são o take descartado e o corte
+    encosta na palavra seguinte. Era isso que faltava para ele poder respirar.
     """
     limit = clap_end + RESUME_MAX_AFTER_CLAP
     cursor = clap_end

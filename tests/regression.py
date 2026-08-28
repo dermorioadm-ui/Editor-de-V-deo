@@ -268,6 +268,9 @@ def main() -> int:
     testar_corte_rente()
     testar_agressividade()
     testar_quebra_pendurada()
+    testar_assobio_nao_vira_palma()
+    testar_marcador_nao_desfaz()
+    testar_retomada_sem_teto()
     testar_presets_atualizam()
 
     print()
@@ -869,6 +872,180 @@ def testar_quebra_pendurada() -> None:
     check(not orfas, f"nenhuma linha órfã de um fiapo ({len(orfas)})")
     check(termina_pendurado("perdeu também o") and not termina_pendurado("perdeu tudo."),
           "a regra sabe distinguir palavra pendurada de fim de ideia")
+
+
+def testar_assobio_nao_vira_palma() -> None:
+    """O marcador de ACERTEI não pode apagar a frase que ele aprovou.
+
+    Um assobio com sopro numa sala viva passa em planura espectral e em razão
+    agudo/grave — dois de três critérios — e entrava na lista de palmas com
+    enabled=True. A partir dali build_discarded_takes apagava a frase inteira
+    anterior: a regra 3 quebrada pelo marcador que existe para protegê-la.
+    Reproduzido em 6 de 12 combinações de duração e sopro antes do conserto.
+    """
+    import numpy as np
+
+    from editor.audio.clap import detect_claps, timbre_features
+    from editor.audio.envelope import compute_envelope
+
+    SR = 16000
+    rng = np.random.default_rng(7)
+
+    def sala(y, forca=0.15, seed=11):
+        r = np.random.default_rng(seed)
+        n = int(0.12 * SR)
+        ir = r.normal(0, 1, n) * np.exp(-np.arange(n) / (0.025 * SR))
+        ir[0] = 1.0
+        wet = np.convolve(y, ir)[:len(y)]
+        wet = wet / max(float(np.abs(wet).max()), 1e-9) * float(np.abs(y).max())
+        out = (1 - forca) * y + forca * wet + r.normal(0, forca * 0.02, len(y))
+        return (out / max(float(np.abs(out).max()), 1e-9) * 0.45).astype(np.float32)
+
+    def assobio(dur, f0, sopro):
+        t = np.arange(int(dur * SR)) / SR
+        vib = 1.0 + 0.008 * np.sin(2 * np.pi * 5.0 * t)
+        x = np.sin(2 * np.pi * f0 * t * vib) + 0.18 * np.sin(2 * np.pi * 2 * f0 * t * vib)
+        n = 129
+        k = np.arange(n) - n // 2
+        h = np.sinc(k * 2 * (1.6 * f0) / SR) - np.sinc(k * 2 * (0.7 * f0) / SR)
+        ar = np.convolve(rng.normal(0, sopro, t.size), h * np.hanning(n), mode="same")
+        e = np.ones_like(t)
+        r = int(0.03 * SR)
+        e[:r] = np.linspace(0, 1, r)
+        e[-r:] = np.linspace(1, 0, r)
+        y = (x + ar) * e
+        return (y / float(np.abs(y).max()) * 0.45).astype(np.float32)
+
+    def palma(seed):
+        r = np.random.default_rng(seed)
+        n = int(0.09 * SR)
+        y = r.normal(0, 1, n) * np.exp(-np.arange(n) / (0.010 * SR))
+        return (y / float(np.abs(y).max()) * 0.45).astype(np.float32)
+
+    def fala(dur, seed=3):
+        r = np.random.default_rng(seed)
+        t = np.arange(int(dur * SR)) / SR
+        f0 = 120 + 12 * np.sin(2 * np.pi * 1.3 * t)
+        ph = np.cumsum(2 * np.pi * f0 / SR)
+        y = sum(np.sin(k * ph) / k for k in range(1, 14))
+        y = y * (0.5 + 0.5 * np.abs(np.sin(2 * np.pi * 2.6 * t)))
+        y = y + r.normal(0, 0.02, t.size)
+        return (y / float(np.abs(y).max()) * 0.40).astype(np.float32)
+
+    def sil(d):
+        return rng.normal(0, 0.0006, int(d * SR)).astype(np.float32)
+
+    def veredito(sig):
+        trilha = np.concatenate([fala(3.0), sil(0.6), sig, sil(0.6), fala(3.0)])
+        env = compute_envelope(trilha, SR)
+        meio = 3.6 + len(sig) / SR / 2
+        achou = [c for c in detect_claps(trilha, SR, env) if abs(c.time - meio) < 0.7]
+        return achou, trilha, 3.6, 3.6 + len(sig) / SR
+
+    falsos, conc_assobio = 0, []
+    for f0 in (2400, 3000, 3400):
+        for dur in (0.20, 0.30, 0.40, 0.55):
+            for sopro in (0.10, 0.20):
+                sig = sala(assobio(dur, f0, sopro))
+                achou, trilha, a, b = veredito(sig)
+                conc_assobio.append(timbre_features(trilha, SR, a, b)["concentracao"])
+                if achou:
+                    falsos += 1
+    check(falsos == 0,
+          f"nenhum assobio virou palma em {len(conc_assobio)} combinações ({falsos})")
+
+    # e a palma de verdade continua sendo palma — o conserto não pode cegar
+    achadas, conc_palma = 0, []
+    for seed in (1, 2, 9, 15):
+        sig = sala(palma(seed), 0.06)
+        achou, trilha, a, b = veredito(sig)
+        conc_palma.append(timbre_features(trilha, SR, a, b)["concentracao"])
+        if achou:
+            achadas += 1
+    check(achadas == 4, f"as 4 palmas continuam sendo palma ({achadas})")
+
+    margem = min(conc_assobio) / max(max(conc_palma), 1e-9)
+    check(margem >= 3.0,
+          f"concentração separa com folga: palma até {max(conc_palma):.3f}, "
+          f"assobio a partir de {min(conc_assobio):.3f} ({margem:.1f}x)")
+
+
+def testar_marcador_nao_desfaz() -> None:
+    """A emenda de marcador é intocável: _uncut não devolve o vazio.
+
+    settle_edges fecha um buraco de silêncio de até 6 s quando a borda fica
+    suja. Num corte rente a borda fica MAIS perto da fala, então a chance de
+    disparar sobe — e o corte que o assobio pediu voltava atrás sozinho, em
+    silêncio, sem nada na tela dizendo que tinha voltado.
+    """
+    from editor.edit.audit import _uncut
+    from editor.models import Clip
+
+    class EnvFalso:
+        duration = 30.0
+
+        def value_at(self, t):
+            return -60.0
+
+    def par(fim, comeco):
+        return [Clip(id="a", source="main", src_start=0.0, src_end=fim),
+                Clip(id="b", source="main", src_start=comeco, src_end=comeco + 3.0)]
+
+    issue = {"clip_id": "b", "side": "in", "time": 8.0, "message": ""}
+
+    # sem marcador: o buraco de 4 s fecha, como sempre fez
+    clips = par(5.0, 9.0)
+    feito = _uncut(clips, EnvFalso(), [], set(), dict(issue), [])
+    check(feito is not None and clips[0].src_end == 9.0,
+          "sem marcador, o buraco de silêncio ainda é fechado")
+
+    # com marcador dentro: não fecha, e a emenda continua colada
+    clips = par(5.0, 9.0)
+    feito = _uncut(clips, EnvFalso(), [], set(), dict(issue), [7.0])
+    check(feito is None and clips[0].src_end == 5.0,
+          "o buraco que veio de palma/assobio NÃO é desfeito")
+
+    # marcador longe: volta a fechar (a trava é local, não geral)
+    clips = par(5.0, 9.0)
+    feito = _uncut(clips, EnvFalso(), [], set(), dict(issue), [22.0])
+    check(feito is not None and clips[0].src_end == 9.0,
+          "marcador longe não trava buraco nenhum")
+
+
+def testar_retomada_sem_teto() -> None:
+    """Demorar 30 s para recomeçar não pode deixar vazio para trás.
+
+    "SE EU FALAR EM 10 S O CORTE TEM QUE SER NO LIMITE." O teto de 6 s cortava
+    o take no meio do vazio; o resto do silêncio caía na regra comum e ainda
+    ganhava ar dos dois lados.
+    """
+    import numpy as np
+
+    from editor.audio.clap import resume_point_after
+    from editor.audio.envelope import compute_envelope
+
+    SR = 16000
+    rng = np.random.default_rng(5)
+
+    def fala(dur, seed=3):
+        r = np.random.default_rng(seed)
+        t = np.arange(int(dur * SR)) / SR
+        ph = np.cumsum(2 * np.pi * (120 + 12 * np.sin(2 * np.pi * 1.3 * t)) / SR)
+        y = sum(np.sin(k * ph) / k for k in range(1, 14))
+        y = y * (0.5 + 0.5 * np.abs(np.sin(2 * np.pi * 2.6 * t)))
+        return ((y / float(np.abs(y).max())) * 0.40 + r.normal(0, 0.02, t.size)
+                ).astype(np.float32)
+
+    for espera in (4.0, 10.0, 30.0):
+        vazio = rng.normal(0, 0.0006, int(espera * SR)).astype(np.float32)
+        trilha = np.concatenate([fala(2.0), vazio, fala(2.0)])
+        env = compute_envelope(trilha, SR)
+        palavras = [{"start": 0.1, "end": 1.9, "text": "errei"},
+                    {"start": 2.0 + espera, "end": 3.9 + espera, "text": "de novo"}]
+        t = resume_point_after(env, 2.0, palavras)
+        sobra = (2.0 + espera) - t
+        check(sobra <= 0.35,
+              f"espera de {espera:.0f} s: sobra {sobra * 1000:.0f} ms de vazio")
 
 
 def testar_presets_atualizam() -> None:

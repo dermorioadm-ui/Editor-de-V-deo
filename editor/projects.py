@@ -336,6 +336,9 @@ def analyze(project: Project, ctx) -> dict:
             ctx.progress(0.93, f"não deu para achar o rosto: {exc}")
 
     ctx.stage("assobio", "procurando assobios")
+    # lido logo abaixo e também na etapa dos takes; ficava atribuído só lá
+    # embaixo, o que rebentava a análise de toda gravação com assobio
+    previous = project.analysis or {}
     freq = project.plan.whistle_freq or None
     assobios = detect_whistles(samples, sr, env, freq_alvo=freq)
     # a decisão do usuário sobrevive à reanálise: assobio desligado continua
@@ -347,10 +350,22 @@ def analyze(project: Project, ctx) -> dict:
     if assobios:
         ctx.progress(0.94, f"{len(assobios)} assobio(s) — take validado, corte rente")
 
+    # Se palma e assobio caírem no mesmo lugar, quem vence é o assobio.
+    # A porta de concentração em clap.py já separa os dois, mas errar para o
+    # lado de APAGAR FALA é caro e errar para o lado de perder um corte rente
+    # é barato — a rede fica aqui, explícita.
+    if assobios:
+        antes = len(claps)
+        claps = [c for c in claps
+                 if not any(a.start - 0.10 <= c.time <= a.end + 0.10
+                            for a in assobios if a.enabled)]
+        if len(claps) < antes:
+            ctx.progress(0.945, f"{antes - len(claps)} palma(s) eram assobio; "
+                                f"a fala fica")
+
     ctx.stage("takes", "aplicando a regra do take")
 
     fillers = annotate_fillers(words, env)
-    previous = project.analysis or {}
     # decisões do usuário sobrevivem a uma reanálise. Agora só existe UMA
     # decisão possível: "isto não era palma" — casada pelo instante do pico.
     for clap in claps:
@@ -481,7 +496,8 @@ def auto_edit(project: Project, ctx) -> dict:
     # pediu para receber pronto: se a correção é a mesma que ele daria
     # apertando "corrigir com um clique", ela não vira pergunta.
     issues, fixed = settle_edges(plan.clips, env, words,
-                                 set(result["removed_word_ids"]))
+                                 set(result["removed_word_ids"]),
+                                 markers=sorted(marcadores))
     plan.audit = issues
     plan.audit_fixed = fixed
     if fixed:
