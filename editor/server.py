@@ -719,6 +719,28 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
     return {"ok": True, "timeline": _after_edit(project)}
 
 
+@app.post("/api/projects/{pid}/ops/music")
+def api_music_ajuste(pid: str, payload: dict = Body(...)) -> dict:
+    """Volume, mudo e ducking da trilha, sem reescrever o resto.
+
+    A rota /music substitui o objeto inteiro; para mexer só no volume isso
+    obrigava o frontend a reenviar tudo e qualquer campo esquecido virava
+    padrão em silêncio.
+    """
+    project = _project(pid)
+    m = project.plan.music
+    if not m:
+        raise HTTPException(404, "não há trilha")
+    for campo, conv in (("gain_db", float), ("duck_amount", float),
+                        ("fade_in", float), ("fade_out", float),
+                        ("ducking", bool), ("enabled", bool), ("muted", bool)):
+        if campo in payload:
+            m[campo] = conv(payload[campo])
+    project.plan.music = m
+    project.save_plan()
+    return {"ok": True, "music": m, "timeline": svc.timeline_summary(project)}
+
+
 @app.post("/api/projects/{pid}/ops/resize-removed")
 def api_resize_removed(pid: str, payload: dict = Body(...)) -> dict:
     """Arrasta a borda de um trecho já removido, na trilha."""
@@ -784,12 +806,17 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
         return {"ok": True, "timeline": svc.timeline_summary(project)}
 
     limite = svc.timeline_summary(project)["duration"]
+    if limite <= 0.01 and project.info:
+        limite = float(project.info.duration or 0.0)
     a = ler(alvo, "out_start")
     b = ler(alvo, "out_end", limite)
     if acao == "move":
         delta = float(payload.get("delta", 0.0))
-        dur = b - a
-        novo_a = max(0.0, min(limite - dur, a + delta))
+        dur = max(0.05, b - a)
+        # o item PODE passar do fim do vídeo — o render corta o que sobra.
+        # Clampar o fim deixava um item do tamanho da linha inteira imóvel:
+        # não sobrava para onde ir, e arrastar não fazia nada.
+        novo_a = max(0.0, min(max(0.0, limite - 0.2), a + delta))
         gravar(alvo, "out_start", novo_a)
         gravar(alvo, "out_end", novo_a + dur)
     else:                                    # resize
@@ -1179,7 +1206,15 @@ def api_blur_delete(pid: str, bid: str) -> dict:
 @app.post("/api/projects/{pid}/music")
 def api_music(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    project.plan.music = payload if payload.get("media_id") else None
+    m = dict(payload) if payload.get("media_id") else None
+    if m is not None:
+        m.setdefault("out_start", 0.0)
+        if not m.get("out_end"):
+            # "até o fim" fica EXPLÍCITO: item sem fim não tem borda para pegar
+            tl = svc.timeline_summary(project)["duration"]
+            m["out_end"] = round(tl if tl > 0.01 else float(
+                project.info.duration if project.info else 0), 3)
+    project.plan.music = m
     project.save_plan()
     return {"ok": True, "music": project.plan.music}
 

@@ -121,6 +121,64 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
         )
       })()}
 
+      {/* ------------------------------------------------------- trilha */}
+      {(() => {
+        const t = (view.tracks ?? []).find((x) => x.id === 'A1')
+        const m = t?.items?.[0]
+        if (!m) return null
+        return (
+          <section className="card p-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase
+                             tracking-wide">Trilha</h3>
+              <span className="text-[11px] text-slate-500 truncate flex-1">
+                {m.label}
+              </span>
+              <button className="btn btn-xs"
+                      onClick={async () => {
+                        await api.ajustarMusica(project.id, { muted: !m.muted })
+                        await onChanged()
+                      }}>
+                {m.muted ? 'ligar' : 'mudo'}
+              </button>
+              <button className="btn btn-xs btn-danger"
+                      onClick={async () => {
+                        await api.deleteItem(project.id, 'music', 'music')
+                        await onChanged()
+                      }}>
+                tirar
+              </button>
+            </div>
+            <label className="label mt-2">
+              Volume · <span className="font-mono text-slate-300">
+                {(m.gain_db ?? -18).toFixed(0)} dB</span>
+              {m.muted && <span className="text-amber-400 normal-case ml-1">
+                (no mudo)</span>}
+            </label>
+            <input type="range" min={-40} max={0} step={1}
+                   value={m.gain_db ?? -18} className="w-full" disabled={m.muted}
+                   onChange={async (e) => {
+                     await api.ajustarMusica(project.id,
+                       { gain_db: Number(e.target.value) })
+                     await onChanged()
+                   }} />
+            <label className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-1">
+              <input type="checkbox" checked={m.ducking ?? true}
+                     onChange={async (e) => {
+                       await api.ajustarMusica(project.id,
+                         { ducking: e.target.checked })
+                       await onChanged()
+                     }} />
+              abaixar sozinha quando você fala
+            </label>
+            <p className="hint mt-1">
+              Arraste o bloco no trilho para escolher onde ela toca, e as bordas
+              para a duração.
+            </p>
+          </section>
+        )
+      })()}
+
       {/* -------------------------------------------- zoom entre cenas */}
       {(() => {
         const z = view.zoom

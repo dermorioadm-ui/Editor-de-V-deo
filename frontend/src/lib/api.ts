@@ -113,6 +113,9 @@ export const api = {
   setOutputDir: (path: string) => post<any>('/api/output-dir', { path }),
   reveal: (path: string) => post<any>('/api/reveal', { path }),
 
+  ajustarMusica: (id: string, patch: Record<string, number | boolean>) =>
+    post<any>(`/api/projects/${id}/ops/music`, patch),
+
   buildProxy: (id: string) => post<any>(`/api/projects/${id}/proxy`),
   proxyStatus: (id: string) =>
     req<{ ok: boolean; precisa: boolean; detail: string; size_bytes: number }>(

@@ -21,6 +21,8 @@ interface Props {
                delta: number) => void
   onDeleteItem: (kind: string, id: string) => void
   onAddToTrack: (trackId: string) => void
+  // arrastar um arquivo do disco em cima de um trilho
+  onDropFile: (trackId: string, file: File) => void
   playing: boolean
   onTogglePlay: () => void
 }
@@ -61,6 +63,7 @@ export default function Timeline(props: Props) {
   const [itemDrag, setItemDrag] = useState<
     { id: string; kind: string; delta: number
       side: 'move' | 'start' | 'end' } | null>(null)
+  const [dropAlvo, setDropAlvo] = useState<string | null>(null)
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
 
@@ -367,8 +370,15 @@ export default function Timeline(props: Props) {
     for (let i = 0; i < extras.length; i++) {
       const track = extras[i]
       const y = yTracks + i * (ROW.track + 2)
-      g.fillStyle = 'rgba(255,255,255,0.025)'
+      const alvo = dropAlvo === track.id
+      g.fillStyle = alvo ? 'rgba(56,189,248,0.18)' : 'rgba(255,255,255,0.025)'
       g.fillRect(0, y, size.w, ROW.track)
+      if (alvo) {
+        g.strokeStyle = '#38bdf8'
+        g.setLineDash([4, 3]); g.lineWidth = 1
+        g.strokeRect(0.5, y + 0.5, size.w - 1, ROW.track - 1)
+        g.setLineDash([])
+      }
       g.fillStyle = '#475569'
       g.font = '9px system-ui'
       g.fillText(track.label, 4, y + ROW.track - 7)
@@ -426,7 +436,7 @@ export default function Timeline(props: Props) {
       }
     }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip,
-      subsOnSource, subDrag, redDrag, itemDrag, bands, extras, toX,
+      subsOnSource, subDrag, redDrag, itemDrag, dropAlvo, bands, extras, toX,
       outputToSourceT, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
       ySubs, yTracks])
 
@@ -526,6 +536,14 @@ export default function Timeline(props: Props) {
       if (d <= 9 && (!best || d < best.d)) best = { clap: c, d }
     }
     return best?.clap ?? null
+  }
+
+  const trilhoEm = (y: number): string | null => {
+    for (let i = 0; i < extras.length; i++) {
+      const y0 = yTracks + i * (ROW.track + 2)
+      if (y >= y0 - 2 && y <= y0 + ROW.track + 2) return extras[i].id
+    }
+    return null
   }
 
   const itemNear = (x: number, y: number) => {
@@ -782,6 +800,23 @@ export default function Timeline(props: Props) {
         <canvas ref={over}
                 className="absolute inset-0 block cursor-crosshair"
                 onWheel={onWheel}
+                onDragOver={(e) => {
+                  if (!e.dataTransfer.types.includes('Files')) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'copy'
+                  const { y } = pos(e as unknown as React.MouseEvent)
+                  setDropAlvo(trilhoEm(y))
+                }}
+                onDragLeave={() => setDropAlvo(null)}
+                onDrop={(e) => {
+                  const { y } = pos(e as unknown as React.MouseEvent)
+                  const alvo = trilhoEm(y)
+                  setDropAlvo(null)
+                  const f = e.dataTransfer.files?.[0]
+                  if (!alvo || !f) return
+                  e.preventDefault()
+                  props.onDropFile(alvo, f)
+                }}
                 onMouseDown={onMouseDown}
                 onMouseMove={onMouseMove}
                 onMouseUp={onMouseUp}
@@ -830,7 +865,7 @@ export default function Timeline(props: Props) {
           enquadramento fechado
         </span>
         <span className="ml-auto">
-          pegue a agulha e arraste · arraste itens dos trilhos (Shift+clique apaga) · bordas vermelhas ajustam o que saiu · clique num bloco e Delete apaga ele · marque um trecho e Delete corta · roda dá zoom · Alt+arraste move
+          arraste um arquivo do disco para cima de um trilho · pegue a agulha e arraste · Shift+clique apaga um item · bordas vermelhas ajustam o que saiu · clique num bloco e Delete apaga ele · marque um trecho e Delete corta · roda dá zoom · Alt+arraste move
         </span>
       </div>
     </div>

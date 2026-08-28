@@ -56,6 +56,7 @@ export interface TrackItem {
   out_start: number; out_end: number
   media_id?: string; movable?: boolean; resizable?: boolean; detail?: string
   zoom?: number; speed?: number; section?: string
+  gain_db?: number; muted?: boolean; ducking?: boolean
 }
 
 export interface Track {

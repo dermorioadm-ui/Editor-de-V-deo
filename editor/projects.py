@@ -773,6 +773,11 @@ def build_tracks(project: "Project", blocks: list[dict],
     """
     plan = project.plan
     midias = {m["id"]: m for m in list_media(project.id)}
+    # Antes da análise a linha do tempo tem duração 0. Sem este resgate a
+    # trilha entrava com começo e fim iguais e não dava para arrastar nem
+    # esticar — item de largura zero não tem borda para pegar.
+    if duration <= 0.01 and project.info:
+        duration = float(project.info.duration or 0.0)
 
     def nome(mid: str) -> str:
         return (midias.get(mid) or {}).get("name", "mídia removida")
@@ -816,8 +821,12 @@ def build_tracks(project: "Project", blocks: list[dict],
             "out_start": round(float(m.get("out_start", 0.0)), 3),
             "out_end": round(float(m.get("out_end") or duration), 3),
             "media_id": m.get("media_id"), "movable": True, "resizable": True,
-            "detail": (f"{m.get('gain_db', -18)} dB"
-                       + (", com ducking" if m.get("ducking") else "")),
+            "gain_db": float(m.get("gain_db", -18)),
+            "muted": bool(m.get("muted")),
+            "ducking": bool(m.get("ducking", True)),
+            "detail": ("MUDA" if m.get("muted")
+                       else f"{m.get('gain_db', -18):g} dB"
+                       + (", abaixa na fala" if m.get("ducking") else "")),
         })
 
     return [

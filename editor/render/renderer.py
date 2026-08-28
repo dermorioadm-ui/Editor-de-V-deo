@@ -579,7 +579,9 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
     from ..audio.loudness import (build_pre_chain, loudnorm_second_pass,
                                   measure_loudnorm)
 
-    music = plan.music if plan.music and plan.music.get("enabled") else None
+    # "mudo" desliga a trilha sem perder o ajuste: o usuário testa com e sem
+    music = (plan.music if plan.music and plan.music.get("enabled")
+             and not plan.music.get("muted") else None)
     mpath = sources.get(music.get("media_id"), {}).get("path") if music else None
     stage_src = raw_wav
     if music and mpath:

@@ -442,6 +442,79 @@ export default function Editor() {
                     await refresh()
                     toast('ok', 'Item removido do trilho')
                   }}
+                  onDropFile={async (trackId, file) => {
+                    // O navegador entrega só nome e tamanho — nunca o caminho.
+                    // Em vez de subir o arquivo, procuramos ele no disco pelo
+                    // nome, que é o mesmo caminho que a tela inicial usa.
+                    const ext = (file.name.split('.').pop() || '').toLowerCase()
+                    const tipos: Record<string, string> = {
+                      mp3: 'audio', wav: 'audio', m4a: 'audio', aac: 'audio',
+                      flac: 'audio', ogg: 'audio',
+                      mp4: 'video', mov: 'video', mkv: 'video', webm: 'video',
+                      m4v: 'video', avi: 'video',
+                      png: 'image', jpg: 'image', jpeg: 'image', webp: 'image',
+                      bmp: 'image', gif: 'image',
+                    }
+                    const kind = tipos[ext]
+                    if (!kind) {
+                      toast('warn', 'Formato que eu não sei usar', file.name)
+                      return
+                    }
+                    if (trackId === 'A1' && kind !== 'audio') {
+                      toast('warn', 'O trilho de trilha só aceita áudio',
+                        `${file.name} é ${kind}. Solte no trilho de sobreposição.`)
+                      return
+                    }
+                    if (trackId === 'V2' && kind === 'audio') {
+                      toast('warn', 'Sobreposição é imagem ou vídeo',
+                        'Solte o áudio no trilho Trilha.')
+                      return
+                    }
+                    toast('info', `Procurando ${file.name} no seu disco…`,
+                      'O arquivo não sai do lugar — só preciso do caminho.')
+                    try {
+                      const achado = await api.locate(file.name, file.size)
+                      if (!achado.path) {
+                        toast('warn', 'Não achei esse arquivo nas pastas conhecidas',
+                          'Use a aba Mídia e aponte o arquivo no disco.')
+                        setTab('midia')
+                        return
+                      }
+                      snapshot()
+                      const m = await api.addMedia(project.id, achado.path, kind)
+                      const mid = m?.id ?? m?.media?.id
+                      if (trackId === 'A1') {
+                        await api.setMusic(project.id, {
+                          media_id: mid, gain_db: -18, ducking: true,
+                          duck_amount: 12, fade_in: 1, fade_out: 2, enabled: true,
+                          out_start: 0,
+                        })
+                        toast('ok', 'Trilha no lugar',
+                          'Já entra abaixando na fala. Arraste as bordas para mudar '
+                          + 'onde ela toca, e o volume fica no painel da direita.')
+                      } else if (kind === 'image') {
+                        await api.addOverlay(project.id, {
+                          media_id: mid, out_start: getPlayhead(),
+                          out_end: getPlayhead() + 3,
+                          x: safeZone?.anchor?.x ?? 0.5, y: safeZone?.anchor?.y ?? 0.2,
+                        })
+                        toast('ok', 'Imagem sobreposta no ponto atual')
+                      } else {
+                        await api.addCutaway(project.id, {
+                          media_id: mid, out_start: getPlayhead(),
+                          out_end: Math.min(timeline?.duration ?? 0,
+                                            getPlayhead() + 5),
+                          media_start: 0,
+                        })
+                        toast('ok', 'Vídeo por cima no ponto atual',
+                          'O seu áudio continua por baixo.')
+                      }
+                      await refresh()
+                    } catch (e: any) {
+                      toast('error', 'Não deu para usar esse arquivo',
+                        String(e.message ?? e))
+                    }
+                  }}
                   onAddToTrack={(trackId) => {
                     setTab(trackId === 'A1' ? 'audio' : 'midia')
                     toast('info', 'Escolha a mídia',
