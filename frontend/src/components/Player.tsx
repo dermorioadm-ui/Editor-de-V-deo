@@ -15,6 +15,9 @@ interface Props {
   previewUrl?: string | null
   onRequestPreview?: () => void
   previewBusy?: boolean
+  // cópia leve da FONTE, para tocar sem engasgo. A linha do tempo é idêntica
+  // à do original, então nada no cálculo de tempo muda.
+  proxyUrl?: string | null
 }
 
 /**
@@ -23,7 +26,8 @@ interface Props {
  * legenda por cima.
  */
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
-                                 previewUrl, onRequestPreview, previewBusy }: Props) {
+                                 previewUrl, onRequestPreview, previewBusy,
+                                 proxyUrl }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -37,6 +41,11 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // bloco não-main (foto/inserto) tocando "no relógio": {clip, perfStart, offset0}
   const stillRef = useRef<{ clip: Clip; perfStart: number; offset0: number } | null>(null)
   const [stillClip, setStillClip] = useState<Clip | null>(null)
+  // A caixa da IMAGEM dentro do player, em pixels. A legenda tinha o tamanho
+  // calculado em `vh` — altura da JANELA — e ocupava a largura do PAINEL. Num
+  // painel de 320px com o vídeo pequeno dentro, isso dava uma fonte ~4x maior
+  // e o texto quebrava em 4 linhas onde a exportação faz 2.
+  const [box, setBox] = useState({ left: 0, top: 0, width: 0, height: 0, vh: 1920 })
 
   const enterStill = useCallback((clip: Clip, offset: number) => {
     stillRef.current = { clip, perfStart: performance.now(), offset0: offset }
@@ -48,6 +57,35 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     stillRef.current = null
     setStillClip(null)
   }, [])
+
+  useEffect(() => {
+    const el = video.current
+    if (!el) return
+    const medir = () => {
+      const pai = el.parentElement
+      if (!pai) return
+      const r = el.getBoundingClientRect()
+      const rp = pai.getBoundingClientRect()
+      const vw = el.videoWidth || 1080
+      const vh = el.videoHeight || 1920
+      // o vídeo é desenhado em 'contain': cabe dentro da caixa preservando a
+      // proporção, e sobra tarja. A legenda tem que ir sobre a IMAGEM.
+      const escala = Math.min(r.width / vw, r.height / vh)
+      const w = vw * escala
+      const h = vh * escala
+      setBox({
+        left: r.left - rp.left + (r.width - w) / 2,
+        top: r.top - rp.top + (r.height - h) / 2,
+        width: w, height: h, vh,
+      })
+    }
+    medir()
+    const ro = new ResizeObserver(medir)
+    ro.observe(el)
+    if (el.parentElement) ro.observe(el.parentElement)
+    el.addEventListener('loadedmetadata', medir)
+    return () => { ro.disconnect(); el.removeEventListener('loadedmetadata', medir) }
+  }, [previewUrl, proxyUrl, projectId])
 
   const linear = !!previewUrl
 
@@ -229,8 +267,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       <div className="relative flex-1 min-h-0 bg-black rounded-lg overflow-hidden
                       border border-line grid place-items-center">
         <video ref={video} className="max-h-full max-w-full" playsInline muted={muted}
-               key={previewUrl ?? 'source'}
-               src={previewUrl ?? `/api/projects/${projectId}/source`}
+               key={previewUrl ?? proxyUrl ?? 'source'}
+               src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
                onPause={() => { if (!stillRef.current) setPlaying(false) }} />
         {stillClip && !linear && (
           <div className="absolute inset-0 bg-black grid place-items-center">
@@ -254,32 +292,58 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             prévia 480p renderizada
           </span>
         )}
-        {safeZone && (
-          <div className="absolute left-0 right-0 border-y border-dashed
+        {!linear && proxyUrl && (
+          <span className="absolute top-1.5 left-1.5 chip border-emerald-800/70
+                           text-emerald-300 bg-ink-900/80"
+                title="Tocando uma cópia leve para não engasgar. A exportação lê o
+                       arquivo original em qualidade cheia.">
+            prévia leve
+          </span>
+        )}
+        {safeZone && box.height > 0 && (
+          <div className="absolute border-y border-dashed
                           border-amber-500/50 bg-amber-500/5 pointer-events-none"
-               style={{ top: `${safeZone.top * 100}%`,
-                        height: `${(safeZone.bottom - safeZone.top) * 100}%` }}>
+               style={{ left: box.left, width: box.width,
+                        top: box.top + safeZone.top * box.height,
+                        height: (safeZone.bottom - safeZone.top) * box.height }}>
             <span className="absolute right-1 top-1 text-[9px] text-amber-400/80">
               zona da legenda
             </span>
           </div>
         )}
-        {cue && !linear && (
-          <div className="absolute left-0 right-0 pointer-events-none px-[6%] text-center"
-               style={{ bottom: `${(style?.margin_v ?? 220) / 1920 * 100}%` }}>
-            <span className="inline-block whitespace-pre-line leading-tight"
-                  style={{
-                    fontSize: `clamp(11px, ${(style?.fontsize ?? 64) / 1920 * 100}vh, 46px)`,
-                    fontWeight: style?.bold ? 800 : 500,
-                    color: style?.primary ?? '#fff',
-                    WebkitTextStroke: `${Math.max(1, (style?.outline ?? 4) / 2.6)}px ${style?.outline_color ?? '#000'}`,
-                    paintOrder: 'stroke fill',
-                    textTransform: style?.uppercase ? 'uppercase' : 'none',
-                  }}>
-              {cue.text}
-            </span>
-          </div>
-        )}
+        {cue && !linear && box.height > 0 && (() => {
+          // O ASS usa PlayResY = altura do vídeo, então fontsize, margem e
+          // contorno estão todos na régua do vídeo. Basta a mesma proporção
+          // aqui para a prévia sair igual à exportação.
+          const k = box.height / Math.max(box.vh, 1)
+          return (
+            <div className="absolute pointer-events-none text-center"
+                 style={{
+                   left: box.left + (style?.margin_l ?? 60) * k,
+                   width: Math.max(
+                     10, box.width - ((style?.margin_l ?? 60) + (style?.margin_r ?? 60)) * k),
+                   bottom: `calc(100% - ${box.top + box.height}px + ${
+                     (style?.margin_v ?? 220) * k}px)`,
+                 }}>
+              <span className="inline-block leading-tight"
+                    style={{
+                      // 'pre': o ASS está em WrapStyle 2, que NÃO quebra linha
+                      // sozinho. Quem decide a quebra é o linebreak.py; o CSS
+                      // não pode inventar mais nenhuma.
+                      whiteSpace: 'pre',
+                      fontSize: `${Math.max(6, (style?.fontsize ?? 35) * k)}px`,
+                      fontWeight: style?.bold ? 800 : 500,
+                      color: style?.primary ?? '#fff',
+                      WebkitTextStroke: `${Math.max(
+                        0.5, (style?.outline ?? 4) * k)}px ${style?.outline_color ?? '#000'}`,
+                      paintOrder: 'stroke fill',
+                      textTransform: style?.uppercase ? 'uppercase' : 'none',
+                    }}>
+                {cue.text}
+              </span>
+            </div>
+          )
+        })()}
       </div>
 
       <div className="flex items-center gap-2 text-xs">

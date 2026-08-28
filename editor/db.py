@@ -88,14 +88,41 @@ def connect() -> sqlite3.Connection:
 
 
 def _seed(conn: sqlite3.Connection) -> None:
-    from .presets import BUILTIN
+    from .presets import BUILTIN, PRESETS_VERSION
     from .subtitles.corrections import DEFAULTS
 
+    # INSERT OR IGNORE sozinho congelava os presets na primeira execução: toda
+    # melhoria posterior (tamanho de fonte, parâmetros de zoom) ficava presa no
+    # código e nunca chegava a quem já tinha o app instalado. A versão destrava.
+    row = conn.execute("SELECT value FROM settings WHERE key='presets_version'").fetchone()
+    try:
+        atual = int(json.loads(row["value"])) if row else 0
+    except (TypeError, ValueError):
+        atual = 0
+    atualizar = atual < PRESETS_VERSION
+
     for preset in BUILTIN:
+        if atualizar:
+            # só os EMBUTIDOS são refeitos; preset que o usuário salvou com
+            # nome próprio (builtin=0) nunca é tocado
+            conn.execute(
+                "INSERT INTO presets(name, data_json, builtin, updated_at) "
+                "VALUES (?,?,1,?) ON CONFLICT(name) DO UPDATE SET "
+                "data_json=excluded.data_json, updated_at=excluded.updated_at "
+                "WHERE presets.builtin=1",
+                (preset["name"], json.dumps(preset), time.time()),
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO presets(name, data_json, builtin, updated_at) "
+                "VALUES (?,?,1,?)",
+                (preset["name"], json.dumps(preset), time.time()),
+            )
+    if atualizar:
         conn.execute(
-            "INSERT OR IGNORE INTO presets(name, data_json, builtin, updated_at) "
-            "VALUES (?,?,1,?)",
-            (preset["name"], json.dumps(preset), time.time()),
+            "INSERT INTO settings(key, value) VALUES ('presets_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps(PRESETS_VERSION),),
         )
     n = conn.execute("SELECT COUNT(*) c FROM corrections").fetchone()["c"]
     if n == 0:

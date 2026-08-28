@@ -22,6 +22,13 @@ def _preset(name: str, description: str, cut: CutParams, speed: SpeedParams,
     }
 
 
+# Sobe de 1 sempre que os presets embutidos mudarem. É isto que faz a mudança
+# CHEGAR no usuário: o seed usava INSERT OR IGNORE, então o preset entrava no
+# banco na primeira execução e toda alteração posterior no código era ignorada
+# em silêncio. A "fonte 35" que o usuário pediu, e os parâmetros de zoom por
+# preset, ficaram meses sem sair do repositório por causa disso.
+PRESETS_VERSION = 3
+
 BUILTIN = [
     _preset(
         "VSL", "2 a 3 min. Corte conservador, velocidade contida, legenda padrão.",

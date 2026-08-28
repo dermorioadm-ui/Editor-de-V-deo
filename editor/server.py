@@ -285,6 +285,34 @@ def _run(kind: str, pid: str, fn) -> dict:
     return job.to_dict()
 
 
+@app.post("/api/projects/{pid}/proxy")
+def api_proxy(pid: str) -> dict:
+    """Gera a cópia leve da fonte, para a prévia tocar sem engasgo."""
+    _project(pid)
+    return _run("proxy", pid, lambda ctx: svc.build_proxy_job(svc.load(pid), ctx))
+
+
+@app.get("/api/projects/{pid}/proxy")
+def api_proxy_file(pid: str, request: Request):
+    """Serve o proxy. 404 quando não existe — o player cai na fonte."""
+    project = _project(pid)
+    if not project.proxy_ok:
+        raise HTTPException(404, "sem prévia leve")
+    return _range_response(project.proxy_file, request)
+
+
+@app.get("/api/projects/{pid}/proxy-status")
+def api_proxy_status(pid: str) -> dict:
+    from .render.proxy import vale_a_pena
+
+    project = _project(pid)
+    precisa, motivo = (vale_a_pena(project.info) if project.info
+                       else (False, "sem informação do arquivo"))
+    return {"ok": project.proxy_ok, "precisa": precisa, "detail": motivo,
+            "size_bytes": (project.proxy_file.stat().st_size
+                           if project.proxy_ok else 0)}
+
+
 @app.post("/api/projects/{pid}/analyze")
 def api_analyze(pid: str) -> dict:
     _project(pid)
@@ -302,6 +330,7 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     project = _project(pid)
     if payload.get("preset"):
         svc.apply_preset_to_plan(project.plan, payload["preset"])
+        svc.escalar_legenda(project.plan, project.info)
         db.ex("UPDATE projects SET preset=? WHERE id=?", (payload["preset"], pid))
         project.save_plan()
     return _run("clique-unico", pid,
@@ -379,6 +408,7 @@ def api_apply_preset(pid: str, payload: dict = Body(...)) -> dict:
     if not presets_mod.get_preset(name):
         raise HTTPException(404, "preset não encontrado")
     svc.apply_preset_to_plan(project.plan, name)
+    svc.escalar_legenda(project.plan, project.info)
     db.ex("UPDATE projects SET preset=? WHERE id=?", (name, pid))
     project.save_plan()
     return {"ok": True, "plan": project.plan.to_dict()}

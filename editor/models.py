@@ -219,6 +219,8 @@ class EditPlan:
     removed: list = field(default_factory=list)
     discarded_takes: list = field(default_factory=list)
     claps: list = field(default_factory=list)
+    whistles: list = field(default_factory=list)   # marcadores de "acertei"
+    whistle_freq: float | None = None              # frequência calibrada do usuário
     cutaways: list = field(default_factory=list)
     overlays: list = field(default_factory=list)
     blurs: list = field(default_factory=list)
@@ -248,6 +250,9 @@ class EditPlan:
             "discarded_takes": [t.to_dict() if hasattr(t, "to_dict") else t
                                 for t in self.discarded_takes],
             "claps": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.claps],
+            "whistles": [w.to_dict() if hasattr(w, "to_dict") else w
+                         for w in self.whistles],
+            "whistle_freq": self.whistle_freq,
             "cutaways": [c.to_dict() for c in self.cutaways],
             "overlays": [o.to_dict() for o in self.overlays],
             "blurs": [b.to_dict() for b in self.blurs],
@@ -276,6 +281,9 @@ class EditPlan:
         plan.removed = [_from_dict(RemovedRegion, r) for r in data.get("removed", [])]
         plan.discarded_takes = list(data.get("discarded_takes", []))
         plan.claps = list(data.get("claps", []))
+        plan.whistles = list(data.get("whistles", []))
+        wf = data.get("whistle_freq")
+        plan.whistle_freq = None if wf is None else float(wf)
         plan.cutaways = [_from_dict(Cutaway, c) for c in data.get("cutaways", [])]
         plan.overlays = [_from_dict(Overlay, o) for o in data.get("overlays", [])]
         plan.blurs = [_from_dict(BlurRegion, b) for b in data.get("blurs", [])]

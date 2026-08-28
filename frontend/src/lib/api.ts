@@ -113,6 +113,11 @@ export const api = {
   setOutputDir: (path: string) => post<any>('/api/output-dir', { path }),
   reveal: (path: string) => post<any>('/api/reveal', { path }),
 
+  buildProxy: (id: string) => post<any>(`/api/projects/${id}/proxy`),
+  proxyStatus: (id: string) =>
+    req<{ ok: boolean; precisa: boolean; detail: string; size_bytes: number }>(
+      `/api/projects/${id}/proxy-status`),
+
   looks: () => req<any[]>('/api/looks'),
   setLook: (id: string, look: string, vignette?: number | null) =>
     post(`/api/projects/${id}/ops/look`,

@@ -12,6 +12,63 @@ SENTENCE_END = ".!?…"
 SOFT_END = ",;:"
 _MAX_GAP = 0.65          # buraco maior que isso sempre fecha a legenda
 
+# Palavra que NÃO pode terminar uma legenda nem uma linha. Fechar em "perdeu
+# também o" deixa o artigo pendurado e o leitor esperando o substantivo que só
+# chega na legenda seguinte — o olho tropeça. O score antigo premiava quebrar
+# ANTES de um conectivo, mas não penalizava terminar EM um: por isso "…também o"
+# passava batido.
+# Só CLASSE FECHADA que exige gramaticalmente a palavra seguinte. Uma lista
+# larga (com pronome sujeito e verbo) penalizava quase toda quebra e o sinal se
+# diluía — se tudo pendura, nada pendura.
+DANGLING = {
+    # artigos e contrações
+    "o", "a", "os", "as", "um", "uma", "uns", "umas", "ao", "aos", "à", "às",
+    "do", "da", "dos", "das", "no", "na", "nos", "nas", "num", "numa", "nuns",
+    "numas", "dum", "duma", "pelo", "pela", "pelos", "pelas",
+    "neste", "nesta", "nesse", "nessa", "naquele", "naquela", "deste", "desta",
+    "desse", "dessa", "daquele", "daquela",
+    # preposições
+    "de", "em", "por", "para", "pra", "pro", "com", "sem", "sob", "sobre",
+    "entre", "até", "ate", "após", "apos", "desde", "contra", "perante",
+    "durante", "mediante", "conforme",
+    # conjunções e relativos
+    "e", "ou", "mas", "que", "se", "como", "quando", "onde", "porque", "pois",
+    "então", "entao", "nem", "cujo", "cuja", "cujos", "cujas", "porém",
+    "porem", "embora", "caso", "enquanto", "conquanto",
+    # determinantes e possessivos: sempre vêm ANTES do substantivo
+    "meu", "minha", "meus", "minhas", "seu", "sua", "seus", "suas",
+    "teu", "tua", "nosso", "nossa", "nossos", "nossas",
+    "este", "esta", "esse", "essa", "aquele", "aquela", "estes", "estas",
+    "esses", "essas", "aqueles", "aquelas",
+    "cada", "qualquer", "quaisquer", "todo", "toda", "todos", "todas",
+    "algum", "alguma", "nenhum", "nenhuma", "outro", "outra", "outros",
+    "outras", "muito", "muita", "muitos", "muitas", "pouco", "pouca",
+    # comparativos e advérbios que modificam o que vem DEPOIS
+    "mais", "menos", "tão", "tao", "tanto", "tanta", "bem", "mal",
+    "já", "ja", "não", "nao", "nunca", "sempre", "só", "so", "apenas",
+    "quase", "ainda", "também", "tambem",
+    # pronomes átonos: grudam no verbo seguinte
+    "me", "te", "lhe", "lhes", "nos", "vos",
+}
+
+DANGLING_PENALTY = 85.0   # forte o bastante para vencer o bônus de preenchimento
+
+
+def _limpa(texto: str) -> str:
+    return re.sub(r"[^\wÀ-ÿ]", "", texto).lower()
+
+
+def termina_pendurado(texto: str) -> bool:
+    """A legenda (ou a linha) termina numa palavra que pede a próxima?"""
+    palavras = texto.strip().split()
+    if not palavras:
+        return False
+    ultima = palavras[-1]
+    # pontuação no fim fecha a ideia: "...e o preço." não está pendurado
+    if ultima.rstrip()[-1:] in SENTENCE_END + SOFT_END:
+        return False
+    return _limpa(ultima) in DANGLING
+
 
 def wrap(text: str, max_chars: int, max_lines: int) -> list[str] | None:
     """Quebra em até ``max_lines`` linhas de ``max_chars``. None se não couber."""
@@ -55,6 +112,13 @@ def _balance(lines: list[str], max_chars: int) -> list[str]:
             score -= 4          # quebrar antes de conector é preferível
         if a.rstrip()[-1:] in SOFT_END:
             score -= 6
+        if termina_pendurado(a):
+            score += 30         # "que tem AirBnB já / perdeu" — o olho tropeça
+        # órfã medida em CARACTERES, não em palavras: "artificial" sozinha é
+        # uma linha cheia; "arca" sozinha é um fiapo. O que o olho vê é a
+        # largura da linha, não quantas palavras ela tem.
+        if min(len(a), len(b)) < max_chars * 0.25 <= max(len(a), len(b)) * 0.5:
+            score += 45
         if score < best_score:
             best, best_score = [a, b], score
     return best
@@ -72,9 +136,12 @@ def _break_score(words: list[dict], i: int, style: SubtitleStyle) -> float:
         gap = words[i + 1]["start"] - words[i]["end"]
         if gap >= 0.20:
             score += 40 + min(gap, 1.0) * 20
-        nxt = re.sub(r"[^\wÀ-ÿ]", "", words[i + 1]["text"]).lower()
+        nxt = _limpa(words[i + 1]["text"])
         if nxt in CONNECTORS:
             score += 20
+        # nunca deixar a palavra pendurada esperando a próxima legenda
+        if termina_pendurado(text):
+            score -= DANGLING_PENALTY
     else:
         score += 120
     return score
@@ -102,6 +169,10 @@ def build_cues(words: list[dict], style: SubtitleStyle,
                 break
             fill = len(text) / float(max_chars * style.max_lines)
             score = _break_score(words, j, style) + fill * 25
+            if fill < 0.30 and j + 1 < n:
+                # legenda de uma ou duas palavras pisca na tela e não se lê. Só
+                # vale no fim do vídeo, onde não há o que juntar.
+                score -= 70
             if score >= best_score:
                 best_score, best_j, best_lines = score, j, lines
             if j + 1 < n and words[j + 1]["start"] - words[j]["end"] > _MAX_GAP:

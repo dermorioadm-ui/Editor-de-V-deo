@@ -38,6 +38,7 @@ export default function Editor() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
   const playing = useStore((s) => s.playing)
+  const [proxyUrl, setProxyUrl] = useState<string | null>(null)
 
   useEffect(() => { api.presets().then(setPresets).catch(() => {}) }, [])
 
@@ -220,6 +221,42 @@ export default function Editor() {
     if (project?.id) api.safeZone(project.id).then(setSafeZone).catch(() => {})
   }, [project?.id])
 
+  // Prévia leve: uma cópia 480p da FONTE, feita uma vez. É o que o CapCut faz
+  // para o play não engasgar num arquivo de 1080x1920 a 60 fps.
+  useEffect(() => {
+    if (!project?.id) return
+    let vivo = true
+    const ver = async () => {
+      try {
+        const st = await api.proxyStatus(project.id)
+        if (!vivo) return
+        if (st.ok) {
+          setProxyUrl(`/api/projects/${project.id}/proxy`)
+          return true
+        }
+        setProxyUrl(null)
+        return false
+      } catch { return false }
+    }
+    ver().then((pronto) => {
+      // ainda não existe: manda fazer, e a barra de jobs mostra o progresso
+      if (!pronto && vivo && analysed) api.buildProxy(project.id).catch(() => {})
+    })
+    return () => { vivo = false }
+  }, [project?.id, analysed])
+
+  // quando o job do proxy termina, o player passa a tocar a cópia leve
+  useEffect(() => {
+    if (activeJob?.kind !== 'proxy' || activeJob.status !== 'ok') return
+    api.proxyStatus(project!.id).then((st) => {
+      if (st.ok) {
+        setProxyUrl(`/api/projects/${project!.id}/proxy`)
+        toast('ok', 'Prévia leve pronta',
+          'O play não engasga mais. A exportação continua lendo o arquivo original.')
+      }
+    }).catch(() => {})
+  }, [activeJob?.id, activeJob?.status])
+
   if (!project) return null
   const view = timeline
 
@@ -317,6 +354,7 @@ export default function Editor() {
                   duration={view?.duration ?? project.info?.duration ?? 0}
                   style={project.plan?.style}
                   previewUrl={previewUrl}
+                  proxyUrl={proxyUrl}
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)

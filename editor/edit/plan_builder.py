@@ -19,6 +19,11 @@ from . import speed as speed_mod
 from .snap import snap_boundary, snap_end, snap_start
 
 MIN_GAP = 0.08          # abaixo disso não vale a pena cortar: vira contíguo
+# Corte RENTE, na borda que vem de um marcador (palma ou assobio). Aqui o ar e a
+# margem não valem: o usuário bateu palma ou assobiou justamente para dizer
+# "acabou, pode cortar colado" — e depois demora o quanto quiser para recomeçar.
+# Sobra só uma folga mínima, para o fade de 12 ms não comer a consoante.
+TIGHT_GUARD = 0.045
 MIN_VALLEY_REPAIR = 0.04  # o resgate aceita um vale mais curto que o encaixe
 CONTIGUOUS_EPS = 0.002
 
@@ -37,15 +42,71 @@ class Span:
     refused_cut: bool = False             # corte recusado por cair em cima de fala
     min_start: float = -1e9               # o ar nunca pode recuar além disto
     max_end: float = 1e9                  # nem avançar além disto (palavra removida)
+    tight_in: bool = False                # borda colada: marcador (palma/assobio)
+    tight_out: bool = False
 
     @property
     def duration(self) -> float:
         return self.end - self.start
 
 
+# Extremos do controle de agressividade. O ar nunca pode ficar menor que a
+# margem: com margem maior que o ar a geometria come mais pausa do que o corte
+# pediu, e o "corte máximo" acabava cortando menos.
+AGRESSIVO = {"silence_min": 0.28, "air": 0.07, "margin": 0.05}
+CONSERVADOR = {"silence_min": 0.90, "air": 0.32, "margin": 0.20}
+
+
+def aplicar_agressividade(cut: CutParams) -> CutParams:
+    """Traduz o controle único nos três parâmetros de corte."""
+    if cut.aggressiveness is None or cut.aggressiveness < 0:
+        return cut
+    k = max(0.0, min(1.0, float(cut.aggressiveness)))
+    novo = CutParams(**cut.__dict__)
+    for campo in ("silence_min", "air", "margin"):
+        a, c = AGRESSIVO[campo], CONSERVADOR[campo]
+        setattr(novo, campo, round(c + (a - c) * k, 4))
+    novo.margin = min(novo.margin, novo.air)
+    return novo
+
+
+def piso_de_silencio(words: list[dict], cut: CutParams) -> tuple[float, str]:
+    """O menor silêncio que dá para cortar SEM picotar dentro da frase.
+
+    Medido na fala do próprio usuário: o buraco típico entre duas palavras da
+    mesma frase. Cortar abaixo disso deixaria a fala picotada; cortar logo
+    acima é o "mais em cima" que ele pediu, sem risco.
+
+    (Descartei a ideia de escalar o ar pela velocidade de fala: quem fala
+    devagar ganharia MAIS ar, exatamente o contrário do que ele quer.)
+    """
+    if not cut.adaptive_floor or len(words) < 25:
+        return cut.silence_min, ""
+    gaps = [b["start"] - a["end"] for a, b in zip(words, words[1:])
+            if 0.0 <= b["start"] - a["end"] < 1.2]
+    if len(gaps) < 20:
+        return cut.silence_min, ""
+    dentro = sorted(g for g in gaps if g < 0.55)     # buracos de dentro da frase
+    if len(dentro) < 10:
+        return cut.silence_min, ""
+    p90 = dentro[int(len(dentro) * 0.90)]
+    piso = max(0.22, round(p90 + 0.10, 3))
+    if piso >= cut.silence_min:
+        return cut.silence_min, ""
+    return piso, (f"pausa mínima de {piso:.2f} s medida na sua fala "
+                  f"(o preset pedia {cut.silence_min:.2f} s)")
+
+
 def build_spans(words: list[dict], env: Envelope, params: CutParams,
-                removed_ids: set[int]) -> list[Span]:
-    """Agrupa palavras preservadas e encaixa cada borda no vale de energia."""
+                removed_ids: set[int],
+                markers: list[float] | None = None) -> list[Span]:
+    """Agrupa palavras preservadas e encaixa cada borda no vale de energia.
+
+    ``markers`` são os instantes de palma e assobio. O buraco que contém um
+    marcador é cortado RENTE: sem ar, sem margem, do fim da fala ao começo da
+    fala seguinte. É o que dá ao usuário liberdade para demorar o quanto quiser
+    antes de recomeçar, sabendo que o vazio inteiro sai.
+    """
     kept = [w for w in words if w["i"] not in removed_ids]
     if not kept:
         return []
@@ -83,8 +144,13 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
                          next_neighbor_start=next_word["start"] if next_word else None,
                          guard=params.snap_neighbor_guard)
 
-        start = s_in.time - params.margin          # folga da Parte 3.2
-        end = s_out.time + params.margin
+        # borda que nasce de um marcador não leva folga nenhuma
+        marca_antes = _marker_between(markers, prev_word, first)
+        marca_depois = _marker_between(markers, last, next_word)
+        folga_in = TIGHT_GUARD if marca_antes else params.margin
+        folga_out = TIGHT_GUARD if marca_depois else params.margin
+        start = s_in.time - folga_in               # folga da Parte 3.2
+        end = s_out.time + folga_out
 
         # A folga só pode crescer DENTRO do vale onde a borda foi encaixada.
         # Sem esta trava a folga empurra a borda de volta para cima da fala —
@@ -110,11 +176,22 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
         spans.append(Span(round(start, 4), round(end, 4), first["i"], last["i"],
                           s_in.to_dict(), s_out.to_dict(),
                           gap_has_removed_words=removed_flags[gi],
-                          min_start=min_start, max_end=max_end))
+                          min_start=min_start, max_end=max_end,
+                          tight_in=marca_antes, tight_out=marca_depois))
 
     spans = _split_on_silence(spans, env, params)
     _resolve_overlaps(spans, env, params)
     return spans
+
+
+def _marker_between(markers: list[float] | None, esq: dict | None,
+                    dir_: dict | None) -> bool:
+    """Existe palma ou assobio no buraco entre estas duas palavras?"""
+    if not markers:
+        return False
+    a = float(esq["end"]) - 0.06 if esq else -1e9
+    b = float(dir_["start"]) + 0.06 if dir_ else 1e9
+    return any(a <= float(m) <= b for m in markers)
 
 
 def _split_on_silence(spans: list[Span], env: Envelope,
@@ -145,7 +222,8 @@ def _split_on_silence(spans: list[Span], env: Envelope,
                           span.first_word, span.last_word,
                           span.snap_in if not out or out[-1].end < cursor else None,
                           None, cut_in=span.cut_in, cut_out=True,
-                          min_start=span.min_start, max_end=span.max_end)
+                          min_start=span.min_start, max_end=span.max_end,
+                          tight_in=span.tight_in if cursor == span.start else False)
             out.append(pedaco)
             cursor = dir_
         if span.end - cursor > MIN_GAP:
@@ -154,11 +232,13 @@ def _split_on_silence(spans: list[Span], env: Envelope,
                             None, span.snap_out, cut_in=True,
                             cut_out=span.cut_out,
                             gap_has_removed_words=span.gap_has_removed_words,
-                            min_start=span.min_start, max_end=span.max_end))
+                            min_start=span.min_start, max_end=span.max_end,
+                            tight_out=span.tight_out))
         elif out:
             out[-1].end = round(span.end, 4)
             out[-1].snap_out = span.snap_out
             out[-1].cut_out = span.cut_out
+            out[-1].tight_out = span.tight_out
     return out
 
 
@@ -189,11 +269,15 @@ def _resolve_overlaps(spans: list[Span], env: Envelope, params: CutParams) -> No
             continue
         room = max(0.0, (gap - MIN_GAP) / 2.0)
         add = min(extra_air, room)
+        # borda de marcador: o ar da Parte 3.3 não se aplica. O usuário pediu
+        # corte colado justamente ali.
+        add_a = 0.0 if a.tight_out else add
+        add_b = 0.0 if b.tight_in else add
         # o ar não pode reinvadir uma palavra removida pelo usuário: sem esta
         # trava, 40 ms do começo da palavra removida vazavam de volta como um
         # estalo na emenda (o clamp do build_spans era desfeito aqui)
-        a.end = round(min(a.end + add, a.max_end), 4)
-        b.start = round(max(b.start - add, b.min_start), 4)
+        a.end = round(min(a.end + add_a, a.max_end), 4)
+        b.start = round(max(b.start - add_b, b.min_start), 4)
         # O resgate é sempre a ÚLTIMA palavra sobre a borda: o ar da 3.3
         # também é capaz de empurrar uma borda encaixada de volta para cima da
         # fala, e nesse caso é o ar que cede.
@@ -437,12 +521,21 @@ def words_removed_by_takes(words: list[dict], takes: list[dict]) -> set[int]:
 
 def build_auto_plan(words: list[dict], env: Envelope, cut: CutParams,
                     sp: SpeedParams, takes: list[dict],
-                    extra_removed: set[int] | None = None) -> dict:
-    """Pipeline completo: palavras + envelope -> clipes, removidos, notas."""
+                    extra_removed: set[int] | None = None,
+                    markers: list[float] | None = None) -> dict:
+    """Pipeline completo: palavras + envelope -> clipes, removidos, notas.
+
+    ``markers`` = instantes de palma e assobio. O buraco que tem um marcador
+    dentro é cortado rente, sem ar.
+    """
     removed_ids = words_removed_by_takes(words, takes)
     if extra_removed:
         removed_ids |= set(extra_removed)
-    spans = build_spans(words, env, cut, removed_ids)
+    cut = aplicar_agressividade(cut)
+    piso, nota_piso = piso_de_silencio(words, cut)
+    if piso < cut.silence_min:
+        cut = CutParams(**{**cut.__dict__, "silence_min": piso})
+    spans = build_spans(words, env, cut, removed_ids, markers)
     refused = [
         {"type": "refused_cut", "at": round(sp.end, 3),
          "detail": "corte recusado: o Whisper marcou pausa aqui, mas o envelope "
@@ -452,6 +545,8 @@ def build_auto_plan(words: list[dict], env: Envelope, cut: CutParams,
     ]
     spans, notes = enforce_min_block(spans, cut)
     notes = refused + notes
+    if nota_piso:
+        notes.append({"type": "piso_adaptativo", "detail": nota_piso})
     clips = assign_speed(spans, words, env, cut, sp, env.duration)
     regions = removed_regions(spans, env.duration, takes)
     return {"clips": clips, "removed": regions, "notes": notes,

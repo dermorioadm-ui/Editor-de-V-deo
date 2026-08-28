@@ -13,6 +13,7 @@ from . import db, presets as presets_mod
 from .audio.align import long_silences_inside, trim_words
 from .audio.segments import split_narrative
 from .audio.clap import build_discarded_takes, detect_claps
+from .audio.whistle import detect_whistles
 from .audio.envelope import Envelope, compute_envelope
 from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
                      SpeedParams, SubtitleStyle, ZoomParams, ensure_dirs,
@@ -68,6 +69,37 @@ class Project:
         return self.dir / "envelope.npy"
 
     @property
+    def proxy_file(self) -> Path:
+        """Cópia leve da FONTE, só para a prévia tocar liso."""
+        return self.dir / "proxy.mp4"
+
+    @property
+    def proxy_ok(self) -> bool:
+        """O proxy existe e é do arquivo que está aberto agora?
+
+        Se o usuário trocar o arquivo fonte, o proxy velho tem que morrer —
+        senão ele edita vendo um vídeo e exporta outro.
+        """
+        f = self.proxy_file
+        if not f.exists() or f.stat().st_size < 1024:
+            return False
+        marca = self.dir / "proxy.origem"
+        if not marca.exists():
+            return False
+        try:
+            src = Path(self.source_path)
+            atual = f"{src.resolve()}|{src.stat().st_size}|{int(src.stat().st_mtime)}"
+        except OSError:
+            return False
+        return marca.read_text(encoding="utf-8").strip() == atual
+
+    def marcar_proxy(self) -> None:
+        src = Path(self.source_path)
+        (self.dir / "proxy.origem").write_text(
+            f"{src.resolve()}|{src.stat().st_size}|{int(src.stat().st_mtime)}",
+            encoding="utf-8")
+
+    @property
     def words(self) -> list[dict]:
         return self.analysis.get("words", [])
 
@@ -120,6 +152,7 @@ def create(source_path: str, name: str = "", preset: str = "VSL") -> Project:
     pid = uuid.uuid4().hex[:12]
     plan = EditPlan(project_id=pid, preset=preset)
     apply_preset_to_plan(plan, preset)
+    escalar_legenda(plan, info)
     now = time.time()
     db.ex(
         "INSERT INTO projects(id, name, source_path, preset, status, info_json, "
@@ -156,6 +189,36 @@ def delete_project(pid: str) -> None:
     db.ex("DELETE FROM media WHERE project_id=?", (pid,))
     _envelope_cache.pop(pid, None)
     shutil.rmtree(PROJECTS_DIR / pid, ignore_errors=True)
+
+
+# O fontsize do ASS é ABSOLUTO em pixels do vídeo: o mesmo 35 dá 272 px de
+# largura tanto num vídeo de 1080 quanto num de 576 de largura — ou seja, 25%
+# da tela num, 47% no outro. O usuário pediu "fonte 35" olhando um vídeo de
+# 1024 de altura; é essa a régua. Num vídeo de 1920 o mesmo tamanho visual é 66.
+ALTURA_DE_REFERENCIA = 1024
+
+
+def escalar_legenda(plan: EditPlan, info) -> None:
+    """Ajusta o tamanho da legenda à resolução do vídeo.
+
+    Sem isto, mudar de um vídeo de 1024 de altura para um de 1920 encolhe a
+    legenda pela metade sem ninguém ter mexido em nada.
+    """
+    altura = 0
+    try:
+        altura = int(info.display_size[1])
+    except Exception:  # noqa: BLE001
+        altura = 0
+    if altura < 200:
+        return
+    k = altura / ALTURA_DE_REFERENCIA
+    st = plan.style
+    st.fontsize = max(8, int(round(st.fontsize * k)))
+    st.margin_v = max(0, int(round(st.margin_v * k)))
+    st.margin_l = max(0, int(round(st.margin_l * k)))
+    st.margin_r = max(0, int(round(st.margin_r * k)))
+    st.outline = round(st.outline * k, 2)
+    st.shadow = round(st.shadow * k, 2)
 
 
 def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
@@ -272,6 +335,18 @@ def analyze(project: Project, ctx) -> dict:
         except Exception as exc:  # noqa: BLE001
             ctx.progress(0.93, f"não deu para achar o rosto: {exc}")
 
+    ctx.stage("assobio", "procurando assobios")
+    freq = project.plan.whistle_freq or None
+    assobios = detect_whistles(samples, sr, env, freq_alvo=freq)
+    # a decisão do usuário sobrevive à reanálise: assobio desligado continua
+    for a in assobios:
+        for antigo in previous.get("whistles", []):
+            if (abs(float(antigo.get("time", -1)) - a.time) < 0.15
+                    and antigo.get("enabled") is False):
+                a.enabled = False
+    if assobios:
+        ctx.progress(0.94, f"{len(assobios)} assobio(s) — take validado, corte rente")
+
     ctx.stage("takes", "aplicando a regra do take")
 
     fillers = annotate_fillers(words, env)
@@ -296,6 +371,7 @@ def analyze(project: Project, ctx) -> dict:
         "model": result.get("model"),
         "language": result.get("language"),
         "claps": [c.to_dict() for c in claps],
+        "whistles": [a.to_dict() for a in assobios],
         "takes": takes,
         "fillers": fillers,
         "word_fixes": encaixes,
@@ -364,9 +440,20 @@ def auto_edit(project: Project, ctx) -> dict:
     project.analysis["repeats"] = saida
     repetidas = repeats_removed_ids(saida)
 
+    # Palma e assobio são MARCADORES: o buraco que tem um deles dentro é
+    # cortado rente, sem ar. É o que dá ao usuário liberdade para demorar o
+    # quanto quiser antes de recomeçar — o vazio inteiro sai.
+    marcadores = [float(c["time"]) for c in project.analysis.get("claps", [])
+                  if c.get("enabled")]
+    marcadores += [float(a["time"]) for a in project.analysis.get("whistles", [])
+                   if a.get("enabled", True)]
+    # o fim de cada take descartado também é emenda de marcador
+    marcadores += [float(t["end"]) for t in takes if not t.get("restored")]
+
     ctx.stage("cortes", "propondo cortes com encaixe no vale de energia")
     result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
-                             takes, extra_removed=manual_removed | repetidas)
+                             takes, extra_removed=manual_removed | repetidas,
+                             markers=sorted(marcadores))
     plan = project.plan
     from .edit.ops import remap_output_items
     fps = project.info.fps if project.info else None
@@ -375,6 +462,7 @@ def auto_edit(project: Project, ctx) -> dict:
     plan.removed = result["removed"]
     plan.discarded_takes = takes
     plan.claps = project.analysis.get("claps", [])
+    plan.whistles = project.analysis.get("whistles", [])
     # NÃO zerar plan.subtitles aqui: os textos editados à mão são casados de
     # volta pelo rebuild (por palavra), e cutaways/overlays/desfoques são
     # reancorados pela fonte — refazer a edição não pode custar trabalho manual
@@ -541,6 +629,30 @@ def _nome_de_arquivo(nome: str) -> str:
     """Nome de projeto -> nome de arquivo que o Windows aceita."""
     limpo = "".join(c for c in nome if c not in '\\/:*?"<>|').strip()
     return (limpo or "video") + "_editado"
+
+
+def build_proxy_job(project: Project, ctx) -> dict:
+    """Gera a cópia leve da fonte para a prévia (Parte: play sem engasgo)."""
+    from .render.proxy import build_proxy, vale_a_pena
+
+    if project.info is None:
+        raise RuntimeError("rode a análise antes")
+    precisa, motivo = vale_a_pena(project.info)
+    if not precisa:
+        ctx.progress(1.0, motivo)
+        return {"skipped": True, "detail": motivo}
+    if project.proxy_ok:
+        ctx.progress(1.0, "a prévia leve já existe")
+        return {"skipped": True, "detail": "proxy já existe"}
+    ctx.stage("proxy", f"gerando prévia leve — {motivo}")
+    res = build_proxy(project.source_path, project.proxy_file,
+                      project.info.duration,
+                      on_progress=lambda f: ctx.progress(f, "gerando prévia leve"),
+                      cancel=ctx.cancelled)
+    project.marcar_proxy()
+    ctx.progress(1.0, f"prévia leve pronta: {res['width']}x{res['height']} "
+                      f"a {res['fps']:.0f} fps, {res['size_bytes'] / 1e6:.1f} MB")
+    return res
 
 
 def export(project: Project, ctx, options: dict | None = None) -> dict:
@@ -752,6 +864,7 @@ def timeline_summary(project: Project) -> dict:
         "removed": [r.to_dict() for r in plan.removed],
         "takes": plan.discarded_takes,
         "claps": plan.claps,
+        "whistles": plan.whistles,
         "subtitles": [s.to_dict() for s in plan.subtitles],
         "audit": plan.audit,
         "audit_fixed": plan.audit_fixed,

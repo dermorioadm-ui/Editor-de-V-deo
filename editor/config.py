@@ -135,6 +135,11 @@ class CutParams:
     silence_min: float = 0.60        # pausa acima disso vira corte
     air: float = 0.20                # ar deixado de cada lado do corte
     margin: float = 0.15             # folga extra em cada trecho preservado
+    # Um controle só, de 0 (conservador) a 1 (agressivo), que move os três
+    # números juntos. Ninguém deveria precisar decorar três parâmetros para
+    # dizer "corta mais em cima".
+    aggressiveness: float = -1.0     # < 0 = usa os três valores acima como estão
+    adaptive_floor: bool = True      # piso de silêncio medido na fala do usuário
     min_block: float = 1.00          # bloco mínimo
     short_block_policy: str = "keep"  # keep | drop
     narrative_pause: float = 0.80    # fronteira de bloco narrativo
