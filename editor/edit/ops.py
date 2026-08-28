@@ -329,3 +329,43 @@ def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
                     if nt is not None:
                         kf["t"] = round(nt, 4)
     return moved
+
+
+def resize_removed(plan, start: float, end: float,
+                   new_start: float, new_end: float,
+                   source: str = "main") -> dict:
+    """Arrasta a borda de um trecho JÁ REMOVIDO, direto na trilha.
+
+    Crescer o vermelho tira mais vídeo; encolher devolve. É o gesto que
+    faltava: dar um tapa no que a automação decidiu sem precisar desfazer e
+    refazer a seleção inteira.
+    """
+    start, end = round(min(start, end), 4), round(max(start, end), 4)
+    new_start = round(max(0.0, min(new_start, new_end)), 4)
+    new_end = round(max(new_start + 0.02, max(new_start, new_end)), 4)
+    mudou: list[str] = []
+
+    # ------ borda esquerda
+    if new_start < start - 0.01:
+        plan.clips, _ = cut_source_range(plan.clips, new_start, start, source)
+        mudou.append(f"início {start:.2f} → {new_start:.2f} (tirou mais "
+                     f"{start - new_start:.2f} s)")
+    elif new_start > start + 0.01:
+        restore_range(plan, start, min(new_start, end), source)
+        mudou.append(f"início {start:.2f} → {new_start:.2f} (devolveu "
+                     f"{new_start - start:.2f} s)")
+
+    # ------ borda direita
+    if new_end > end + 0.01:
+        plan.clips, _ = cut_source_range(plan.clips, end, new_end, source)
+        mudou.append(f"fim {end:.2f} → {new_end:.2f} (tirou mais "
+                     f"{new_end - end:.2f} s)")
+    elif new_end < end - 0.01:
+        restore_range(plan, max(new_end, new_start), end, source)
+        mudou.append(f"fim {end:.2f} → {new_end:.2f} (devolveu "
+                     f"{end - new_end:.2f} s)")
+
+    if not mudou:
+        return {"ok": False, "reason": "nada mudou"}
+    return {"ok": True, "explain": mudou,
+            "start": new_start, "end": new_end}

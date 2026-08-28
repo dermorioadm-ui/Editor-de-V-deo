@@ -214,6 +214,8 @@ class EditPlan:
     audio: AudioParams = field(default_factory=AudioParams)
     export: ExportParams = field(default_factory=ExportParams)
     zoom: ZoomParams = field(default_factory=ZoomParams)
+    look: str = "nenhum"                # filtro de cinema do vídeo inteiro
+    look_vignette: float | None = None  # None = a vinheta que o look define
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     repeats: list = field(default_factory=list)       # trechos ditos duas vezes
@@ -240,6 +242,8 @@ class EditPlan:
             "audio": asdict(self.audio),
             "export": asdict(self.export),
             "zoom": asdict(self.zoom),
+            "look": self.look,
+            "look_vignette": self.look_vignette,
             "audit": self.audit,
             "audit_fixed": self.audit_fixed,
             "repeats": self.repeats,
@@ -268,6 +272,9 @@ class EditPlan:
         if "levels" in zdata:
             zdata["levels"] = tuple(float(x) for x in zdata["levels"])
         plan.zoom = ZoomParams(**zdata) if zdata else ZoomParams()
+        plan.look = str(data.get("look", "nenhum"))
+        lv = data.get("look_vignette")
+        plan.look_vignette = None if lv is None else float(lv)
         plan.audit = list(data.get("audit", []))
         plan.audit_fixed = list(data.get("audit_fixed", []))
         plan.repeats = list(data.get("repeats", []))

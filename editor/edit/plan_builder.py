@@ -112,8 +112,54 @@ def build_spans(words: list[dict], env: Envelope, params: CutParams,
                           gap_has_removed_words=removed_flags[gi],
                           min_start=min_start, max_end=max_end))
 
+    spans = _split_on_silence(spans, env, params)
     _resolve_overlaps(spans, env, params)
     return spans
+
+
+def _split_on_silence(spans: list[Span], env: Envelope,
+                      params: CutParams) -> list[Span]:
+    """Parte qualquer span que ainda tenha um vale de silêncio dentro.
+
+    O agrupamento acima nasce do BURACO ENTRE palavras. Quando o alinhamento
+    do Whisper estica uma palavra por cima de uma pausa, não existe buraco —
+    e o vale ia inteiro para o vídeo. Aqui quem manda é o ENVELOPE: se há
+    silêncio de verdade dentro do trecho, ele é cortado, custe o que custar
+    ao que as palavras dizem.
+    """
+    out: list[Span] = []
+    for span in spans:
+        runs = [r for r in env.silence_runs(span.start, span.end,
+                                            min_duration=params.silence_min)
+                if r.start > span.start + 0.05 and r.end < span.end - 0.05]
+        if not runs:
+            out.append(span)
+            continue
+        cursor = span.start
+        for r in runs:
+            esq = max(cursor, r.start + params.air)
+            dir_ = min(span.end, r.end - params.air)
+            if esq - cursor < MIN_GAP or dir_ - esq < MIN_GAP:
+                continue
+            pedaco = Span(round(cursor, 4), round(esq, 4),
+                          span.first_word, span.last_word,
+                          span.snap_in if not out or out[-1].end < cursor else None,
+                          None, cut_in=span.cut_in, cut_out=True,
+                          min_start=span.min_start, max_end=span.max_end)
+            out.append(pedaco)
+            cursor = dir_
+        if span.end - cursor > MIN_GAP:
+            out.append(Span(round(cursor, 4), round(span.end, 4),
+                            span.first_word, span.last_word,
+                            None, span.snap_out, cut_in=True,
+                            cut_out=span.cut_out,
+                            gap_has_removed_words=span.gap_has_removed_words,
+                            min_start=span.min_start, max_end=span.max_end))
+        elif out:
+            out[-1].end = round(span.end, 4)
+            out[-1].snap_out = span.snap_out
+            out[-1].cut_out = span.cut_out
+    return out
 
 
 def _resolve_overlaps(spans: list[Span], env: Envelope, params: CutParams) -> None:

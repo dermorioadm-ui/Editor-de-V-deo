@@ -295,11 +295,30 @@ janela desliga o programa. Para desligar de propósito, clique nela e aperte
   | faixa | o que é |
   |---|---|
   | marcas | bandeirinha laranja = palma (clique liga/desliga). Triângulo vermelho = borda que ainda precisa de você. |
-  | onda | o áudio. Hachurado vermelho = sai do vídeo. Cinza = take descartado pela palma. O risco vermelho fino no rodapé é um corte curto demais para desenhar — dê zoom para vê-lo. |
+  | onda | o áudio. Hachurado vermelho = sai do vídeo — **arraste as bordas vermelhas** para tirar mais ou devolver. Cinza = take descartado pela palma. O risco vermelho fino no rodapé é um corte curto demais para desenhar — dê zoom para vê-lo. |
   | seções | Gancho, Dor, Oferta… blocos vizinhos da mesma seção viram uma faixa só, com o nome escrito. |
   | velocidade | um retângulo por bloco, colorido pela velocidade: azul 1,00x, verde até 1,12x, amarelo até 1,25x, laranja acima disso. Canto marcado = enquadramento fechado. Clique para selecionar; **Delete apaga o bloco inteiro**. |
 
   Embaixo de tudo, a faixa azul das legendas — arraste as bordas para ajustar.
+### Filtros de cinema
+
+Aba **Filtro**. Oito opções, e a miniatura de cada uma é o **seu vídeo** com o
+filtro já aplicado — você escolhe olhando, não lendo um nome.
+
+| filtro | para quê |
+|---|---|
+| Preto e branco | o clássico de depoimento |
+| Preto e branco duro | alto contraste, quase gráfico; bom para hook |
+| Ambiente quente | pele viva, sombra âmbar; sala de casa, fim de tarde |
+| Ambiente frio | azulado e sóbrio; escritório, madrugada |
+| Cinema (teal & orange) | pele quente contra fundo esverdeado; look de trailer |
+| Vintage | lavado, com sépia no preto; parece arquivo antigo |
+| Nítido | só contraste e definição; salva vídeo de celular chapado |
+
+Todos entram no **mesmo encode** dos blocos: nenhuma geração a mais, e a
+legenda não é afetada (o filtro entra antes dela, senão o contorno preto
+sumiria junto). A vinheta de cada filtro pode ser forçada no controle abaixo.
+
 - **Painel da direita** — o que sobrou para você decidir. Bordas que dava para
   acertar sozinho já vêm acertadas (o painel verde diz quantas e o que mudou);
   onde a fala não tem respiro por perto, o editor **não corta** em vez de comer
@@ -347,15 +366,37 @@ fica entre 0,80 e 1,00; frase diferente, entre 0,00 e 0,67 — e “não é sobr
 **preço** é sobre **valor**” contra “não é sobre **sorte** é sobre **método**”
 dá 0,00 de conteúdo, então o paralelismo fica no vídeo.
 
+### Por que o corte de silêncio às vezes não acontecia
+
+O Whisper não devolve fronteira acústica: devolve fronteira de **alinhamento**.
+Quando ele erra, uma palavra de duas letras vem ocupando cinco segundos — e
+esses cinco segundos são, na prática, uma pausa escondida dentro de uma
+palavra. Como o corte nasce do **buraco entre palavras**, não havia buraco,
+não havia corte, e o vale ia inteiro para o vídeo.
+
+Duas defesas independentes, e cada uma sozinha já resolve:
+
+1. **Encaixe no som.** Cada palavra é encolhida até onde há áudio de verdade.
+   Só encolhe, nunca estica — encolher no máximo deixa o corte conservador;
+   esticar restauraria silêncio.
+2. **Rede de segurança.** Se ainda sobrar um vale dentro de um trecho, ele é
+   partido pelo **envelope**, custe o que custar ao que as palavras dizem.
+
+Medido num caso com quatro palavras esticadas: **11,6 s de vale** ficavam no
+vídeo; com qualquer uma das duas defesas, **zero**. O painel da direita conta
+quantas palavras foram encaixadas.
+
 ### O jogo de zoom
 
 Corte de silêncio sem troca de enquadramento parece defeito de arquivo. Com o
 enquadramento mudando, o mesmo corte vira linguagem — é assim que VSL é
-montada. O editor faz isso sozinho: a cada corte de verdade o quadro alterna
-entre aberto e fechado, e a virada do gancho para o corpo entra fechada.
+montada. O editor faz isso sozinho, **a cada fim de frase**.
 
+- A troca é por **frase**, não por corte. Corta-se dentro de uma frase o tempo
+  todo para tirar respiro, e o quadro não pode pular no meio de um pensamento.
+  Medido: 71 trocas de enquadramento, **nenhuma** no meio de frase.
 - Bloco **contíguo** (onde só a velocidade muda, sem corte) mantém o
-  enquadramento. Trocar sem cortar é que embrulha o olho.
+  enquadramento.
 - Bloco curto herda o do vizinho.
 - É um crop central com volta ao tamanho de saída, **no mesmo encode dos
   blocos**: não custa geração nenhuma e a resolução não muda.

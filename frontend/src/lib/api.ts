@@ -92,6 +92,16 @@ export const api = {
     post<any>(`/api/projects/${id}/ops/audit-fix`, { index }),
   setTake: (id: string, take_id: string, restored: boolean) =>
     post<any>(`/api/projects/${id}/ops/take`, { take_id, restored }),
+  resizeRemoved: (id: string, start: number, end: number,
+                  new_start: number, new_end: number) =>
+    post<any>(`/api/projects/${id}/ops/resize-removed`,
+              { start, end, new_start, new_end }),
+
+  looks: () => req<any[]>('/api/looks'),
+  setLook: (id: string, look: string, vignette?: number | null) =>
+    post(`/api/projects/${id}/ops/look`,
+         vignette === undefined ? { look } : { look, vignette }),
+
   setRepeat: (id: string, repeat_id: string, restored: boolean) =>
     post(`/api/projects/${id}/ops/repeat`, { repeat_id, restored }),
 
@@ -137,8 +147,9 @@ export const api = {
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
 
-  frameUrl: (id: string, t: number, source = 'main', width = 360) =>
-    `/api/projects/${id}/frame?t=${t.toFixed(3)}&source=${source}&width=${width}`,
+  frameUrl: (id: string, t: number, source = 'main', width = 360, look = '') =>
+    `/api/projects/${id}/frame?t=${t.toFixed(3)}&source=${source}&width=${width}`
+    + (look ? `&look=${look}` : ''),
   updatePhoto: (id: string, cid: string, payload: any) =>
     put<any>(`/api/projects/${id}/clips/${cid}/photo`, payload),
 

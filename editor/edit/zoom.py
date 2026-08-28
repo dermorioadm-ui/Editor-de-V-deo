@@ -15,14 +15,22 @@ from ..config import ZoomParams
 from ..models import Clip
 
 CONTIGUOUS_EPS = 0.002
+# o bloco começa na frase se a borda cai perto do começo dela — o encaixe no
+# vale e o ar do corte movem a borda algumas centenas de ms
+SENTENCE_EPS = 0.45
 
 
-def assign_zoom(clips: list[Clip], params: ZoomParams) -> int:
+def assign_zoom(clips: list[Clip], params: ZoomParams,
+                sentence_starts: list[float] | None = None) -> int:
     """Distribui os níveis de zoom pelos blocos. Devolve quantos ficaram != 1.
 
-    A troca acontece no CORTE, nunca no meio de um trecho contínuo: dois
-    blocos que só existem porque a velocidade muda continuam com o mesmo
-    enquadramento, senão a imagem pula sem que nada tenha sido cortado.
+    A troca acontece no FIM DE CADA FRASE. Trocar a cada corte deixa o vídeo
+    nervoso — corta-se dentro de uma frase o tempo todo, para tirar respiro,
+    e o enquadramento não pode pular no meio de um pensamento. Frase é a
+    unidade que o espectador percebe, então é nela que o quadro muda.
+
+    ``sentence_starts`` são os inícios de frase (fronteiras narrativas, as
+    pausas longas). Sem eles, cai de volta na troca por corte.
     """
     main = [c for c in clips if c.enabled and c.source == "main"]
     if not params.enabled or not main:
@@ -34,6 +42,13 @@ def assign_zoom(clips: list[Clip], params: ZoomParams) -> int:
     if not levels:
         levels = [1.0]
 
+    fronteiras = sorted(sentence_starts or [])
+
+    def comeca_frase(t: float) -> bool:
+        if not fronteiras:
+            return True          # sem frases conhecidas, todo corte troca
+        return any(abs(t - f) <= SENTENCE_EPS for f in fronteiras)
+
     step = 0
     current = levels[0]
     for i, clip in enumerate(main):
@@ -42,9 +57,9 @@ def assign_zoom(clips: list[Clip], params: ZoomParams) -> int:
         curto = clip.src_duration < params.min_block
         if i == 0:
             current = levels[0]
-        elif contiguo or curto:
-            # nada foi cortado aqui (ou o bloco é curto demais para respirar):
-            # mantém o enquadramento do vizinho
+        elif contiguo or curto or not comeca_frase(clip.src_start):
+            # nada foi cortado aqui, o bloco é curto demais para respirar, ou
+            # o corte caiu no MEIO de uma frase: mantém o enquadramento
             current = prev.zoom if prev else current
         else:
             step += 1

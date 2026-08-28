@@ -383,6 +383,33 @@ def api_apply_preset(pid: str, payload: dict = Body(...)) -> dict:
     return {"ok": True, "plan": project.plan.to_dict()}
 
 
+@app.get("/api/looks")
+def api_looks() -> list[dict]:
+    """Catálogo dos filtros de cinema."""
+    from .render.looks import catalog
+
+    return catalog()
+
+
+@app.post("/api/projects/{pid}/ops/look")
+def api_look(pid: str, payload: dict = Body(...)) -> dict:
+    """Escolhe o filtro de cinema do vídeo inteiro."""
+    from .render.looks import BY_ID
+
+    project = _project(pid)
+    look = str(payload.get("look", "nenhum"))
+    if look not in BY_ID:
+        raise HTTPException(400, f"filtro desconhecido: {look}")
+    project.plan.look = look
+    if "vignette" in payload:
+        v = payload["vignette"]
+        project.plan.look_vignette = None if v is None else max(0.0, min(1.0, float(v)))
+    project.save_plan()
+    return {"ok": True, "look": look,
+            "vignette": project.plan.look_vignette,
+            "timeline": svc.timeline_summary(project)}
+
+
 @app.get("/api/presets")
 def api_presets() -> list[dict]:
     return presets_mod.list_presets()
@@ -600,6 +627,24 @@ def api_audit_fix(pid: str, payload: dict = Body(...)) -> dict:
         project.plan.removed = resync_removed(project.plan.clips,
                                               project.plan.removed, env.duration)
     return {"ok": True, "timeline": _after_edit(project)}
+
+
+@app.post("/api/projects/{pid}/ops/resize-removed")
+def api_resize_removed(pid: str, payload: dict = Body(...)) -> dict:
+    """Arrasta a borda de um trecho já removido, na trilha."""
+    project = _project(pid)
+    env = _env_or_404(project)
+    res = _remapping(project, lambda: ops.resize_removed(
+        project.plan,
+        float(payload["start"]), float(payload["end"]),
+        float(payload["new_start"]), float(payload["new_end"])))
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("reason", "não deu"))
+    from .edit.plan_builder import resync_removed
+
+    project.plan.removed = resync_removed(project.plan.clips,
+                                          project.plan.removed, env.duration)
+    return {**res, "timeline": _after_edit(project)}
 
 
 @app.post("/api/projects/{pid}/ops/zoom")
@@ -1092,8 +1137,13 @@ def api_safe_zone(pid: str) -> dict:
 
 
 @app.get("/api/projects/{pid}/frame")
-def api_frame(pid: str, t: float = 0.0, width: int = 360, source: str = "main"):
-    """Um quadro do vídeo, para posicionar elementos com guias."""
+def api_frame(pid: str, t: float = 0.0, width: int = 360, source: str = "main",
+              look: str = ""):
+    """Um quadro do vídeo, para posicionar elementos com guias.
+
+    ``look`` aplica um filtro de cinema no quadro — é assim que o usuário vê o
+    filtro antes de exportar, sem renderizar o vídeo inteiro.
+    """
     project = _project(pid)
     path = project.source_path
     if source != "main":
@@ -1110,8 +1160,11 @@ def api_frame(pid: str, t: float = 0.0, width: int = 360, source: str = "main"):
         found = tl.to_source(t)
         if found and found[0] == "main":
             t = found[1]
+    from .render.looks import BY_ID, look_chain
+
+    extra = look_chain(look) if look and look in BY_ID else ""
     try:
-        data, _mean = video_analysis.frame_jpeg(path, t, "", width)
+        data, _mean = video_analysis.frame_jpeg(path, t, extra, width)
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)[:300]) from exc
     return Response(content=data, media_type="image/jpeg",

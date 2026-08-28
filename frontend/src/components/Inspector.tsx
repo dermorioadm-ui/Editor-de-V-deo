@@ -45,75 +45,81 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
 
   return (
     <div className="p-3 space-y-4">
-      {/* ------------------------------------------------ alertas de borda */}
-      {(view.audit_fixed?.length ?? 0) > 0 && (view.audit?.length ?? 0) === 0 && (
-        <section className="card border-emerald-900/50 bg-emerald-950/20 p-3">
-          <h3 className="text-xs font-semibold text-emerald-300 uppercase tracking-wide">
-            Bordas conferidas · nada a fazer
-          </h3>
-          <p className="hint mt-1">
-            {view.audit_fixed!.length} borda(s) foram ajustadas sozinhas.{' '}
-            {view.audit_fixed!.some((f) => f.kind === 'sem-corte')
-              ? 'Onde não dava para cortar limpo, o corte não foi feito — a pausa ficou '
-                + 'no vídeo em vez de comer palavra.'
-              : 'Nenhuma delas encostava em palavra.'}
-          </p>
-          <details className="mt-1.5">
-            <summary className="text-[11px] text-slate-500 cursor-pointer">
-              ver o que mudou
-            </summary>
-            <div className="space-y-1 mt-1.5 max-h-40 overflow-auto">
-              {view.audit_fixed!.map((f, i) => (
-                <p key={i} className="text-[11px] text-slate-400 font-mono">
-                  {timecode(f.from, true)} → {timecode(f.to, true)}
-                  <span className="font-sans"> · {f.reason}</span>
-                </p>
-              ))}
-            </div>
-          </details>
-        </section>
-      )}
-
-      {view.audit?.length > 0 && (
-        <section className="card border-amber-900/60 bg-amber-950/25 p-3">
-          <h3 className="text-xs font-semibold text-amber-300 uppercase tracking-wide mb-1">
-            {view.audit.length} corte(s) precisam de você
-          </h3>
-          <p className="hint mb-2">
-            {(view.audit_fixed?.length ?? 0) > 0
-              ? `Outras ${view.audit_fixed!.length} borda(s) já foram acertadas sozinhas. `
-              : ''}
-            Nestes aqui a fala não tem respiro por perto: qualquer lugar que a borda
-            for come um pedaço. Escolha você.
-          </p>
-          <div className="space-y-2 max-h-56 overflow-auto">
-            {view.audit.map((issue, i) => (
-              <div key={`${issue.clip_id}-${issue.side}-${i}`}
-                   className="text-[11px] leading-snug border-t border-amber-900/40 pt-2
-                              first:border-0 first:pt-0">
-                <p className="text-amber-100">{issue.message}</p>
-                <p className="text-slate-400 mt-0.5">{issue.suggestion_reason}</p>
-                <div className="flex gap-1 mt-1.5">
-                  <button className="btn btn-xs"
-                          onClick={() => setPlayhead(Math.max(0, issue.time - 0.6))}>
-                    ouvir
-                  </button>
-                  <button className="btn btn-xs"
-                          onClick={async () => {
-                            snapshot()
-                            await api.fixAudit(project.id, i)
-                            await onChanged()
-                            toast('ok', 'Borda corrigida',
-                              `movida para ${issue.suggestion.toFixed(3)} s`)
-                          }}>
-                    mover para {issue.suggestion.toFixed(2)} s
-                  </button>
+      {/* --------------------------------------------- ajustes automáticos */}
+      {(() => {
+        const fixed = view.audit_fixed ?? []
+        const wfix = view.word_fixes ?? []
+        const restam = view.audit?.length ?? 0
+        if (!fixed.length && !wfix.length && !restam) return null
+        const semCorte = fixed.filter((f) => f.kind === 'sem-corte').length
+        const menosRuim = fixed.filter((f) => f.kind === 'menos-ruim').length
+        return (
+          <section className="card border-emerald-900/50 bg-emerald-950/20 p-3">
+            <h3 className="text-xs font-semibold text-emerald-300 uppercase
+                           tracking-wide">
+              Ajustado sozinho
+            </h3>
+            <ul className="text-[11px] text-slate-400 mt-1.5 space-y-1">
+              {wfix.length > 0 && (
+                <li>
+                  <b className="text-slate-300">{wfix.length}</b> palavra(s)
+                  vinham esticadas por cima de pausa — encaixadas no som, e o
+                  silêncio virou corte.
+                </li>
+              )}
+              {fixed.length - semCorte - menosRuim > 0 && (
+                <li>
+                  <b className="text-slate-300">
+                    {fixed.length - semCorte - menosRuim}
+                  </b>{' '}
+                  borda(s) encaixadas no vale de energia.
+                </li>
+              )}
+              {semCorte > 0 && (
+                <li>
+                  <b className="text-slate-300">{semCorte}</b> corte(s) não
+                  aconteceram: não dava para cortar limpo, então a pausa ficou
+                  em vez de comer palavra.
+                </li>
+              )}
+              {menosRuim > 0 && (
+                <li>
+                  <b className="text-slate-300">{menosRuim}</b> borda(s) sem
+                  vale nenhum por perto foram para o ponto mais fraco do áudio.
+                </li>
+              )}
+            </ul>
+            {restam > 0 && (
+              <p className="hint mt-1.5">
+                {restam} borda(s) continuam encostando em fala. Nada a fazer
+                automaticamente — se incomodar, arraste na trilha.
+              </p>
+            )}
+            {(fixed.length > 0 || wfix.length > 0) && (
+              <details className="mt-1.5">
+                <summary className="text-[11px] text-slate-500 cursor-pointer">
+                  ver o que mudou
+                </summary>
+                <div className="space-y-1 mt-1.5 max-h-40 overflow-auto">
+                  {wfix.slice(0, 40).map((f, i) => (
+                    <p key={`w${i}`} className="text-[11px] text-slate-500 font-mono">
+                      “{f.text}” {f.from[0].toFixed(2)}–{f.from[1].toFixed(2)} →{' '}
+                      {f.to[0].toFixed(2)}–{f.to[1].toFixed(2)}
+                      <span className="font-sans"> (+{f.ganho.toFixed(1)}s de pausa)</span>
+                    </p>
+                  ))}
+                  {fixed.map((f, i) => (
+                    <p key={`b${i}`} className="text-[11px] text-slate-500 font-mono">
+                      {timecode(f.from, true)} → {timecode(f.to, true)}
+                      <span className="font-sans"> · {f.reason}</span>
+                    </p>
+                  ))}
                 </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+              </details>
+            )}
+          </section>
+        )
+      })()}
 
       {/* ---------------------------------------------------- jogo de zoom */}
       <section className="card p-3">

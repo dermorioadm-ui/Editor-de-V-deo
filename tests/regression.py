@@ -11,7 +11,10 @@ Cada teste aqui corresponde a um bug que existiu:
 7. toda borda suja virava pergunta, mesmo quando a correção era óbvia;
 8. a pausa que a pessoa dá ANTES de bater palma contava como fronteira de
    frase, e a palma descartava um trecho vazio em vez do take errado;
-9. quando a frase era refeita SEM palma, as duas versões ficavam no vídeo.
+9. quando a frase era refeita SEM palma, as duas versões ficavam no vídeo;
+10. o corte de silêncio nascia do BURACO ENTRE palavras — quando o Whisper
+    esticava uma palavra por cima de uma pausa, o buraco não existia e o vale
+    inteiro ia para o vídeo, para o usuário apagar na mão.
 """
 from __future__ import annotations
 
@@ -256,6 +259,7 @@ def main() -> int:
     testar_take_da_palma()
     testar_repeticao()
     testar_zoom()
+    testar_silencio()
 
     print()
     if FALHAS:
@@ -323,8 +327,17 @@ def testar_bordas() -> None:
                     src_end=round(b, 3), speed=1.0, section="gancho",
                     cut_in=True, cut_out=True)
 
-    # borda de saída dentro da fala, com pausa depois: dá para abrir a borda
-    clips = [clipe(marks[0]["start"] - 0.1, marks[0]["end"] - 0.25, "a"),
+    # borda de saída em cima de fala DE VERDADE (o nível ali tem que estar
+    # acima do limiar da auditoria, senão o teste não está testando nada)
+    corte = None
+    for cand in [marks[0]["end"] - d for d in (0.25, 0.35, 0.45, 0.55, 0.65)]:
+        if env.value_at(cand) > env.audit_threshold:
+            corte = cand
+            break
+    check(corte is not None, "achei um ponto que é fala para sujar a borda")
+    if corte is None:
+        return
+    clips = [clipe(marks[0]["start"] - 0.1, corte, "a"),
              clipe(marks[1]["start"] - 0.1, marks[1]["end"] + 0.1, "b")]
     antes = len(audit_edges(clips, env, words, set()))
     sobra, feitos = settle_edges(clips, env, words, set())
@@ -449,6 +462,83 @@ def testar_zoom() -> None:
           "o zoom volta ao tamanho de saída (a resolução não muda)")
     check(zoom_chain(1.0, 1080, 1920, 0.38) == "",
           "zoom 1,00x não põe filtro nenhum na cadeia")
+
+
+def testar_silencio() -> None:
+    """O vale de silêncio tem que sumir mesmo com a palavra esticada por cima."""
+    import editor.edit.plan_builder as pb
+    from editor.audio.align import long_silences_inside, trim_words
+    from editor.config import CutParams, SpeedParams
+    from editor.edit.plan_builder import build_auto_plan
+    from tests.speech import ESPEAK, build_track, SR
+
+    if not ESPEAK:
+        print("  --    corte de silêncio (espeak-ng não instalado)")
+        return
+    frases = [("O seu anúncio está parado e você não sabe por quê", 3.5),
+              ("Eu descobri isso depois de perder três meses", 2.8),
+              ("São trezentos e quarenta e sete anfitriões usando", 4.2),
+              ("Clica no link aqui embaixo agora", 1.0)]
+    samples, marks, _ = build_track(frases, claps_after=set())
+    env = compute_envelope(samples, SR)
+    words, i = [], 0
+    for m in marks:
+        toks = m["text"].split()
+        passo = (m["end"] - m["start"]) / len(toks)
+        for k, tok in enumerate(toks):
+            a = m["start"] + k * passo
+            words.append({"i": i, "start": round(a, 3),
+                          "end": round(a + passo * 0.92, 3),
+                          "text": tok, "prob": 0.94})
+            i += 1
+    # o defeito real: a última palavra de cada frase esticada até a seguinte
+    comecos = {m["start"] for m in marks}
+    for w in words:
+        seguinte = min((c for c in comecos if c > w["end"] + 0.5), default=None)
+        if seguinte and any(abs(w["end"] - m["end"]) < 0.35 for m in marks):
+            w["end"] = round(seguinte - 0.05, 3)
+
+    cut = CutParams(silence_min=0.70, air=0.25, margin=0.15, min_block=1.0)
+
+    def vales(ws: list[dict]) -> float:
+        res = build_auto_plan(ws, env, cut, SpeedParams(), [], extra_removed=set())
+        achados = long_silences_inside(res["clips"], env, cut.silence_min)
+        return sum(v["duration"] for v in achados)
+
+    # sem nenhuma das duas defesas, o vale ia inteiro para o vídeo
+    real = pb._split_on_silence
+    pb._split_on_silence = lambda spans, env_, params: spans
+    try:
+        antes = vales(words)
+    finally:
+        pb._split_on_silence = real
+    check(antes > 3.0,
+          f"o defeito existe mesmo: {antes:.1f} s de vale sem as defesas")
+
+    check(vales(words) < 0.05,
+          "a rede de segurança sozinha zera o vale (parte o span pelo envelope)")
+
+    encaixadas, fixes = trim_words(words, env)
+    check(len(fixes) >= 3,
+          f"o encaixe acha as palavras esticadas ({len(fixes)})")
+    pb._split_on_silence = lambda spans, env_, params: spans
+    try:
+        so_encaixe = vales(encaixadas)
+    finally:
+        pb._split_on_silence = real
+    check(so_encaixe < 0.05,
+          "o encaixe sozinho também zera o vale")
+    check(vales(encaixadas) < 0.05,
+          "com as duas defesas, nenhum vale sobra para apagar na mão")
+
+    # o encaixe só ENCOLHE, nunca cresce — crescer restauraria silêncio
+    cresceu = [w for w, e in zip(words, encaixadas)
+               if e["start"] < w["start"] - 1e-6 or e["end"] > w["end"] + 1e-6]
+    check(not cresceu, f"o encaixe nunca estica uma palavra ({len(cresceu)})")
+    # e nunca joga a palavra para depois do vazio
+    fora = [f for f in fixes if f["to"][0] > f["from"][0] + 0.5]
+    check(not fora,
+          f"a palavra fica onde foi ouvida, não no fim do vazio ({len(fora)})")
 
 
 if __name__ == "__main__":

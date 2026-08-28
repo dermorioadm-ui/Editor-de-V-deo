@@ -54,6 +54,12 @@ def _check(env: Envelope, clip: Clip, side: str, t: float, words: list[dict],
         })
 
     # checagem independente do envelope: a borda parte uma palavra preservada?
+    # Só vale se houver SOM ali: uma palavra cujo intervalo cobre silêncio é
+    # erro de alinhamento do Whisper, não fala sendo cortada. Sem esta trava,
+    # cada corte de silêncio feito por dentro de uma palavra esticada virava
+    # um alerta — 117 deles numa gravação de 11 minutos.
+    if level <= env.silence_threshold:
+        return out
     for w in words:
         if w["i"] in removed_ids:
             continue
@@ -198,7 +204,77 @@ def settle_edges(clips: list[Clip], env: Envelope, words: list[dict],
         if undone:
             applied.append(undone)
     issues = audit_edges(clips, env, words, removed_ids)
+
+    # Nada vira pergunta. Sobrou borda em fala contínua onde nem desfazer o
+    # corte resolve (o buraco tem palavra removida dentro)? Então ela vai para
+    # o MENOS RUIM lugar possível — o ponto de menor energia por perto, que é
+    # exatamente onde o usuário poria. Perguntar "escolha você" não é
+    # automação; é passar a conta.
+    for issue in list(issues):
+        movido = _least_bad(clips, env, words, removed_ids, issue)
+        if movido:
+            applied.append(movido)
+    issues = audit_edges(clips, env, words, removed_ids)
     return issues, applied
+
+
+LEAST_BAD_WINDOW = 0.40
+
+
+def _least_bad(clips: list[Clip], env: Envelope, words: list[dict],
+               removed_ids: set[int], issue: dict) -> dict | None:
+    """Move a borda para o ponto de menor energia da vizinhança.
+
+    Último recurso, quando não há vale nenhum: em vez de deixar a borda em
+    cima de uma vogal aberta, põe no ponto mais fraco que existe por perto.
+    Continua cortando fala — mas na consoante, não no meio do "aaaa".
+    """
+    clip = next((c for c in clips if c.id == issue.get("clip_id")), None)
+    if clip is None:
+        return None
+    side = issue["side"]
+    t0 = clip.src_start if side == "in" else clip.src_end
+    outros = [c for c in clips if c.enabled and c.source == clip.source
+              and c is not clip]
+    if side == "in":
+        piso = max((c.src_end for c in outros if c.src_end <= t0 + 1e-6), default=0.0)
+        teto = clip.src_end - 0.20
+    else:
+        piso = clip.src_start + 0.20
+        teto = min((c.src_start for c in outros if c.src_start >= t0 - 1e-6),
+                   default=env.duration)
+    for w in words:
+        if w["i"] not in removed_ids:
+            continue
+        if side == "in" and w["start"] < clip.src_start + 1e-6:
+            piso = max(piso, w["end"] + 0.02)
+        if side == "out" and w["end"] > clip.src_end - 1e-6:
+            teto = min(teto, w["start"] - 0.02)
+    lo = max(piso, t0 - LEAST_BAD_WINDOW)
+    hi = min(teto, t0 + LEAST_BAD_WINDOW)
+    if hi - lo < 0.04:
+        return None
+    i0, i1 = env.slice_indices(lo, hi)
+    if i1 <= i0:
+        return None
+    import numpy as np
+
+    melhor = int(np.argmin(env.db[i0:i1])) + i0
+    t = env.time(melhor)
+    if abs(t - t0) < 0.005:
+        return None
+    if side == "in":
+        clip.src_start = round(t, 4)
+    else:
+        clip.src_end = round(t, 4)
+    return {
+        "clip_id": clip.id, "side": side,
+        "from": round(t0, 3), "to": round(t, 3),
+        "reason": (f"sem vale por perto: borda posta no ponto mais fraco "
+                   f"({env.value_at(t):.1f} dB)"),
+        "message": issue.get("message", ""),
+        "kind": "menos-ruim",
+    }
 
 
 def _uncut(clips: list[Clip], env: Envelope, words: list[dict],

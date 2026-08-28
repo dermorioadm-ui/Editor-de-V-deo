@@ -51,6 +51,11 @@ export interface Repeat {
   similarity: number; word_ids: number[]; restored: boolean; reason: string
 }
 
+export interface WordFix {
+  i: number; text: string; from: [number, number]; to: [number, number]
+  ganho: number
+}
+
 export interface AuditFixed {
   clip_id: string; side: string; from: number; to: number
   reason: string; message: string; kind?: string
@@ -73,6 +78,7 @@ export interface TimelineView {
   subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]
   repeats?: Repeat[]; zoom?: { enabled: boolean; levels: number[]
                               max_level: number; bias_y: number }
+  look?: string; look_vignette?: number | null; word_fixes?: WordFix[]
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
 }
 

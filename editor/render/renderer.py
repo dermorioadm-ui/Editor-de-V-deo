@@ -31,6 +31,7 @@ from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
 from . import filters as F
+from . import looks
 
 AUDIO_SR = 48000
 FADE_MS = 12
@@ -343,6 +344,12 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                         "-t", f"{seg.nominal + 1.0:.3f}", "-i", p]
 
     tail = []
+    # Look de cinema: vale para o vídeo inteiro, entra ANTES da legenda —
+    # legenda queimada não pode virar sépia junto com a imagem, senão o
+    # contorno preto some e o texto some com ele.
+    lk = looks.look_chain(plan.look, plan.look_vignette)
+    if lk:
+        tail.append(lk)
     if plan.export.burn_subtitles and cues:
         window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
@@ -409,6 +416,7 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
             "dur": round(seg.src_duration, 4), "speed": seg.speed,
             "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
             "zoom": round(seg.zoom, 4), "zoom_bias": plan.zoom.bias_y,
+            "look": plan.look, "look_vignette": plan.look_vignette,
             "t_start": round(seg.t_start, 3) if positional else None,
             "nominal": round(seg.nominal, 4),
             "style": plan.style.__dict__ if seg_cues else None,

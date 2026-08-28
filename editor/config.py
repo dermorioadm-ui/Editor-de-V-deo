@@ -142,7 +142,7 @@ class ZoomParams:
 @dataclass
 class SubtitleStyle:
     font: str = "Arial"
-    fontsize: int = 64
+    fontsize: int = 35
     primary: str = "#FFFFFF"
     outline_color: str = "#000000"
     back_color: str = "#000000"

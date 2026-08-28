@@ -5,6 +5,7 @@ import Inspector from './Inspector'
 import TextEditor from './TextEditor'
 import SubtitlePanel from './SubtitlePanel'
 import MediaPanel from './MediaPanel'
+import LookPanel from './LookPanel'
 import AudioPanel from './AudioPanel'
 import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'texto', label: 'Texto' },
   { id: 'legendas', label: 'Legendas' },
   { id: 'midia', label: 'Mídia' },
+  { id: 'filtro', label: 'Filtro' },
   { id: 'audio', label: 'Áudio' },
   { id: 'exportar', label: 'Exportar' },
 ] as const
@@ -354,6 +356,7 @@ export default function Editor() {
             {analysed && tab === 'texto' && <TextEditor onChanged={refresh} snapshot={snapshot} />}
             {analysed && tab === 'legendas' && <SubtitlePanel onChanged={refresh} snapshot={snapshot} />}
             {analysed && tab === 'midia' && <MediaPanel onChanged={refresh} snapshot={snapshot} safeZone={safeZone} />}
+            {analysed && tab === 'filtro' && <LookPanel onChanged={refresh} snapshot={snapshot} />}
             {analysed && tab === 'audio' && <AudioPanel onChanged={refresh} />}
             {analysed && tab === 'exportar' && <ExportPanel onChanged={refresh} />}
           </div>
@@ -375,6 +378,17 @@ export default function Editor() {
                   sourceDuration={view.source_duration || project.info?.duration || 0}
                   onDeleteSelection={deleteSelection}
                   onDeleteClip={deleteClip}
+                  onResizeRemoved={async (a, b, na, nb) => {
+                    snapshot()
+                    try {
+                      const r = await api.resizeRemoved(project.id, a, b, na, nb)
+                      await refresh()
+                      toast('ok', 'Trecho removido ajustado',
+                        (r.explain ?? []).join('\n'))
+                    } catch (e: any) {
+                      toast('warn', 'Não deu para ajustar', String(e.message ?? e))
+                    }
+                  }}
                   onRestore={restore}
                   onToggleTake={async (id, restored) => {
                     snapshot()

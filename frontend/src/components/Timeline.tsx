@@ -16,6 +16,7 @@ interface Props {
   onToggleTake: (id: string, restored: boolean) => void
   onToggleClap: (id: string, enabled: boolean) => void
   onSubtitleEdge: (cueId: string, side: 'start' | 'end', outTime: number) => void
+  onResizeRemoved: (start: number, end: number, ns: number, ne: number) => void
 }
 
 // Faixas, de cima para baixo. Marcas (palma, alerta) saíram de cima da onda:
@@ -45,6 +46,10 @@ export default function Timeline(props: Props) {
                         cueId?: string } | null>(null)
   const [subDrag, setSubDrag] = useState<
     { id: string; side: 'start' | 'end'; t: number } | null>(null)
+  // arrasto da borda de um trecho JÁ removido: cresce tirando mais vídeo,
+  // encolhe devolvendo
+  const [redDrag, setRedDrag] = useState<
+    { start: number; end: number; side: 'start' | 'end'; t: number } | null>(null)
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
 
@@ -217,9 +222,19 @@ export default function Timeline(props: Props) {
     // é o que fazia a trilha virar um borrão vermelho.
     const CUT_BAR = 5
     for (const r of view.removed ?? []) {
-      const x0 = toX(r.start); const x1 = toX(r.end)
+      const vivo = redDrag && Math.abs(redDrag.start - r.start) < 0.005
+        && Math.abs(redDrag.end - r.end) < 0.005
+      const rs = vivo && redDrag.side === 'start' ? redDrag.t : r.start
+      const re = vivo && redDrag.side === 'end' ? redDrag.t : r.end
+      const x0 = toX(Math.min(rs, re)); const x1 = toX(Math.max(rs, re))
       if (x1 < 0 || x0 > size.w || x1 - x0 < 0.15) continue
       if (r.reason === 'palma') continue      // o take já desenha esse trecho
+      if (x1 - x0 >= 3) {
+        // alças: é por aqui que se arrasta o que já foi cortado
+        g.fillStyle = vivo ? '#fca5a5' : 'rgba(248,180,180,0.9)'
+        g.fillRect(x0, yWave, 3, ROW.wave)
+        g.fillRect(x1 - 3, yWave, 3, ROW.wave)
+      }
       if (x1 - x0 < 3) {
         g.fillStyle = 'rgba(239,120,120,0.85)'
         g.fillRect(x0, yWave + ROW.wave - CUT_BAR, Math.max(1, x1 - x0), CUT_BAR)
@@ -342,8 +357,8 @@ export default function Timeline(props: Props) {
       }
     }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip,
-      subsOnSource, subDrag, bands, toX, yRuler, yMarks, yWave, ySections,
-      yBlocks, ySubs])
+      subsOnSource, subDrag, redDrag, bands, toX, yRuler, yMarks, yWave,
+      ySections, yBlocks, ySubs])
 
   // ------------------------------------------- camada viva (60 quadros/s)
   const drawOverlay = useCallback(() => {
@@ -438,6 +453,23 @@ export default function Timeline(props: Props) {
       props.onToggleClap(clap.id, !clap.enabled)
       return
     }
+    // alça de um trecho removido (só na faixa da onda)
+    if (y >= yWave && y < yWave + ROW.wave && !e.altKey) {
+      let melhor: { r: any; side: 'start' | 'end'; d: number } | null = null
+      for (const r of view.removed ?? []) {
+        if (r.reason === 'palma') continue
+        for (const [side, tt] of [['start', r.start], ['end', r.end]] as const) {
+          const d = Math.abs(toX(tt) - x)
+          if (d <= 6 && (!melhor || d < melhor.d)) melhor = { r, side, d }
+        }
+      }
+      if (melhor) {
+        drag.current = { mode: 'red', t0: t, x0: x, s0: start }
+        setRedDrag({ start: melhor.r.start, end: melhor.r.end,
+                     side: melhor.side, t })
+        return
+      }
+    }
     if (y >= ySubs && y < ySubs + ROW.subs && !e.altKey) {
       let best: { id: string; side: 'start' | 'end'; d: number } | null = null
       for (const s of subsOnSource) {
@@ -474,8 +506,11 @@ export default function Timeline(props: Props) {
     const { x, y } = pos(e)
     const t = toT(x)
     setHover({ x, t })
+    const naAlca = y >= yWave && y < yWave + ROW.wave
+      && (view.removed ?? []).some((r) => r.reason !== 'palma'
+        && (Math.abs(toX(r.start) - x) <= 6 || Math.abs(toX(r.end) - x) <= 6))
     ;(e.currentTarget as HTMLElement).style.cursor =
-      clapNear(x, y) ? 'pointer' : 'crosshair'
+      clapNear(x, y) ? 'pointer' : (naAlca ? 'ew-resize' : 'crosshair')
     const d = drag.current
     if (!d) return
     if (d.mode === 'pan') {
@@ -484,12 +519,26 @@ export default function Timeline(props: Props) {
       setState({ selection: { start: Math.min(d.t0, t), end: Math.max(d.t0, t) } })
     } else if (d.mode === 'sub') {
       setSubDrag((prev) => (prev ? { ...prev, t } : prev))
+    } else if (d.mode === 'red') {
+      setRedDrag((prev) => (prev ? { ...prev, t } : prev))
+    }
+  }
+
+  const commitRed = () => {
+    if (!redDrag) return
+    const ns = redDrag.side === 'start' ? redDrag.t : redDrag.start
+    const ne = redDrag.side === 'end' ? redDrag.t : redDrag.end
+    setRedDrag(null)
+    if (Math.abs(ns - redDrag.start) > 0.01 || Math.abs(ne - redDrag.end) > 0.01) {
+      props.onResizeRemoved(redDrag.start, redDrag.end,
+                            Math.min(ns, ne), Math.max(ns, ne))
     }
   }
 
   const onMouseUp = (e: React.MouseEvent) => {
     const d = drag.current
     drag.current = null
+    if (d?.mode === 'red') { commitRed(); return }
     if (d?.mode === 'sub' && subDrag) {
       const out = sourceToOutput(subDrag.t, view.blocks)
       if (out != null) props.onSubtitleEdge(subDrag.id, subDrag.side, out)
@@ -578,6 +627,7 @@ export default function Timeline(props: Props) {
                 onMouseUp={onMouseUp}
                 onMouseLeave={() => {
                   setHover(null)
+                  if (drag.current?.mode === 'red') { commitRed() }
                   if (drag.current?.mode === 'sub' && subDrag) {
                     // o mouse escapou do canvas no meio do arrasto: comita o
                     // ajuste em vez de descartá-lo em silêncio
@@ -620,7 +670,7 @@ export default function Timeline(props: Props) {
           enquadramento fechado
         </span>
         <span className="ml-auto">
-          clique num bloco e Delete apaga ele · arraste para marcar um trecho e Delete corta · roda dá zoom · Alt+arraste move
+          arraste as bordas vermelhas para ajustar o que saiu · clique num bloco e Delete apaga ele · marque um trecho e Delete corta · roda dá zoom · Alt+arraste move
         </span>
       </div>
     </div>

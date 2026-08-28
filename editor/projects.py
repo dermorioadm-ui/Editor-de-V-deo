@@ -10,6 +10,8 @@ from typing import Any, Callable
 import numpy as np
 
 from . import db, presets as presets_mod
+from .audio.align import long_silences_inside, trim_words
+from .audio.segments import split_narrative
 from .audio.clap import build_discarded_takes, detect_claps
 from .audio.envelope import Envelope, compute_envelope
 from .config import (PROJECTS_DIR, AudioParams, CutParams, ExportParams,
@@ -241,7 +243,16 @@ def analyze(project: Project, ctx) -> dict:
         on_progress=lambda f, m: ctx.progress(0.22 + f * 0.68, m),
         device_info=device,
     )
-    words = result["words"]
+    # O Whisper devolve fronteira de ALINHAMENTO, não fronteira acústica:
+    # uma palavra de duas letras vem ocupando cinco segundos, e esses cinco
+    # segundos são uma pausa escondida dentro de uma palavra. Sem encaixar
+    # isto no áudio, o corte de silêncio simplesmente não acontece — o buraco
+    # entre palavras, de onde o corte nasce, não existe.
+    ctx.stage("encaixe", "encaixando as palavras no áudio")
+    words, encaixes = trim_words(result["words"], env)
+    if encaixes:
+        ctx.progress(0.9, f"{len(encaixes)} palavra(s) estavam esticadas por cima "
+                          f"de pausa; encaixadas no som")
 
     ctx.stage("takes", "aplicando a regra do take")
 
@@ -269,6 +280,7 @@ def analyze(project: Project, ctx) -> dict:
         "claps": [c.to_dict() for c in claps],
         "takes": takes,
         "fillers": fillers,
+        "word_fixes": encaixes,
         "envelope": {"hop": env.hop, "sample_rate": env.sample_rate,
                      "noise_floor": env.noise_floor,
                      "silence_threshold": env.silence_threshold,
@@ -294,7 +306,17 @@ def auto_edit(project: Project, ctx) -> dict:
     env = project.envelope()
     if env is None:
         raise RuntimeError("rode a análise antes")
-    words = project.words
+    # Encaixa de novo, por segurança. É idempotente — o encaixe só encolhe,
+    # e encolher uma palavra já encolhida não muda nada. Serve para o projeto
+    # analisado por uma versão antiga: "refazer edição" conserta o corte de
+    # silêncio sem precisar transcrever tudo de novo.
+    words, encaixes_agora = trim_words(project.words, env)
+    if encaixes_agora:
+        project.analysis["words"] = words
+        antes = project.analysis.get("word_fixes", [])
+        vistos = {f["i"] for f in antes}
+        project.analysis["word_fixes"] = antes + [f for f in encaixes_agora
+                                                  if f["i"] not in vistos]
     takes = project.analysis.get("takes", [])
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
@@ -364,8 +386,12 @@ def auto_edit(project: Project, ctx) -> dict:
     # corte deixou de existir o enquadramento não pode mudar — senão a imagem
     # pula sem que nada tenha sido cortado, que é o defeito que o zoom existe
     # para esconder.
-    ctx.stage("zoom", "montando o jogo de zoom dos cortes")
-    n_zoom = assign_zoom(plan.clips, plan.zoom)
+    ctx.stage("zoom", "montando o jogo de zoom por frase")
+    vivas = [w for w in words
+             if w["i"] not in set(result["removed_word_ids"])]
+    frases = [seg.start for seg in split_narrative(vivas, env,
+                                                   plan.cut.narrative_pause)]
+    n_zoom = assign_zoom(plan.clips, plan.zoom, frases)
 
     ctx.stage("legendas", "gerando legendas")
     cues = rebuild_subtitles(project)
@@ -607,6 +633,9 @@ def timeline_summary(project: Project) -> dict:
         "audit": plan.audit,
         "audit_fixed": plan.audit_fixed,
         "repeats": plan.repeats,
+        "look": plan.look,
+        "look_vignette": plan.look_vignette,
+        "word_fixes": project.analysis.get("word_fixes", []),
         "zoom": {"enabled": plan.zoom.enabled,
                  "levels": list(plan.zoom.levels),
                  "max_level": plan.zoom.max_level,
