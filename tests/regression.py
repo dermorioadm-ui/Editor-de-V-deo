@@ -284,6 +284,7 @@ def main() -> int:
     testar_retomada_sem_teto()
     testar_anexo_nao_come_palavra()
     testar_legenda_na_mesma_regua()
+    testar_controle_manual_de_zoom()
     testar_presets_atualizam()
 
     print()
@@ -1197,6 +1198,50 @@ def testar_legenda_na_mesma_regua() -> None:
     check(all(v < 0.60 for v in medidas.values()),
           f"nenhuma saída tem legenda de ponta a ponta (máx {max(medidas.values())*100:.0f}%)")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_controle_manual_de_zoom() -> None:
+    """Os três caminhos manuais de enquadramento — todos quebrados antes."""
+    from editor.edit.speed import classify
+    from editor.models import SECTIONS
+    from editor.projects import _enquadramentos_travados, _restaurar_travados
+
+    # 1) as dez etapas são alcançáveis. cta somava em garantia (bug puro) e
+    #    mecanismo/monetizacao não tinham saco de palavras nenhum — três
+    #    etapas mortas, entre elas a de enquadramento mais fechado (cta, 1,12)
+    frases = ["clica no link agora", "garanto sem risco", "o metodo passo a passo",
+              "quanto voce fatura por mes", "o preco e esse por apenas",
+              "o problema e que ninguem", "descobri a verdade", "presta atencao",
+              "olha o resultado comprovado", "e assim que funciona na pratica"]
+    achou = {classify(t, pos, wps, 3.0, pos > 0.9)[0]
+             for t in frases for pos in (0.0, 0.2, 0.5, 0.75, 0.95)
+             for wps in (1.5, 2.5, 3.6)}
+    faltam = sorted(set(SECTIONS) - achou)
+    check(not faltam, f"as {len(SECTIONS)} etapas são alcançáveis (faltavam {faltam})")
+    check(classify("clica no link aqui embaixo agora", 0.92, 2.5, 3.0, True)[0] == "cta",
+          "chamada para ação vira CTA, não Garantia")
+
+    # 2) a trava de enquadramento sobrevive a refazer a edição
+    class Falso:
+        def __init__(self, a, b, zoom=1.0, locked=False):
+            self.src_start, self.src_end = a, b
+            self.zoom, self.zoom_locked, self.source = zoom, locked, "main"
+
+    antigos = [Falso(0.0, 4.0), Falso(4.0, 9.0, 1.18, True), Falso(9.0, 12.0)]
+    guardados = _enquadramentos_travados(antigos)
+    check(len(guardados) == 1, f"guardou a trava ({len(guardados)})")
+    # a reedição mexeu nas bordas, como sempre mexe
+    novos = [Falso(0.0, 3.8), Falso(3.9, 8.7), Falso(8.9, 12.0)]
+    voltaram = _restaurar_travados(novos, guardados)
+    check(voltaram == 1 and novos[1].zoom_locked and abs(novos[1].zoom - 1.18) < 1e-6,
+          "a trava voltou para o bloco certo depois de refazer a edição")
+    check(not novos[0].zoom_locked and not novos[2].zoom_locked,
+          "nenhum bloco vizinho foi travado por engano")
+
+    # e quando o bloco antigo virou outra coisa, a trava NÃO é chutada adiante
+    picado = [Falso(0.0, 4.0), Falso(4.0, 5.0), Falso(11.0, 12.0)]
+    check(_restaurar_travados(picado, guardados) == 0,
+          "trava não é chutada num bloco que sobrou pela metade")
 
 
 def testar_presets_atualizam() -> None:

@@ -473,7 +473,9 @@ def auto_edit(project: Project, ctx) -> dict:
     from .edit.ops import remap_output_items
     fps = project.info.fps if project.info else None
     old_tl = Timeline(plan.active_clips, fps)
+    travados = _enquadramentos_travados(plan.clips)
     plan.clips = result["clips"]
+    _restaurar_travados(plan.clips, travados)
     plan.removed = result["removed"]
     plan.discarded_takes = takes
     plan.claps = project.analysis.get("claps", [])
@@ -509,13 +511,7 @@ def auto_edit(project: Project, ctx) -> dict:
     # pula sem que nada tenha sido cortado, que é o defeito que o zoom existe
     # para esconder.
     ctx.stage("zoom", "montando os enquadramentos")
-    largura_fonte = (project.info.display_size[0] if project.info else 0)
-    from .render.renderer import target_size
-
-    largura_saida = (target_size(project.info, plan.export)[0]
-                     if project.info else largura_fonte)
-    resumo_zoom = assign_zoom(plan.clips, plan.zoom, largura_fonte, largura_saida)
-    plan.zoom_audit = zoom_auditar(plan.clips, plan.zoom, resumo_zoom["teto"])
+    resumo_zoom = recalcular_zoom(project)
     n_zoom = resumo_zoom["fechados"]
 
     ctx.stage("legendas", "gerando legendas")
@@ -868,6 +864,71 @@ def build_tracks(project: "Project", blocks: list[dict],
          "items": musica,
          "hint": "música de fundo, com ducking automático na fala."},
     ]
+
+
+def _enquadramentos_travados(clips: list) -> list[dict]:
+    """Guarda o enquadramento que o usuário TRAVOU, por região da fonte.
+
+    Refazer a edição substituía plan.clips inteiro, e com ele ia embora todo
+    zoom_locked: quem travou um plano fechado num trecho perdia a decisão a
+    cada reanálise, sem aviso. A âncora é o tempo na FONTE, que é o que não
+    muda quando o corte muda.
+    """
+    return [{"a": c.src_start, "b": c.src_end, "zoom": c.zoom}
+            for c in clips if c.zoom_locked and c.source == "main"
+            and c.src_end > c.src_start]
+
+
+def _restaurar_travados(clips: list, travados: list[dict]) -> int:
+    """Devolve cada trava ao bloco novo que mais cobre a região antiga."""
+    voltaram = 0
+    for t in travados:
+        largura = t["b"] - t["a"]
+        melhor, cobertura = None, 0.0
+        for c in clips:
+            if c.source != "main":
+                continue
+            sobra = min(c.src_end, t["b"]) - max(c.src_start, t["a"])
+            if sobra > cobertura:
+                melhor, cobertura = c, sobra
+        # metade da região antiga tem que sobreviver: menos que isso e o bloco
+        # virou outra coisa, e travar o enquadramento nele seria chute
+        if melhor is not None and cobertura >= largura * 0.5:
+            melhor.zoom = t["zoom"]
+            melhor.zoom_locked = True
+            voltaram += 1
+    return voltaram
+
+
+def recalcular_zoom(project: Project) -> dict:
+    """Refaz os enquadramentos — SEMPRE com o teto da resolução da fonte.
+
+    Chamar assign_zoom sem as larguras faz o teto virar params.max_zoom, e a
+    invariante que impede o recorte de pedir mais pixels do que a fonte tem
+    é contornada em silêncio: numa fonte 720p para saída 1080p o teto certo é
+    1,00 e a chamada curta entrega 1,15. Existiam dois caminhos assim
+    (/api/params e a troca de etapa); agora existe um só, e é este.
+    """
+    from .render.renderer import target_size
+
+    plan = project.plan
+    largura_fonte = (project.info.display_size[0] if project.info else 0)
+    largura_saida = (target_size(project.info, plan.export)[0]
+                     if project.info else largura_fonte)
+    resumo = assign_zoom(plan.clips, plan.zoom, largura_fonte, largura_saida)
+    plan.zoom_audit = zoom_auditar(plan.clips, plan.zoom, resumo["teto"])
+    return resumo
+
+
+def teto_de_zoom(project: Project) -> float:
+    """O maior enquadramento que a fonte aguenta sem inventar pixel."""
+    from .edit.zoom import zoom_maximo
+    from .render.renderer import target_size
+
+    largura_fonte = (project.info.display_size[0] if project.info else 0)
+    largura_saida = (target_size(project.info, project.plan.export)[0]
+                     if project.info else largura_fonte)
+    return zoom_maximo(largura_fonte, largura_saida, project.plan.zoom.max_zoom)
 
 
 def duracao_de_saida(project: Project) -> float:

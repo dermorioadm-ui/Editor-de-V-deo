@@ -134,12 +134,19 @@ export interface Job {
   error: string; created_at: number; updated_at: number
 }
 
+// Espelho de SECTIONS em editor/models.py, na MESMA ordem. Faltavam mecanismo,
+// monetizacao e cta: até agora o classificador nunca as emitia (era bug), então
+// ninguém notou. Sem elas a faixa da linha do tempo cai no cinza de fallback e
+// o seletor do Inspetor não consegue nem mostrar nem preservar o valor.
 export const SECTIONS: Record<string, { label: string; color: string }> = {
-  gancho: { label: 'Gancho', color: '#38bdf8' },
-  dor: { label: 'Dor', color: '#fb923c' },
+  gancho: { label: 'Gancho / abertura', color: '#38bdf8' },
+  dor: { label: 'Dor, contexto', color: '#fb923c' },
+  mecanismo: { label: 'Virada, mecanismo', color: '#22d3ee' },
   explicacao: { label: 'Explicação', color: '#a78bfa' },
-  revelacao: { label: 'Revelação', color: '#f472b6' },
-  prova: { label: 'Prova', color: '#34d399' },
-  oferta: { label: 'Oferta', color: '#facc15' },
+  revelacao: { label: 'Revelação, clímax', color: '#f472b6' },
+  prova: { label: 'Prova, números', color: '#34d399' },
+  monetizacao: { label: 'Monetização', color: '#a3e635' },
+  oferta: { label: 'Oferta, preço', color: '#facc15' },
   garantia: { label: 'Garantia', color: '#f87171' },
+  cta: { label: 'CTA', color: '#fb7185' },
 }

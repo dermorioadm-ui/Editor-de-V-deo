@@ -32,6 +32,13 @@ KEYWORDS = {
             "erro", "medo", "prejuizo", "prejuízo"],
     "gancho": ["presta atencao", "presta atenção", "olha isso", "se voce",
                "se você", "para tudo", "escuta", "em 60 segundos", "eu vou te"],
+    "mecanismo": ["metodo", "método", "passo a passo", "funciona assim",
+                  "sistema", "processo", "estrategia", "estratégia", "formula",
+                  "fórmula", "tecnica", "técnica", "framework", "o jeito que",
+                  "primeiro passo", "etapa"],
+    "monetizacao": ["fatura", "faturamento", "lucro", "ganha por", "ganhar por",
+                    "receita", "comissao", "comissão", "por mes", "por mês",
+                    "renda", "por venda", "ticket", "margem"],
 }
 
 
@@ -56,12 +63,18 @@ def classify(text: str, position: float, wps: float, duration: float,
 
     # "clica" no meio do vídeo quase sempre é instrução de tutorial, não CTA
     cta_weight = 1.8 if position > 0.6 else 0.35
-    scores["garantia"] += 2.4 * _hits(n, "garantia") + cta_weight * _hits(n, "cta")
+    scores["garantia"] += 2.4 * _hits(n, "garantia")
+    # somava em garantia — bug puro. Com ele, "clica no link agora" virava
+    # Garantia com confiança 1,0 e a etapa cta, que tem o enquadramento mais
+    # fechado da tabela (1,12), não era emitida uma vez sequer.
+    scores["cta"] += cta_weight * _hits(n, "cta")
     scores["oferta"] += 2.2 * _hits(n, "oferta") + (2.0 if has_money else 0.0)
     scores["prova"] += 1.6 * _hits(n, "prova") + min(digits, 6) * 0.35
     scores["revelacao"] += 2.0 * _hits(n, "revelacao")
     scores["dor"] += 1.5 * _hits(n, "dor")
     scores["gancho"] += 1.5 * _hits(n, "gancho")
+    scores["mecanismo"] += 1.8 * _hits(n, "mecanismo")
+    scores["monetizacao"] += 1.7 * _hits(n, "monetizacao")
 
     # posição relativa no vídeo
     if position < 0.10:
@@ -69,7 +82,8 @@ def classify(text: str, position: float, wps: float, duration: float,
     elif position < 0.28:
         scores["dor"] += 1.1
     elif position > 0.88 or is_last:
-        scores["garantia"] += 1.6
+        scores["cta"] += 1.4
+        scores["garantia"] += 1.2
         scores["oferta"] += 0.8
     elif position > 0.70:
         scores["oferta"] += 0.7

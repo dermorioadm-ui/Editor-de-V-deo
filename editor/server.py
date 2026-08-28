@@ -399,8 +399,7 @@ def api_params(pid: str, payload: dict = Body(...)) -> dict:
             setattr(plan, attr, cls(**current))
     if "zoom" in payload and isinstance(payload["zoom"], dict):
         # mudou o jogo de zoom: redistribui pelos blocos na hora
-        from .edit.zoom import assign_zoom
-        assign_zoom(plan.clips, plan.zoom)
+        svc.recalcular_zoom(project)
     if payload.get("rebuild_subtitles"):
         svc.rebuild_subtitles(project)
     project.save_plan()
@@ -700,6 +699,10 @@ def api_section(pid: str, payload: dict = Body(...)) -> dict:
     for clip in project.plan.clips:
         if clip.id == payload.get("clip_id"):
             clip.section = payload.get("section", clip.section)
+            # a etapa DECIDE o enquadramento (zoom_base em SECTIONS): trocar a
+            # etapa e não recalcular deixava o usuário mudando um rótulo que
+            # não mexia em nada na imagem
+            svc.recalcular_zoom(project)
             project.save_plan()
             return {"ok": True, "timeline": svc.timeline_summary(project)}
     raise HTTPException(404, "bloco não encontrado")
@@ -841,7 +844,10 @@ def api_zoom(pid: str, payload: dict = Body(...)) -> dict:
     """Ajusta o enquadramento de UM bloco (o jogo de zoom, na mão)."""
     project = _project(pid)
     zoom = float(payload.get("zoom", 1.0))
-    limite = project.plan.zoom.max_level
+    # era plan.zoom.max_level — campo que não existe. A rota inteira dava 500,
+    # tanto para travar um bloco quanto para ajustar o enquadramento na mão:
+    # o controle manual que o usuário pediu nunca funcionou uma vez sequer.
+    limite = svc.teto_de_zoom(project)
     zoom = max(1.0, min(zoom, max(limite, 1.0)))
     for clip in project.plan.clips:
         if clip.id == payload.get("clip_id"):
