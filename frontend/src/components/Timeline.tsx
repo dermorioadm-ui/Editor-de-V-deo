@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Clip, Envelope, TimelineView } from '../types'
 import { SECTIONS } from '../types'
 import { clamp, timecode } from '../lib/format'
-import { cuesOnSource, sourceToOutput } from '../lib/timeline'
+import { cuesOnSource, outputToSource, sourceToOutput } from '../lib/timeline'
 import { getPlayhead, setPlayhead, setState, subscribePlayhead, useStore }
   from '../state/store'
 
@@ -17,12 +17,19 @@ interface Props {
   onToggleClap: (id: string, enabled: boolean) => void
   onSubtitleEdge: (cueId: string, side: 'start' | 'end', outTime: number) => void
   onResizeRemoved: (start: number, end: number, ns: number, ne: number) => void
+  onMoveItem: (kind: string, id: string, side: 'move' | 'start' | 'end',
+               delta: number) => void
+  onDeleteItem: (kind: string, id: string) => void
+  onAddToTrack: (trackId: string) => void
+  playing: boolean
+  onTogglePlay: () => void
 }
 
 // Faixas, de cima para baixo. Marcas (palma, alerta) saíram de cima da onda:
 // riscos vermelhos em cima da onda vermelha do trecho removido era o que
 // deixava a trilha confusa.
-const ROW = { ruler: 18, marks: 15, wave: 78, sections: 16, blocks: 28, subs: 24 }
+const ROW = { ruler: 18, marks: 15, wave: 74, sections: 14, blocks: 24,
+              scenes: 15, subs: 22, track: 22 }
 const PAD_TOP = 12
 
 /** Cor por velocidade: dá para ver onde está acelerado sem ler número nenhum. */
@@ -50,19 +57,28 @@ export default function Timeline(props: Props) {
   // encolhe devolvendo
   const [redDrag, setRedDrag] = useState<
     { start: number; end: number; side: 'start' | 'end'; t: number } | null>(null)
+  // arrasto de um item de trilho (sobreposição, desfoque, trilha)
+  const [itemDrag, setItemDrag] = useState<
+    { id: string; kind: string; delta: number
+      side: 'move' | 'start' | 'end' } | null>(null)
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
 
   const total = sourceDuration || envelope?.duration || 1
+  // trilhos extras (sobreposição, desfoque, trilha) ficam abaixo das legendas,
+  // no eixo de SAÍDA — é onde os itens de cada camada vivem
+  const extras = (view.tracks ?? []).filter((t) => t.id !== 'V1')
   const height = PAD_TOP + ROW.ruler + ROW.marks + ROW.wave + ROW.sections +
-    ROW.blocks + ROW.subs + 8
+    ROW.blocks + ROW.scenes + ROW.subs + extras.length * (ROW.track + 2) + 10
 
   const yRuler = PAD_TOP
   const yMarks = yRuler + ROW.ruler
   const yWave = yMarks + ROW.marks
   const ySections = yWave + ROW.wave
   const yBlocks = ySections + ROW.sections
-  const ySubs = yBlocks + ROW.blocks
+  const yScenes = yBlocks + ROW.blocks
+  const ySubs = yScenes + ROW.scenes
+  const yTracks = ySubs + ROW.subs + 4
 
   useEffect(() => { setSpan(total); setStart(0) }, [total])
 
@@ -77,6 +93,12 @@ export default function Timeline(props: Props) {
 
   const toX = useCallback((t: number) => (t - start) / span * size.w, [start, span, size.w])
   const toT = useCallback((x: number) => start + x / size.w * span, [start, span, size.w])
+
+  // itens de trilho vivem no tempo de SAÍDA; a régua está no da FONTE
+  const outputToSourceT = useCallback((t: number) => {
+    const pos = outputToSource(t, view.blocks)
+    return pos && pos.source === 'main' ? pos.time : null
+  }, [view.blocks])
 
   const subsOnSource = useMemo(
     () => cuesOnSource(view.subtitles, view.blocks), [view.subtitles, view.blocks])
@@ -290,19 +312,29 @@ export default function Timeline(props: Props) {
         g.font = 'bold 10px ui-monospace, monospace'
         g.fillText(`${b.speed.toFixed(2)}x`, x0 + 4, yBlocks + 15)
       }
-      // bloco com enquadramento fechado ganha um canto marcado: dá para ver
-      // o jogo de zoom da timeline inteira sem clicar em nada
-      if ((b.zoom ?? 1) > 1.001) {
-        g.fillStyle = '#08111f'
-        g.beginPath()
-        g.moveTo(x1 - Math.min(9, w), yBlocks + 3)
-        g.lineTo(x1, yBlocks + 3); g.lineTo(x1, yBlocks + 12)
-        g.closePath(); g.fill()
-      }
       // corte de verdade: um talho escuro entre os blocos
       g.fillStyle = '#0f1218'
       if (b.cut_in) g.fillRect(x0 - 1, yBlocks + 1, 2.5, ROW.blocks - 4)
       if (b.cut_out) g.fillRect(x1 - 1.5, yBlocks + 1, 2.5, ROW.blocks - 4)
+    }
+
+    // enquadramentos: blocos vizinhos com o mesmo zoom formam UMA cena
+    for (const cena of view.zoom_scenes ?? []) {
+      const x0 = toX(cena.start); const x1 = toX(cena.end)
+      if (x1 < 0 || x0 > size.w) continue
+      const w = Math.max(1, x1 - x0)
+      const fechado = cena.zoom > 1.001
+      g.fillStyle = fechado ? 'rgba(56,189,248,0.30)' : 'rgba(100,116,139,0.22)'
+      g.fillRect(x0, yScenes + 2, w, ROW.scenes - 5)
+      g.strokeStyle = cena.locked ? '#fbbf24' : 'rgba(148,163,184,0.5)'
+      g.lineWidth = cena.locked ? 1.5 : 1
+      g.strokeRect(x0 + 0.5, yScenes + 2.5, w - 1, ROW.scenes - 6)
+      if (w > 34) {
+        g.fillStyle = fechado ? '#e0f2fe' : '#94a3b8'
+        g.font = '9px ui-monospace, monospace'
+        g.fillText(`${cena.zoom.toFixed(2)}x${cena.locked ? ' 🔒' : ''}`,
+                   x0 + 4, yScenes + 11)
+      }
     }
 
     // legendas
@@ -331,6 +363,43 @@ export default function Timeline(props: Props) {
       g.fillRect(x1 - 2, ySubs + 3, 2, ROW.subs - 8)
     }
 
+    // trilhos: cada camada é uma faixa com seus itens, no eixo de SAÍDA
+    for (let i = 0; i < extras.length; i++) {
+      const track = extras[i]
+      const y = yTracks + i * (ROW.track + 2)
+      g.fillStyle = 'rgba(255,255,255,0.025)'
+      g.fillRect(0, y, size.w, ROW.track)
+      g.fillStyle = '#475569'
+      g.font = '9px system-ui'
+      g.fillText(track.label, 4, y + ROW.track - 7)
+      for (const item of track.items) {
+        // o item vive no tempo de SAÍDA; a régua está no da FONTE
+        const a = outputToSourceT(item.out_start)
+        const b = outputToSourceT(item.out_end)
+        if (a == null || b == null) continue
+        const vivo = itemDrag && itemDrag.id === item.id
+        const off = vivo ? itemDrag.delta : 0
+        const x0 = toX(a) + off; const x1 = toX(b) + off
+        if (x1 < 0 || x0 > size.w) continue
+        const w = Math.max(3, x1 - x0)
+        const cor = track.kind === 'audio' ? '#34d399'
+          : track.kind === 'blur' ? '#94a3b8' : '#c084fc'
+        g.fillStyle = cor + (vivo ? 'ee' : '99')
+        g.fillRect(x0, y + 2, w, ROW.track - 4)
+        g.fillStyle = '#0b1220'
+        g.fillRect(x0, y + 2, 2.5, ROW.track - 4)
+        g.fillRect(x1 - 2.5, y + 2, 2.5, ROW.track - 4)
+        if (w > 46) {
+          g.fillStyle = '#0b1220'
+          g.font = '9px system-ui'
+          g.save(); g.beginPath()
+          g.rect(x0 + 4, y, w - 8, ROW.track); g.clip()
+          g.fillText(item.label || item.kind, x0 + 5, y + ROW.track - 7)
+          g.restore()
+        }
+      }
+    }
+
     // marcas, na faixa própria: nada disso encosta na onda
     for (const issue of view.audit ?? []) {
       const x = toX(issue.time)
@@ -357,8 +426,13 @@ export default function Timeline(props: Props) {
       }
     }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip,
-      subsOnSource, subDrag, redDrag, bands, toX, yRuler, yMarks, yWave,
-      ySections, yBlocks, ySubs])
+      subsOnSource, subDrag, redDrag, itemDrag, bands, extras, toX,
+      outputToSourceT, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
+      ySubs, yTracks])
+
+  // onde a agulha está em pixels, para poder pegá-la com o mouse
+  const playheadRef = useRef<number | null>(null)
+  const [playheadX, setPlayheadX] = useState<number | null>(null)
 
   // ------------------------------------------- camada viva (60 quadros/s)
   const drawOverlay = useCallback(() => {
@@ -399,12 +473,21 @@ export default function Timeline(props: Props) {
     }
     if (src != null) {
       const x = Math.round(toX(src)) + 0.5
+      // a agulha atravessa TODAS as camadas: é ela que diz onde você está
       g.strokeStyle = '#f8fafc'; g.lineWidth = 1
-      g.beginPath(); g.moveTo(x, yMarks); g.lineTo(x, ySubs + ROW.subs); g.stroke()
+      g.beginPath(); g.moveTo(x, yMarks); g.lineTo(x, height - 2); g.stroke()
       g.fillStyle = '#f8fafc'
       g.beginPath()
-      g.moveTo(x - 5, yMarks); g.lineTo(x + 5, yMarks); g.lineTo(x, yMarks + 7)
+      g.moveTo(x - 6, yMarks - 1); g.lineTo(x + 6, yMarks - 1)
+      g.lineTo(x, yMarks + 8)
       g.closePath(); g.fill()
+      if (playheadRef.current !== x) {
+        playheadRef.current = x
+        setPlayheadX(x)
+      }
+    } else if (playheadRef.current !== null) {
+      playheadRef.current = null
+      setPlayheadX(null)
     }
   }, [size, height, selection, view.blocks, toX, yMarks, yWave, yBlocks, ySubs])
 
@@ -445,9 +528,50 @@ export default function Timeline(props: Props) {
     return best?.clap ?? null
   }
 
+  const itemNear = (x: number, y: number) => {
+    for (let i = 0; i < extras.length; i++) {
+      const y0 = yTracks + i * (ROW.track + 2)
+      if (y < y0 || y > y0 + ROW.track) continue
+      for (const item of extras[i].items) {
+        const a = outputToSourceT(item.out_start)
+        const b = outputToSourceT(item.out_end)
+        if (a == null || b == null) continue
+        const x0 = toX(a); const x1 = toX(b)
+        if (x < x0 - 3 || x > x1 + 3) continue
+        const side: 'move' | 'start' | 'end' =
+          Math.abs(x - x0) <= 5 ? 'start' : Math.abs(x - x1) <= 5 ? 'end' : 'move'
+        return { item, side, track: extras[i] }
+      }
+    }
+    return null
+  }
+
   const onMouseDown = (e: React.MouseEvent) => {
     const { x, y } = pos(e)
     const t = toT(x)
+
+    // a agulha: pegar em cima dela arrasta por toda a timeline
+    if (playheadX != null && Math.abs(x - playheadX) <= 6) {
+      drag.current = { mode: 'head', t0: t, x0: x, s0: start }
+      const out = sourceToOutput(t, view.blocks)
+      if (out != null) setPlayhead(out)
+      return
+    }
+
+    const alvo = itemNear(x, y)
+    if (alvo && !e.altKey) {
+      if (e.shiftKey) {
+        props.onDeleteItem(alvo.track.kind === 'audio' ? 'music' : alvo.item.kind,
+                           alvo.item.id)
+        return
+      }
+      drag.current = { mode: 'item', t0: t, x0: x, s0: start }
+      setItemDrag({ id: alvo.item.id,
+                    kind: alvo.track.kind === 'audio' ? 'music' : alvo.item.kind,
+                    delta: 0, side: alvo.side })
+      return
+    }
+
     const clap = clapNear(x, y)
     if (clap && !e.altKey) {
       props.onToggleClap(clap.id, !clap.enabled)
@@ -509,8 +633,13 @@ export default function Timeline(props: Props) {
     const naAlca = y >= yWave && y < yWave + ROW.wave
       && (view.removed ?? []).some((r) => r.reason !== 'palma'
         && (Math.abs(toX(r.start) - x) <= 6 || Math.abs(toX(r.end) - x) <= 6))
+    const naAgulha = playheadX != null && Math.abs(x - playheadX) <= 6
+    const noItem = itemNear(x, y)
     ;(e.currentTarget as HTMLElement).style.cursor =
-      clapNear(x, y) ? 'pointer' : (naAlca ? 'ew-resize' : 'crosshair')
+      naAgulha ? 'ew-resize'
+      : noItem ? (noItem.side === 'move' ? 'grab' : 'ew-resize')
+      : clapNear(x, y) ? 'pointer'
+      : (naAlca ? 'ew-resize' : 'crosshair')
     const d = drag.current
     if (!d) return
     if (d.mode === 'pan') {
@@ -521,6 +650,11 @@ export default function Timeline(props: Props) {
       setSubDrag((prev) => (prev ? { ...prev, t } : prev))
     } else if (d.mode === 'red') {
       setRedDrag((prev) => (prev ? { ...prev, t } : prev))
+    } else if (d.mode === 'head') {
+      const out = sourceToOutput(t, view.blocks)
+      if (out != null) setPlayhead(out)
+    } else if (d.mode === 'item') {
+      setItemDrag((prev) => (prev ? { ...prev, delta: x - d.x0 } : prev))
     }
   }
 
@@ -535,9 +669,24 @@ export default function Timeline(props: Props) {
     }
   }
 
+  const commitItem = () => {
+    if (!itemDrag) return
+    const seg = itemDrag
+    setItemDrag(null)
+    if (Math.abs(seg.delta) < 2) return
+    // o arrasto é em pixels na régua da FONTE; converte para tempo de SAÍDA
+    const t0 = toT(0); const t1 = toT(seg.delta)
+    const a = sourceToOutput(Math.max(0, t0), view.blocks)
+    const b = sourceToOutput(Math.max(0, t1), view.blocks)
+    if (a == null || b == null) return
+    props.onMoveItem(seg.kind, seg.id, seg.side, b - a)
+  }
+
   const onMouseUp = (e: React.MouseEvent) => {
     const d = drag.current
     drag.current = null
+    if (d?.mode === 'head') return
+    if (d?.mode === 'item') { commitItem(); return }
     if (d?.mode === 'red') { commitRed(); return }
     if (d?.mode === 'sub' && subDrag) {
       const out = sourceToOutput(subDrag.t, view.blocks)
@@ -585,6 +734,17 @@ export default function Timeline(props: Props) {
   return (
     <div className="border-t border-line bg-ink-800">
       <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] text-slate-500">
+        <button className="btn btn-xs w-16" onClick={props.onTogglePlay}
+                title="Espaço">
+          {props.playing ? '❚❚ pausa' : '▶ tocar'}
+        </button>
+        {(view.tracks ?? []).filter((t) => (t.accepts ?? []).length).map((t) => (
+          <button key={t.id} className="btn btn-xs" title={t.hint}
+                  onClick={() => props.onAddToTrack(t.id)}>
+            + {t.label.toLowerCase()}
+          </button>
+        ))}
+        <span className="w-px h-4 bg-line" />
         <span>zoom</span>
         <input type="range" min={0} max={1000} value={zoomToSlider(span, total)}
                className="w-40"
@@ -628,6 +788,7 @@ export default function Timeline(props: Props) {
                 onMouseLeave={() => {
                   setHover(null)
                   if (drag.current?.mode === 'red') { commitRed() }
+                  if (drag.current?.mode === 'item') { commitItem() }
                   if (drag.current?.mode === 'sub' && subDrag) {
                     // o mouse escapou do canvas no meio do arrasto: comita o
                     // ajuste em vez de descartá-lo em silêncio
@@ -665,12 +826,11 @@ export default function Timeline(props: Props) {
           <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" />palma (clique desliga)
         </span>
         <span className="flex items-center gap-1">
-          <span className="w-2.5 h-2.5 bg-slate-300"
-                style={{ clipPath: 'polygon(100% 0,100% 100%,0 0)' }} />
+          <span className="w-2.5 h-2.5 rounded-sm bg-sky-400/50" />
           enquadramento fechado
         </span>
         <span className="ml-auto">
-          arraste as bordas vermelhas para ajustar o que saiu · clique num bloco e Delete apaga ele · marque um trecho e Delete corta · roda dá zoom · Alt+arraste move
+          pegue a agulha e arraste · arraste itens dos trilhos (Shift+clique apaga) · bordas vermelhas ajustam o que saiu · clique num bloco e Delete apaga ele · marque um trecho e Delete corta · roda dá zoom · Alt+arraste move
         </span>
       </div>
     </div>

@@ -647,6 +647,72 @@ def api_resize_removed(pid: str, payload: dict = Body(...)) -> dict:
     return {**res, "timeline": _after_edit(project)}
 
 
+@app.post("/api/projects/{pid}/ops/item")
+def api_item(pid: str, payload: dict = Body(...)) -> dict:
+    """Move, redimensiona ou apaga um item de trilho.
+
+    Um só endpoint para cutaway, sobreposição, desfoque e trilha — na
+    timeline eles são a mesma coisa: um retângulo com começo e fim.
+    """
+    project = _project(pid)
+    kind = str(payload.get("kind", ""))
+    iid = str(payload.get("id", ""))
+    acao = str(payload.get("action", "move"))
+    plan = project.plan
+
+    colecoes = {"cutaway": plan.cutaways, "overlay": plan.overlays,
+                "blur": plan.blurs}
+    alvo = None
+    if kind == "music":
+        if not plan.music:
+            raise HTTPException(404, "não há trilha")
+        alvo = plan.music
+    else:
+        for item in colecoes.get(kind, []):
+            if item.id == iid:
+                alvo = item
+                break
+    if alvo is None:
+        raise HTTPException(404, f"item {kind}/{iid} não encontrado")
+
+    def ler(obj, campo, padrao=0.0):
+        return float(obj.get(campo, padrao) if isinstance(obj, dict)
+                     else getattr(obj, campo, padrao) or padrao)
+
+    def gravar(obj, campo, valor):
+        if isinstance(obj, dict):
+            obj[campo] = round(valor, 4)
+        else:
+            setattr(obj, campo, round(valor, 4))
+
+    if acao == "delete":
+        if kind == "music":
+            plan.music = None
+        else:
+            colecoes[kind][:] = [i for i in colecoes[kind] if i.id != iid]
+        project.save_plan()
+        return {"ok": True, "timeline": svc.timeline_summary(project)}
+
+    limite = svc.timeline_summary(project)["duration"]
+    a = ler(alvo, "out_start")
+    b = ler(alvo, "out_end", limite)
+    if acao == "move":
+        delta = float(payload.get("delta", 0.0))
+        dur = b - a
+        novo_a = max(0.0, min(limite - dur, a + delta))
+        gravar(alvo, "out_start", novo_a)
+        gravar(alvo, "out_end", novo_a + dur)
+    else:                                    # resize
+        side = str(payload.get("side", "end"))
+        t = max(0.0, min(limite, float(payload.get("time", b))))
+        if side == "start":
+            gravar(alvo, "out_start", min(t, b - 0.2))
+        else:
+            gravar(alvo, "out_end", max(t, a + 0.2))
+    project.save_plan()
+    return {"ok": True, "timeline": svc.timeline_summary(project)}
+
+
 @app.post("/api/projects/{pid}/ops/zoom")
 def api_zoom(pid: str, payload: dict = Body(...)) -> dict:
     """Ajusta o enquadramento de UM bloco (o jogo de zoom, na mão)."""
@@ -656,9 +722,14 @@ def api_zoom(pid: str, payload: dict = Body(...)) -> dict:
     zoom = max(1.0, min(zoom, max(limite, 1.0)))
     for clip in project.plan.clips:
         if clip.id == payload.get("clip_id"):
-            clip.zoom = round(zoom, 4)
+            if "locked" in payload:
+                # travado: o recálculo automático não mexe mais neste bloco
+                clip.zoom_locked = bool(payload["locked"])
+            if "zoom" in payload:
+                clip.zoom = round(zoom, 4)
+                clip.zoom_locked = True
             project.save_plan()
-            return {"ok": True, "zoom": clip.zoom,
+            return {"ok": True, "zoom": clip.zoom, "locked": clip.zoom_locked,
                     "timeline": svc.timeline_summary(project)}
     raise HTTPException(404, "bloco não encontrado")
 

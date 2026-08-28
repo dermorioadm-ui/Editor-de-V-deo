@@ -3,7 +3,7 @@ import type { Clip, SubtitleCue } from '../types'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
-import { setPlayhead, usePlayhead } from '../state/store'
+import { setPlayhead, setState, usePlayhead, useStore } from '../state/store'
 
 interface Props {
   projectId: string
@@ -25,7 +25,11 @@ interface Props {
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
                                  previewUrl, onRequestPreview, previewBusy }: Props) {
   const video = useRef<HTMLVideoElement>(null)
-  const [playing, setPlaying] = useState(false)
+  // "tocando" mora na store: a timeline também tem play/pause, e os dois
+  // precisam mostrar o mesmo estado
+  const playing = useStore((s) => s.playing)
+  const setPlaying = (v: boolean) => setState({ playing: v })
+  const playRequest = useStore((s) => s.playRequest)
   const [muted, setMuted] = useState(false)
   const playhead = usePlayhead()
   const seekingRef = useRef(false)
@@ -157,6 +161,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
   }, [playing, blocks, duration, linear, enterStill, leaveStill])
 
+  const toggleRef = useRef<() => void>(() => {})
   const toggle = () => {
     const el = video.current
     if (!el) return
@@ -192,6 +197,16 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       el.play().then(() => setPlaying(true)).catch(() => {})
     }
   }
+
+  toggleRef.current = toggle
+
+  // a timeline (ou qualquer outro lugar) pede play/pause incrementando o
+  // contador; o player é quem sabe tocar
+  const primeiro = useRef(true)
+  useEffect(() => {
+    if (primeiro.current) { primeiro.current = false; return }
+    toggleRef.current()
+  }, [playRequest])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -434,34 +434,132 @@ def testar_repeticao() -> None:
 
 
 def testar_zoom() -> None:
-    """O enquadramento só troca onde existe corte de verdade."""
+    """O zoom entre cenas, contra a especificação do usuário."""
     from editor.config import ZoomParams
-    from editor.edit.zoom import assign_zoom, zoom_chain
+    from editor.edit.zoom import (MIN_SCENE, MIN_STEP, ancora_alcancavel,
+                                  assign_zoom, auditar, cenas, recorte,
+                                  zoom_chain, zoom_maximo)
     from editor.models import Clip
 
-    def c(a, b, sec="explicacao"):
-        return Clip(source="main", src_start=a, src_end=b, section=sec)
+    # --- teto pela resolução da fonte
+    check(abs(zoom_maximo(1080, 1080) - 1.15) < 0.001,
+          f"fonte = saída dá teto 1,15x ({zoom_maximo(1080, 1080):.2f})")
+    check(abs(zoom_maximo(3840, 1080) - 1.25) < 0.001,
+          f"fonte 4K para saída 1080 dá teto 1,25x ({zoom_maximo(3840, 1080):.2f})")
 
-    # 0-3 e 3-6 são contíguos (só muda a velocidade); 8-12 vem depois de corte
-    clips = [c(0, 3, "gancho"), c(3, 6, "gancho"), c(8, 12), c(14, 18)]
-    n = assign_zoom(clips, ZoomParams(levels=(1.0, 1.08), hook_punch=False))
-    check(abs(clips[0].zoom - clips[1].zoom) < 1e-6,
-          "bloco contíguo mantém o enquadramento (não pula sem corte)")
-    check(abs(clips[2].zoom - clips[1].zoom) > 1e-3,
-          "depois de um corte de verdade o enquadramento troca")
-    check(n >= 1, f"o jogo de zoom chegou em algum bloco ({n})")
+    # --- VSL com blocos de tamanhos reais, inclusive os de 0,13 s
+    import random
 
-    curto = [c(0, 3), c(5, 5.4), c(7, 11)]
-    assign_zoom(curto, ZoomParams(levels=(1.0, 1.08), min_block=1.2,
-                                  hook_punch=False))
-    check(abs(curto[1].zoom - curto[0].zoom) < 1e-6,
-          "bloco curto herda o enquadramento (não embrulha o olho)")
+    rng = random.Random(4)
+    secoes = (["gancho"] * 3 + ["dor"] * 4 + ["mecanismo"] * 3
+              + ["explicacao"] * 5 + ["revelacao"] * 3 + ["prova"] * 3
+              + ["oferta"] * 3 + ["garantia"] * 2 + ["cta"] * 1)
+    clips, t = [], 0.0
+    for sec in secoes:
+        d = rng.choice([0.13, 0.9, 2.4, 3.8, 5.5, 7.2])
+        clips.append(Clip(source="main", src_start=t, src_end=t + d, section=sec))
+        t += d + 0.5
+    params = ZoomParams(seconds_per_scene=4.5, amplitude=0.08, max_zoom=1.15,
+                        face_x=0.50, face_y=0.44)
+    r = assign_zoom(clips, params, 1080, 1080)
+    lista = cenas(clips)
+    main = [c for c in clips if c.enabled]
 
-    ch = zoom_chain(1.08, 1080, 1920, 0.38)
-    check("crop=" in ch and "scale=1080:1920" in ch,
-          "o zoom volta ao tamanho de saída (a resolução não muda)")
-    check(zoom_chain(1.0, 1080, 1920, 0.38) == "",
+    # 1. a troca SÓ pode acontecer em cima de um corte
+    sem_corte = [b for a, b in zip(main, main[1:])
+                 if abs(a.zoom - b.zoom) > 1e-6
+                 and abs(a.src_end - b.src_start) < 0.002]
+    check(not sem_corte,
+          f"nenhuma troca de enquadramento fora de um corte ({len(sem_corte)})")
+
+    # 2. bloco de 0,13 s não vira enquadramento próprio (era o efeito pisca)
+    curtos = [c for c in clips if c.src_duration < 0.2]
+    sozinhos = [c for c in curtos if any(x["clip_ids"] == [c.id] for x in lista)]
+    check(curtos and not sozinhos,
+          f"nenhum dos {len(curtos)} blocos de 0,13 s virou cena própria")
+
+    # 3. nenhum enquadramento mais curto que o mínimo confortável
+    curtas = [c for c in lista if c["duration"] < MIN_SCENE]
+    check(not curtas,
+          f"nenhum enquadramento abaixo de {MIN_SCENE:.1f} s ({len(curtas)})")
+
+    # 4. diferença menor que 0,05 não lê como troca de plano. Onde a faixa da
+    #    etapa não permite um passo desses (a VSL tem amplitude 0,08 e teto
+    #    1,15: cabem poucos níveis), a troca sutil é preferível a repetir o
+    #    valor — repetir funde as duas cenas numa só. Mas ela NUNCA pode ser
+    #    zero, e tem que aparecer na auditoria.
+    difs = [abs(lista[i]["zoom"] - lista[i - 1]["zoom"])
+            for i in range(1, len(lista))]
+    fracas = [d for d in difs if d < MIN_STEP]
+    check(all(d > 1e-6 for d in difs),
+          "nenhuma troca é zero (valor repetido fundiria as duas cenas)")
+    check(len(fracas) <= len(difs) * 0.25,
+          f"a maioria das trocas passa de {MIN_STEP} "
+          f"({len(difs) - len(fracas)} de {len(difs)})")
+    reportadas = sum(1 for a in auditar(clips, params, r["teto"])
+                     if a["kind"] == "troca-fraca")
+    check(reportadas >= len(fracas),
+          f"toda troca sutil aparece na auditoria ({reportadas} para {len(fracas)})")
+
+    # 5. o plano aberto reaparece: escada que só fecha sufoca o vídeo
+    abertos = sum(1 for c in lista if abs(c["zoom"] - 1.0) < 0.02)
+    check(abertos >= 2, f"o plano aberto volta para dar respiro ({abertos} de {len(lista)})")
+
+    # 6. nada acima do teto que a fonte aguenta
+    acima = [c for c in lista if c["zoom"] > r["teto"] + 1e-6]
+    check(not acima, f"nenhum enquadramento acima do teto da fonte ({len(acima)})")
+
+    # 7. recorte CONCÊNTRICO: o rosto não pode andar na tela
+    ax, ay = params.anchor_x, params.anchor_y
+    centros = [recorte(c["zoom"], 1080, 1920, ax, ay) for c in lista
+               if c["zoom"] > 1.001]
+    desvio = 0.0
+    if centros:
+        cys = [y + h / 2 for _x, y, _w, h in centros]
+        cxs = [x + w / 2 for x, _y, w, _h in centros]
+        desvio = max(max(cys) - min(cys), max(cxs) - min(cxs))
+    check(desvio <= 4.0,
+          f"o rosto fica parado entre enquadramentos ({desvio:.1f} px em 1920)")
+
+    # 8. a âncora respeita o que a geometria permite
+    ax2, ay2 = ancora_alcancavel(0.50, 0.44, 1.03)
+    check(abs(ay2 - 0.4854) < 0.002,
+          f"a âncora é puxada para o alcançável no menor zoom ({ay2:.4f})")
+
+    # 9. amplitude por preset muda a intensidade
+    story = ZoomParams(seconds_per_scene=2.5, amplitude=0.18, max_zoom=1.25)
+    c2 = [Clip(source="main", src_start=i * 4.0, src_end=i * 4.0 + 3.0,
+               section="gancho") for i in range(8)]
+    r2 = assign_zoom(c2, story, 3840, 1080)
+    maior_vsl = max((c["zoom"] for c in lista), default=1.0)
+    maior_story = max(c.zoom for c in c2)
+    check(maior_story > maior_vsl,
+          f"Story fecha mais que VSL ({maior_story:.2f}x contra {maior_vsl:.2f}x)")
+    check(r2["teto"] > r["teto"],
+          f"fonte 4K libera teto maior ({r2['teto']:.2f} contra {r['teto']:.2f})")
+
+    # 10. travar impede o recálculo de mexer
+    c2[3].zoom_locked = True
+    travado = c2[3].zoom
+    assign_zoom(c2, ZoomParams(seconds_per_scene=9.9, amplitude=0.02), 3840, 1080)
+    check(abs(c2[3].zoom - travado) < 1e-9,
+          "bloco travado sobrevive ao recálculo automático")
+
+    # 11. a cadeia de filtro
+    ch = zoom_chain(1.14, 1080, 1920, 1080, 1920, 0.5, 0.485)
+    check("crop=" in ch and "scale=w=1080:h=1920" in ch and "unsharp=" in ch,
+          "a cadeia recorta, volta ao tamanho de saída e compensa com unsharp")
+    check(zoom_chain(1.0, 1080, 1920, 1080, 1920, 0.5, 0.5) == "",
           "zoom 1,00x não põe filtro nenhum na cadeia")
+    x, y, w, h = recorte(1.14, 1080, 1920, 0.5, 0.485)
+    check(w % 2 == 0 and h % 2 == 0 and x % 2 == 0 and y % 2 == 0,
+          f"largura e altura do recorte são pares ({w}x{h} em {x},{y})")
+
+    # 12. a auditoria acha o que deve achar
+    c2[0].zoom = 1.99
+    avisos = auditar(c2, story, r2["teto"])
+    check(any(a["kind"] == "acima-do-teto" for a in avisos),
+          "a auditoria acusa enquadramento acima do teto da fonte")
 
 
 def testar_silencio() -> None:

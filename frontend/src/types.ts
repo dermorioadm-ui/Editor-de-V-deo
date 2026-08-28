@@ -6,7 +6,7 @@ export interface Clip {
   cut_in: boolean; cut_out: boolean
   snap_in: SnapResult | null; snap_out: SnapResult | null
   label: string; photo: any; fit: any
-  src_duration: number; out_duration: number; zoom: number
+  src_duration: number; out_duration: number; zoom: number; zoom_locked?: boolean
   out_start?: number; out_end?: number
 }
 
@@ -51,6 +51,29 @@ export interface Repeat {
   similarity: number; word_ids: number[]; restored: boolean; reason: string
 }
 
+export interface TrackItem {
+  id: string; kind: string; label: string
+  out_start: number; out_end: number
+  media_id?: string; movable?: boolean; resizable?: boolean; detail?: string
+  zoom?: number; speed?: number; section?: string
+}
+
+export interface Track {
+  id: string; label: string; kind: string; accepts: string[]
+  items: TrackItem[]; locked?: boolean; hint?: string
+}
+
+export interface ZoomScene {
+  zoom: number; start: number; end: number
+  out_start: number; out_end: number; duration: number
+  clip_ids: string[]; locked: boolean
+}
+
+export interface ZoomIssue {
+  kind: string; severity: string; out_start: number; zoom: number
+  message: string; suggestion: string
+}
+
 export interface WordFix {
   i: number; text: string; from: [number, number]; to: [number, number]
   ganho: number
@@ -76,9 +99,15 @@ export interface TimelineView {
   duration: number; source_duration: number
   blocks: Clip[]; removed: RemovedRegion[]; takes: Take[]; claps: Clap[]
   subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]
-  repeats?: Repeat[]; zoom?: { enabled: boolean; levels: number[]
-                              max_level: number; bias_y: number }
+  repeats?: Repeat[]
+  zoom?: {
+    enabled: boolean; ladder: number[]; seconds_per_scene: number
+    amplitude: number; max_zoom: number; intensity: number
+    face_x: number; face_y: number; face_method: string
+    anchor_x: number; anchor_y: number; unsharp: number
+  }
   look?: string; look_vignette?: number | null; word_fixes?: WordFix[]
+  tracks?: Track[]; zoom_scenes?: ZoomScene[]; zoom_audit?: ZoomIssue[]
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
 }
 

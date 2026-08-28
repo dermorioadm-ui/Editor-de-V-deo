@@ -20,7 +20,8 @@ from .edit.audit import audit_edges, audit_summary, settle_edges
 from .edit.plan_builder import (build_auto_plan, resync_removed,
                                 words_removed_by_takes)
 from .edit.repeats import find_repeats
-from .edit.zoom import assign_zoom
+from .edit.zoom import assign_zoom, auditar as zoom_auditar, cenas as zoom_cenas
+from .video_analysis import face_center
 from .edit.repeats import removed_word_ids as repeats_removed_ids
 from .edit.timeline import Timeline
 from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoders, probe,
@@ -254,6 +255,22 @@ def analyze(project: Project, ctx) -> dict:
         ctx.progress(0.9, f"{len(encaixes)} palavra(s) estavam esticadas por cima "
                           f"de pausa; encaixadas no som")
 
+    # Onde está o rosto: medido UMA vez, por mediana de várias amostras de
+    # movimento. Todo recorte de zoom é concêntrico neste ponto — sem isso o
+    # rosto muda de lugar na tela a cada corte e o olho cansa.
+    if project.plan.zoom.face_method in ("", "padrao"):
+        ctx.stage("rosto", "procurando o centro do rosto")
+        try:
+            centro = face_center(project.source_path, info.duration)
+            project.plan.zoom.face_x = centro["x"]
+            project.plan.zoom.face_y = centro["y"]
+            project.plan.zoom.face_method = centro["method"]
+            project.save_plan()
+            ctx.progress(0.93, f"rosto em {centro['x']:.2f}, {centro['y']:.2f} "
+                               f"({centro['detail']})")
+        except Exception as exc:  # noqa: BLE001
+            ctx.progress(0.93, f"não deu para achar o rosto: {exc}")
+
     ctx.stage("takes", "aplicando a regra do take")
 
     fillers = annotate_fillers(words, env)
@@ -386,20 +403,25 @@ def auto_edit(project: Project, ctx) -> dict:
     # corte deixou de existir o enquadramento não pode mudar — senão a imagem
     # pula sem que nada tenha sido cortado, que é o defeito que o zoom existe
     # para esconder.
-    ctx.stage("zoom", "montando o jogo de zoom por frase")
-    vivas = [w for w in words
-             if w["i"] not in set(result["removed_word_ids"])]
-    frases = [seg.start for seg in split_narrative(vivas, env,
-                                                   plan.cut.narrative_pause)]
-    n_zoom = assign_zoom(plan.clips, plan.zoom, frases)
+    ctx.stage("zoom", "montando os enquadramentos")
+    largura_fonte = (project.info.display_size[0] if project.info else 0)
+    from .render.renderer import target_size
+
+    largura_saida = (target_size(project.info, plan.export)[0]
+                     if project.info else largura_fonte)
+    resumo_zoom = assign_zoom(plan.clips, plan.zoom, largura_fonte, largura_saida)
+    plan.zoom_audit = zoom_auditar(plan.clips, plan.zoom, resumo_zoom["teto"])
+    n_zoom = resumo_zoom["fechados"]
 
     ctx.stage("legendas", "gerando legendas")
     cues = rebuild_subtitles(project)
     project.save_analysis()
     project.save_plan()
     project.set_status("editado")
-    if n_zoom:
-        ctx.progress(0.95, f"jogo de zoom em {n_zoom} bloco(s)")
+    if resumo_zoom["cenas"]:
+        ctx.progress(0.95,
+                     f"{resumo_zoom['cenas']} enquadramento(s), "
+                     f"teto {resumo_zoom['teto']:.2f}x")
     ctx.progress(1.0, f"{len(plan.clips)} blocos, {len(cues)} legendas, "
                       + (f"{len(fixed)} borda(s) ajustada(s) sozinho, " if fixed else "")
                       + (f"{len(issues)} alerta(s) de borda" if issues
@@ -410,6 +432,8 @@ def auto_edit(project: Project, ctx) -> dict:
         "audit_fixed": len(fixed),
         "repeats": len(ativas),
         "zoom": n_zoom,
+        "zoom_cenas": resumo_zoom["cenas"],
+        "zoom_teto": resumo_zoom["teto"],
         "duration": round(plan.duration, 2),
         "notes": result["notes"],
     }
@@ -611,6 +635,88 @@ def validate(project: Project, ctx, output: str | None = None) -> dict:
 
 
 # -------------------------------------------------------------------- views
+def build_tracks(project: "Project", blocks: list[dict],
+                 duration: float) -> list[dict]:
+    """As camadas da linha do tempo, cada uma com seus itens.
+
+    Tudo isto já existia como dado solto (cutaway, sobreposição, desfoque,
+    trilha). Aqui vira TRILHO: uma faixa por camada, com itens que têm começo
+    e fim no tempo de SAÍDA, para poderem ser arrastados.
+    """
+    plan = project.plan
+    midias = {m["id"]: m for m in list_media(project.id)}
+
+    def nome(mid: str) -> str:
+        return (midias.get(mid) or {}).get("name", "mídia removida")
+
+    sobreposicoes: list[dict] = []
+    for c in plan.cutaways:
+        if not c.enabled:
+            continue
+        sobreposicoes.append({
+            "id": c.id, "kind": "cutaway", "label": nome(c.media_id),
+            "out_start": round(c.out_start, 3), "out_end": round(c.out_end, 3),
+            "media_id": c.media_id, "movable": True, "resizable": True,
+            "detail": "vídeo por cima, áudio original por baixo",
+        })
+    for o in plan.overlays:
+        if not o.enabled:
+            continue
+        sobreposicoes.append({
+            "id": o.id, "kind": "overlay", "label": nome(o.media_id),
+            "out_start": round(o.out_start, 3), "out_end": round(o.out_end, 3),
+            "media_id": o.media_id, "movable": True, "resizable": True,
+            "detail": "imagem/PNG por cima",
+        })
+    # fotos e insertos ocupam a faixa PRINCIPAL (empurram o vídeo), então
+    # aparecem no trilho de vídeo, não aqui
+    fotos = [b for b in blocks if b.get("kind") == "photo"
+             or b.get("source") not in ("main",)]
+
+    desfoques = [{
+        "id": b.id, "kind": "blur", "label": "desfoque",
+        "out_start": round(b.out_start, 3), "out_end": round(b.out_end, 3),
+        "movable": True, "resizable": True,
+        "detail": f"{b.shape}, força {b.strength}",
+    } for b in plan.blurs if b.enabled]
+
+    musica: list[dict] = []
+    m = plan.music or {}
+    if m.get("enabled") and m.get("media_id"):
+        musica.append({
+            "id": "music", "kind": "music", "label": nome(m.get("media_id", "")),
+            "out_start": round(float(m.get("out_start", 0.0)), 3),
+            "out_end": round(float(m.get("out_end") or duration), 3),
+            "media_id": m.get("media_id"), "movable": True, "resizable": True,
+            "detail": (f"{m.get('gain_db', -18)} dB"
+                       + (", com ducking" if m.get("ducking") else "")),
+        })
+
+    return [
+        {"id": "V1", "label": "Vídeo", "kind": "video", "accepts": ["video", "image"],
+         "items": [{"id": b["id"], "kind": b.get("kind", "speech"),
+                    "label": b.get("label") or "",
+                    "out_start": b.get("out_start", 0.0),
+                    "out_end": b.get("out_end", 0.0),
+                    "zoom": b.get("zoom", 1.0), "speed": b.get("speed", 1.0),
+                    "section": b.get("section", ""), "movable": False,
+                    "resizable": False}
+                   for b in blocks],
+         "locked": True,
+         "hint": "o take principal, já cortado. Arraste as bordas vermelhas na "
+                 "onda para ajustar o que saiu."},
+        {"id": "V2", "label": "Sobreposição", "kind": "overlay",
+         "accepts": ["video", "image"], "items": sobreposicoes,
+         "hint": "vídeo ou imagem por cima do principal, por tempo determinado."},
+        {"id": "FX", "label": "Desfoque", "kind": "blur", "accepts": [],
+         "items": desfoques,
+         "hint": "proteção de rosto e documento."},
+        {"id": "A1", "label": "Trilha", "kind": "audio", "accepts": ["audio"],
+         "items": musica,
+         "hint": "música de fundo, com ducking automático na fala."},
+    ]
+
+
 def timeline_summary(project: Project) -> dict:
     plan = project.plan
     tl = Timeline(plan.active_clips, project.info.fps if project.info else None)
@@ -626,6 +732,7 @@ def timeline_summary(project: Project) -> dict:
         "duration": round(tl.duration, 3),
         "source_duration": round(project.analysis.get("duration", 0.0), 3),
         "blocks": blocks,
+        "tracks": build_tracks(project, blocks, round(tl.duration, 3)),
         "removed": [r.to_dict() for r in plan.removed],
         "takes": plan.discarded_takes,
         "claps": plan.claps,
@@ -633,13 +740,21 @@ def timeline_summary(project: Project) -> dict:
         "audit": plan.audit,
         "audit_fixed": plan.audit_fixed,
         "repeats": plan.repeats,
+        "zoom_scenes": zoom_cenas(plan.clips),
+        "zoom_audit": plan.zoom_audit,
         "look": plan.look,
         "look_vignette": plan.look_vignette,
         "word_fixes": project.analysis.get("word_fixes", []),
         "zoom": {"enabled": plan.zoom.enabled,
-                 "levels": list(plan.zoom.levels),
-                 "max_level": plan.zoom.max_level,
-                 "bias_y": plan.zoom.bias_y},
+                 "ladder": list(plan.zoom.ladder),
+                 "seconds_per_scene": plan.zoom.seconds_per_scene,
+                 "amplitude": plan.zoom.amplitude,
+                 "max_zoom": plan.zoom.max_zoom,
+                 "intensity": plan.zoom.intensity,
+                 "face_x": plan.zoom.face_x, "face_y": plan.zoom.face_y,
+                 "face_method": plan.zoom.face_method,
+                 "anchor_x": plan.zoom.anchor_x, "anchor_y": plan.zoom.anchor_y,
+                 "unsharp": plan.zoom.unsharp},
         "cutaways": [c.to_dict() for c in plan.cutaways],
         "overlays": [o.to_dict() for o in plan.overlays],
         "blurs": [b.to_dict() for b in plan.blurs],

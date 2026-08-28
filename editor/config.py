@@ -121,22 +121,30 @@ class SpeedParams:
 
 @dataclass
 class ZoomParams:
-    """Jogo de zoom (o corte "seco" de VSL).
+    """Zoom automático entre cenas — multicâmera simulada num take único.
 
-    O corte de silêncio sozinho aparece como um salto na imagem — parece
-    defeito. Trocar o enquadramento junto com o corte transforma o mesmo salto
-    em linguagem: é assim que toda VSL é montada. O zoom é aplicado no MESMO
-    encode dos blocos, então não custa geração nenhuma.
+    O critério é TEMPO DE TELA ACUMULADO, não troca de frase. Trocar a cada
+    bloco fazia o enquadramento piscar duas ou três vezes por segundo, porque
+    o corte de silêncio produz blocos de 0,13 s.
     """
 
     enabled: bool = True
-    levels: tuple[float, ...] = (1.0, 1.09)   # a cada corte, alterna
-    max_level: float = 1.20
-    min_block: float = 1.20      # bloco curto herda o zoom do anterior: trocar
-                                 # de enquadramento a cada 0,5 s embrulha
-    bias_y: float = 0.38         # 0,5 é o centro; menos sobe o corte, e a
-                                 # cabeça de quem fala fica no terço de cima
-    hook_punch: bool = True      # o primeiro bloco depois do gancho entra fechado
+    seconds_per_scene: float = 4.5      # tempo de tela por enquadramento
+    # A escada nunca é sorteada. O 1,00 reaparece com frequência porque voltar
+    # ao plano aberto dá respiro; uma sequência que só fecha sufoca o vídeo.
+    ladder: tuple[float, ...] = (1.00, 1.08, 1.00, 1.14, 1.05,
+                                 1.17, 1.00, 1.11, 1.06, 1.14)
+    amplitude: float = 0.08             # quanto a escada se afasta de 1,00
+    max_zoom: float = 1.15              # teto do preset (a fonte pode baixar)
+    intensity: float = 1.0              # multiplicador global, para a mão
+    face_x: float = 0.50                # centro do recorte, fração da largura
+    face_y: float = 0.44                # fração da altura
+    face_method: str = "padrao"         # padrao | movimento | opencv | manual
+    # âncora EFETIVA do recorte: o ponto mais perto do rosto que todos os
+    # enquadramentos conseguem centrar. Calculada por assign_zoom.
+    anchor_x: float = 0.50
+    anchor_y: float = 0.50
+    unsharp: float = 0.35               # compensa a suavização da reescala
 
 
 @dataclass

@@ -270,13 +270,29 @@ def subtitle_chain(ass_path: str | Path) -> str:
 
 
 def music_chain(gain_db: float, ducking: bool, duck_amount: float,
-                fade_in: float, fade_out: float, total: float) -> str:
-    """Trilha com ducking por sidechain (Parte 9.3)."""
+                fade_in: float, fade_out: float, total: float,
+                out_start: float = 0.0, out_end: float | None = None) -> str:
+    """Trilha com ducking por sidechain (Parte 9.3).
+
+    ``out_start``/``out_end`` posicionam a trilha na linha do tempo — é o que
+    permite arrastar o item de música no trilho em vez de ela cobrir o vídeo
+    inteiro à força.
+    """
+    fim = total if out_end is None else min(float(out_end), total)
+    inicio = max(0.0, float(out_start))
+    dur = max(0.1, fim - inicio)
     music = [f"volume={gain_db}dB"]
     if fade_in > 0:
-        music.append(f"afade=t=in:st=0:d={fade_in:.2f}")
+        music.append(f"afade=t=in:st=0:d={min(fade_in, dur / 2):.2f}")
     if fade_out > 0:
-        music.append(f"afade=t=out:st={max(0.0, total - fade_out):.2f}:d={fade_out:.2f}")
+        music.append(f"afade=t=out:st={max(0.0, dur - fade_out):.2f}:"
+                     f"d={min(fade_out, dur / 2):.2f}")
+    music.append(f"atrim=0:{dur:.3f}")
+    if inicio > 0.001:
+        # adelay põe a trilha no lugar certo; apad garante que ela não encurta
+        # a mixagem quando termina antes do vídeo
+        music.append(f"adelay={int(inicio * 1000)}|{int(inicio * 1000)}")
+    music.append(f"apad=whole_dur={total:.3f}")
     music_chain_str = ",".join(music)
     if ducking:
         ratio = max(2.0, duck_amount / 2.0)

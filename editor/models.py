@@ -13,14 +13,29 @@ from typing import Any
 from .config import (AudioParams, CutParams, ExportParams, SpeedParams,
                      SubtitleStyle, ZoomParams)
 
+# zoom_base: quanto a etapa fecha o enquadramento por natureza. A lógica é
+# fechar onde a fala é EMOCIONAL e abrir onde é EXPLICATIVA.
 SECTIONS = {
-    "gancho":     {"label": "Gancho / abertura", "speed": (1.00, 1.06), "color": "#38bdf8"},
-    "dor":        {"label": "Dor, contexto",     "speed": (1.08, 1.08), "color": "#fb923c"},
-    "explicacao": {"label": "Explicação",        "speed": (1.12, 1.18), "color": "#a78bfa"},
-    "revelacao":  {"label": "Revelação, clímax", "speed": (1.00, 1.05), "color": "#f472b6"},
-    "prova":      {"label": "Prova, números",    "speed": (1.06, 1.12), "color": "#34d399"},
-    "oferta":     {"label": "Oferta, preço",     "speed": (1.00, 1.00), "color": "#facc15"},
-    "garantia":   {"label": "Garantia, CTA",     "speed": (1.00, 1.00), "color": "#f87171"},
+    "gancho":     {"label": "Gancho / abertura", "speed": (1.00, 1.06),
+                   "color": "#38bdf8", "zoom_base": 1.06},
+    "dor":        {"label": "Dor, contexto",     "speed": (1.08, 1.08),
+                   "color": "#fb923c", "zoom_base": 1.00},
+    "mecanismo":  {"label": "Virada, mecanismo", "speed": (1.05, 1.10),
+                   "color": "#22d3ee", "zoom_base": 1.09},
+    "explicacao": {"label": "Explicação",        "speed": (1.12, 1.18),
+                   "color": "#a78bfa", "zoom_base": 1.00},
+    "revelacao":  {"label": "Revelação, clímax", "speed": (1.00, 1.05),
+                   "color": "#f472b6", "zoom_base": 1.08},
+    "prova":      {"label": "Prova, números",    "speed": (1.06, 1.12),
+                   "color": "#34d399", "zoom_base": 1.03},
+    "monetizacao": {"label": "Monetização",      "speed": (1.04, 1.10),
+                    "color": "#a3e635", "zoom_base": 1.00},
+    "oferta":     {"label": "Oferta, preço",     "speed": (1.00, 1.00),
+                   "color": "#facc15", "zoom_base": 1.10},
+    "garantia":   {"label": "Garantia",          "speed": (1.00, 1.00),
+                   "color": "#f87171", "zoom_base": 1.06},
+    "cta":        {"label": "CTA",               "speed": (1.00, 1.00),
+                   "color": "#fb7185", "zoom_base": 1.12},
 }
 
 
@@ -64,7 +79,8 @@ class Clip:
     snap_in: dict | None = None     # SnapResult, para a interface explicar
     snap_out: dict | None = None
     measured_duration: float | None = None   # medida real do render
-    zoom: float = 1.0               # jogo de zoom do corte (crop central)
+    zoom: float = 1.0               # enquadramento (recorte concêntrico no rosto)
+    zoom_locked: bool = False       # travado: o recálculo automático não mexe
     label: str = ""
     photo: dict | None = None       # {duration, ken_burns, annotations}
     fit: dict | None = None         # {tonemap, brightness, saturation, contrast}
@@ -218,6 +234,7 @@ class EditPlan:
     look_vignette: float | None = None  # None = a vinheta que o look define
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
+    zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
     repeats: list = field(default_factory=list)       # trechos ditos duas vezes
     version: int = 1
 
@@ -246,6 +263,7 @@ class EditPlan:
             "look_vignette": self.look_vignette,
             "audit": self.audit,
             "audit_fixed": self.audit_fixed,
+            "zoom_audit": self.zoom_audit,
             "repeats": self.repeats,
             "version": self.version,
         }
@@ -268,15 +286,17 @@ class EditPlan:
         plan.style = _from_dict(SubtitleStyle, data.get("style")) or SubtitleStyle()
         plan.audio = _from_dict(AudioParams, data.get("audio")) or AudioParams()
         plan.export = _from_dict(ExportParams, data.get("export")) or ExportParams()
-        zdata = dict(data.get("zoom") or {})
-        if "levels" in zdata:
-            zdata["levels"] = tuple(float(x) for x in zdata["levels"])
+        zdata = {k: v for k, v in dict(data.get("zoom") or {}).items()
+                 if k in ZoomParams.__dataclass_fields__}
+        if "ladder" in zdata:
+            zdata["ladder"] = tuple(float(x) for x in zdata["ladder"])
         plan.zoom = ZoomParams(**zdata) if zdata else ZoomParams()
         plan.look = str(data.get("look", "nenhum"))
         lv = data.get("look_vignette")
         plan.look_vignette = None if lv is None else float(lv)
         plan.audit = list(data.get("audit", []))
         plan.audit_fixed = list(data.get("audit_fixed", []))
+        plan.zoom_audit = list(data.get("zoom_audit", []))
         plan.repeats = list(data.get("repeats", []))
         plan.version = int(data.get("version", 1))
         return plan

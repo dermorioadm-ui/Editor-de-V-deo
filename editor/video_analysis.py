@@ -108,3 +108,137 @@ def frame_jpeg(path: str | Path, time: float, filters: str = "",
         raw = shot(None, gray_args)
     arr = np.frombuffer(raw, dtype=np.uint8)
     return data, (float(arr.mean()) if arr.size else 0.0)
+
+
+# ------------------------------------------------------------------- rosto
+FACE_FALLBACK = (0.50, 0.44)   # um pouco acima do centro geométrico
+FACE_SAMPLES = 26
+FACE_GRID = 64                 # largura da grade de análise
+
+
+def _weighted_median(peso: "np.ndarray") -> float:
+    """Mediana ponderada de um perfil 1D, em fração de 0 a 1."""
+    total = float(peso.sum())
+    if total <= 1e-9:
+        return 0.5
+    acum = np.cumsum(peso) / total
+    i = int(np.searchsorted(acum, 0.5))
+    return float(min(max(i, 0), len(peso) - 1)) / max(len(peso) - 1, 1)
+
+
+def face_center(path: str | Path, duration: float,
+                samples: int = FACE_SAMPLES) -> dict:
+    """Onde está o rosto, em fração da largura e da altura.
+
+    Sem detector de rosto: numa gravação de câmera parada, o rosto é onde
+    está o MOVIMENTO — a boca abre e fecha, a cabeça oscila, e o fundo fica
+    parado. Amostramos quadros ao longo do vídeo, medimos a diferença entre
+    quadros vizinhos e tiramos a MEDIANA das posições (não a média: um quadro
+    com detecção errada estraga a média, a mediana ignora).
+
+    Se o usuário tiver OpenCV instalado, o haarcascade entra na frente — é
+    mais preciso quando existe. Mas o editor não depende dele.
+    """
+    por_cv = _face_center_opencv(path, duration, samples)
+    if por_cv:
+        return por_cv
+
+    amostras = _motion_centers(path, duration, samples)
+    if not amostras:
+        return {"x": FACE_FALLBACK[0], "y": FACE_FALLBACK[1],
+                "method": "padrao", "samples": 0,
+                "detail": "não deu para medir movimento; usando o padrão"}
+    xs = sorted(a[0] for a in amostras)
+    ys = sorted(a[1] for a in amostras)
+    n = len(xs)
+    x = xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+    y = ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2
+    # espalhamento: se as amostras discordam muito, a medida não vale nada
+    espalha = float(np.median([abs(a[1] - y) for a in amostras]))
+    if espalha > 0.22:
+        return {"x": FACE_FALLBACK[0], "y": FACE_FALLBACK[1],
+                "method": "padrao", "samples": n,
+                "detail": f"movimento espalhado demais (±{espalha:.2f}); "
+                          f"usando o padrão"}
+    return {"x": round(float(x), 4), "y": round(float(y), 4),
+            "method": "movimento", "samples": n,
+            "detail": f"mediana de {n} amostras de movimento (±{espalha:.2f})"}
+
+
+def _motion_centers(path: str | Path, duration: float,
+                    samples: int) -> list[tuple[float, float]]:
+    """Centro do movimento em pares de quadros VIZINHOS, espalhados no vídeo.
+
+    Comparar dois quadros distantes não mede movimento de boca: mede que a
+    pessoa mudou de pose. Pior, amostrar em intervalo fixo contra um
+    movimento periódico dá aliasing — no teste, quadros a 0,77 s de distância
+    contra uma boca a 2,6 Hz saíram IDÊNTICOS. Por isso cada amostra é um par
+    de quadros consecutivos: a diferença entre eles é a boca, e mais nada.
+    """
+    info = probe(path)
+    dw, dh = info.display_size
+    largura = FACE_GRID
+    alt = max(2, int(round(largura * (dh or 1) / max(dw or 1, 1))))
+    alt -= alt % 2
+    quadro = largura * alt
+    centros: list[tuple[float, float]] = []
+    for k in range(samples):
+        t = duration * (k + 0.5) / max(samples, 1)
+        cmd = [FFMPEG, "-v", "error", "-nostdin",
+               "-ss", f"{max(0.0, t):.3f}", "-i", str(path),
+               "-frames:v", "2", "-vf", f"scale={largura}:-2,format=gray",
+               "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or len(proc.stdout) < quadro * 2:
+            continue
+        par = np.frombuffer(proc.stdout[: quadro * 2],
+                            dtype=np.uint8).reshape(2, alt, largura).astype(np.float32)
+        dif = np.abs(par[1] - par[0])
+        pico = float(dif.max())
+        if pico < 5.0:
+            continue                     # quadro parado: não diz nada
+        # Só o que se mexeu DE VERDADE. Cortar por percentil deixava passar o
+        # ruído de compressão do fundo inteiro — e a boca, que é o sinal, tem
+        # menos de 1% dos pixels. O corte relativo ao pico isola o movimento.
+        dif = np.where(dif > pico * 0.45, dif, 0.0)
+        if float(dif.sum()) <= 0.0:
+            continue
+        centros.append((_weighted_median(dif.sum(axis=0)),
+                        _weighted_median(dif.sum(axis=1))))
+    return centros
+
+
+def _face_center_opencv(path: str | Path, duration: float,
+                        samples: int) -> dict | None:
+    """Haarcascade, se o usuário tiver OpenCV. Opcional de propósito."""
+    try:
+        import cv2  # noqa: PLC0415
+    except ImportError:
+        return None
+    try:
+        cascata = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        cap = cv2.VideoCapture(str(path))
+        achados: list[tuple[float, float]] = []
+        for k in range(samples):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (duration * k / max(samples, 1)) * 1000)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            h, w = frame.shape[:2]
+            cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascata.detectMultiScale(cinza, 1.15, 5, minSize=(w // 12, w // 12))
+            if len(faces):
+                fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+                achados.append(((fx + fw / 2) / w, (fy + fh / 2) / h))
+        cap.release()
+        if len(achados) < 3:
+            return None
+        xs = sorted(a[0] for a in achados)
+        ys = sorted(a[1] for a in achados)
+        m = len(xs) // 2
+        return {"x": round(float(xs[m]), 4), "y": round(float(ys[m]), 4),
+                "method": "opencv", "samples": len(achados),
+                "detail": f"haarcascade em {len(achados)} quadros"}
+    except Exception:  # noqa: BLE001
+        return None

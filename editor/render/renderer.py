@@ -306,16 +306,19 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         color = F.color_chain(seg.fit)
         if color:
             chain.append(color)
-        if needs_fit:
+        # Enquadramento: recorte CONCÊNTRICO no rosto direto na resolução da
+        # FONTE, e só então a reescala para a saída. Recortar da fonte usa
+        # todos os pixels que existem; recortar depois do fit jogaria metade
+        # fora antes de esticar de volta.
+        sw, sh = (info.display_size if info else (width, height))
+        zc = zoom_chain(seg.zoom, sw, sh, width, height,
+                        plan.zoom.anchor_x, plan.zoom.anchor_y, plan.zoom.unsharp)
+        if zc:
+            chain.append(zc)
+        elif needs_fit:
             chain.append(F.fit_chain(width, height))
         elif seg.kind != "main":
             chain.append(f"scale={width}:{height}")
-        # jogo de zoom: crop central + volta ao tamanho de saída. Entra DEPOIS
-        # do fit — a imagem já está em width x height, então o crop é sempre
-        # sobre o quadro final e a resolução de saída não muda.
-        zc = zoom_chain(seg.zoom, width, height, plan.zoom.bias_y)
-        if zc:
-            chain.append(zc)
 
     graph_parts.append(f"[{cur_tag}]" + ",".join(chain) + "[__v0]")
     cur_tag = "__v0"
@@ -415,7 +418,9 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
             "src": seg.source_path, "start": round(seg.src_start, 4),
             "dur": round(seg.src_duration, 4), "speed": seg.speed,
             "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
-            "zoom": round(seg.zoom, 4), "zoom_bias": plan.zoom.bias_y,
+            "zoom": round(seg.zoom, 4),
+            "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
+            "unsharp": plan.zoom.unsharp,
             "look": plan.look, "look_vignette": plan.look_vignette,
             "t_start": round(seg.t_start, 3) if positional else None,
             "nominal": round(seg.nominal, 4),
@@ -583,7 +588,9 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               bool(music.get("ducking", True)),
                               float(music.get("duck_amount", 12)),
                               float(music.get("fade_in", 1.0)),
-                              float(music.get("fade_out", 2.0)), duration)
+                              float(music.get("fade_out", 2.0)), duration,
+                              float(music.get("out_start", 0.0) or 0.0),
+                              music.get("out_end"))
         run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
              "-stream_loop", "-1", "-i", str(mpath),
              "-filter_complex", graph, "-map", "[aout]",

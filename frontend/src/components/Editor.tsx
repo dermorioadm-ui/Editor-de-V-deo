@@ -37,6 +37,7 @@ export default function Editor() {
   const [safeZone, setSafeZone] = useState<any>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
+  const playing = useStore((s) => s.playing)
 
   useEffect(() => { api.presets().then(setPresets).catch(() => {}) }, [])
 
@@ -378,6 +379,38 @@ export default function Editor() {
                   sourceDuration={view.source_duration || project.info?.duration || 0}
                   onDeleteSelection={deleteSelection}
                   onDeleteClip={deleteClip}
+                  playing={playing}
+                  onTogglePlay={() => setState((s) => ({ playRequest: s.playRequest + 1 }))}
+                  onMoveItem={async (kind, id, side, delta) => {
+                    snapshot()
+                    try {
+                      if (side === 'move') {
+                        await api.moveItem(project.id, kind, id, delta)
+                      } else {
+                        const it = (timeline?.tracks ?? [])
+                          .flatMap((t) => t.items).find((x) => x.id === id)
+                        if (!it) return
+                        const base = side === 'start' ? it.out_start : it.out_end
+                        await api.resizeItem(project.id, kind, id, side, base + delta)
+                      }
+                      await refresh()
+                    } catch (e: any) {
+                      toast('warn', 'Não deu para mover', String(e.message ?? e))
+                    }
+                  }}
+                  onDeleteItem={async (kind, id) => {
+                    snapshot()
+                    await api.deleteItem(project.id, kind, id)
+                    await refresh()
+                    toast('ok', 'Item removido do trilho')
+                  }}
+                  onAddToTrack={(trackId) => {
+                    setTab(trackId === 'A1' ? 'audio' : 'midia')
+                    toast('info', 'Escolha a mídia',
+                      trackId === 'A1'
+                        ? 'Importe o áudio e clique em "usar como trilha".'
+                        : 'Importe o arquivo e escolha como ele entra.')
+                  }}
                   onResizeRemoved={async (a, b, na, nb) => {
                     snapshot()
                     try {

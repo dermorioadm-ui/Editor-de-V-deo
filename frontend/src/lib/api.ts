@@ -97,6 +97,18 @@ export const api = {
     post<any>(`/api/projects/${id}/ops/resize-removed`,
               { start, end, new_start, new_end }),
 
+  moveItem: (id: string, kind: string, item: string, delta: number) =>
+    post<any>(`/api/projects/${id}/ops/item`,
+              { kind, id: item, action: 'move', delta }),
+  resizeItem: (id: string, kind: string, item: string,
+               side: 'start' | 'end', time: number) =>
+    post<any>(`/api/projects/${id}/ops/item`,
+              { kind, id: item, action: 'resize', side, time }),
+  deleteItem: (id: string, kind: string, item: string) =>
+    post<any>(`/api/projects/${id}/ops/item`, { kind, id: item, action: 'delete' }),
+  lockZoom: (id: string, clip_id: string, locked: boolean) =>
+    post<any>(`/api/projects/${id}/ops/zoom`, { clip_id, locked }),
+
   looks: () => req<any[]>('/api/looks'),
   setLook: (id: string, look: string, vignette?: number | null) =>
     post(`/api/projects/${id}/ops/look`,

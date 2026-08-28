@@ -121,29 +121,118 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
         )
       })()}
 
-      {/* ---------------------------------------------------- jogo de zoom */}
-      <section className="card p-3">
-        <label className="flex items-center gap-2 text-xs text-slate-300">
-          <input type="checkbox" checked={view.zoom?.enabled ?? true}
-                 onChange={async (e) => {
-                   snapshot()
-                   await api.params(project.id, { zoom: { enabled: e.target.checked } })
-                   await onChanged()
-                 }} />
-          <b>Jogo de zoom nos cortes</b>
-        </label>
-        <p className="hint mt-1">
-          A cada corte o enquadramento troca. É o que faz o corte parecer
-          montagem de VSL em vez de defeito no arquivo. Não custa geração
-          nenhuma — entra no mesmo encode.
-        </p>
-        {(view.zoom?.enabled ?? true) && (
-          <p className="text-[11px] text-slate-500 mt-1.5 font-mono">
-            {view.blocks.filter((b) => (b.zoom ?? 1) > 1.001).length} de{' '}
-            {view.blocks.filter((b) => b.source === 'main').length} blocos fechados
-          </p>
-        )}
-      </section>
+      {/* -------------------------------------------- zoom entre cenas */}
+      {(() => {
+        const z = view.zoom
+        if (!z) return null
+        const cen = view.zoom_scenes ?? []
+        const durs = cen.map((c) => c.duration)
+        const media = durs.length
+          ? durs.reduce((a, b) => a + b, 0) / durs.length : 0
+        const avisos = view.zoom_audit ?? []
+        return (
+          <section className="card p-3">
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" checked={z.enabled}
+                     onChange={async (e) => {
+                       snapshot()
+                       await api.params(project.id,
+                                        { zoom: { enabled: e.target.checked } })
+                       await onChanged()
+                     }} />
+              <b>Zoom entre cenas</b>
+            </label>
+            <p className="hint mt-1">
+              Recorte concêntrico no rosto, trocando só em cima de corte. Entra
+              no mesmo encode — não custa geração nenhuma.
+            </p>
+
+            {z.enabled && (
+              <>
+                <div className="text-[11px] font-mono text-slate-400 mt-2 space-y-0.5">
+                  <div>{cen.length} enquadramentos · média {media.toFixed(1)} s</div>
+                  <div>teto da fonte {z.max_zoom.toFixed(2)}x ·{' '}
+                    {project.info?.display_width}px de largura</div>
+                  <div>rosto {z.face_x.toFixed(2)}, {z.face_y.toFixed(2)}{' '}
+                    <span className="text-slate-600">({z.face_method})</span></div>
+                </div>
+
+                <label className="label mt-3">
+                  Intensidade · <span className="font-mono text-slate-300">
+                    {Math.round(z.intensity * 100)}%</span>
+                </label>
+                <p className="hint mb-1">Multiplica toda a escada de uma vez.</p>
+                <input type="range" min={0} max={1.6} step={0.05}
+                       value={z.intensity} className="w-full"
+                       onChange={async (e) => {
+                         await api.params(project.id,
+                           { zoom: { intensity: Number(e.target.value) } })
+                         await onChanged()
+                       }} />
+
+                <label className="label mt-2">
+                  Segundos por enquadramento · <span className="font-mono text-slate-300">
+                    {z.seconds_per_scene.toFixed(1)} s</span>
+                </label>
+                <input type="range" min={2} max={9} step={0.1}
+                       value={z.seconds_per_scene} className="w-full"
+                       onChange={async (e) => {
+                         await api.params(project.id,
+                           { zoom: { seconds_per_scene: Number(e.target.value) } })
+                         await onChanged()
+                       }} />
+
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <label className="label">Rosto X</label>
+                    <input type="number" step={0.01} min={0} max={1}
+                           className="field py-1 text-xs" value={z.face_x}
+                           onChange={async (e) => {
+                             await api.params(project.id, { zoom: {
+                               face_x: Number(e.target.value),
+                               face_method: 'manual' } })
+                             await onChanged()
+                           }} />
+                  </div>
+                  <div>
+                    <label className="label">Rosto Y</label>
+                    <input type="number" step={0.01} min={0} max={1}
+                           className="field py-1 text-xs" value={z.face_y}
+                           onChange={async (e) => {
+                             await api.params(project.id, { zoom: {
+                               face_y: Number(e.target.value),
+                               face_method: 'manual' } })
+                             await onChanged()
+                           }} />
+                  </div>
+                </div>
+                <p className="hint mt-1">
+                  Todo recorte é concêntrico neste ponto. Se o rosto estiver
+                  descentralizado no seu enquadramento, ajuste aqui.
+                </p>
+
+                {avisos.length > 0 && (
+                  <details className="mt-2">
+                    <summary className="text-[11px] text-slate-500 cursor-pointer">
+                      {avisos.length} aviso(s) do enquadramento
+                    </summary>
+                    <div className="space-y-1 mt-1.5 max-h-40 overflow-auto">
+                      {avisos.map((a, i) => (
+                        <p key={i} className="text-[11px] leading-snug">
+                          <span className={a.severity === 'alta' ? 'text-red-300'
+                            : a.severity === 'baixa' ? 'text-slate-500'
+                            : 'text-amber-300'}>{a.message}</span>
+                          <span className="text-slate-600"> — {a.suggestion}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
+            )}
+          </section>
+        )
+      })()}
 
       {/* ------------------------------------------- o que saiu sozinho */}
       {(() => {
@@ -297,7 +386,7 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
                   </span>
                 )}
               </label>
-              <input type="range" min={1} max={view.zoom?.max_level ?? 1.2} step={0.01}
+              <input type="range" min={1} max={view.zoom?.max_zoom ?? 1.25} step={0.01}
                      value={dragZoom ?? block.zoom ?? 1} className="w-full"
                      onChange={(e) => setDragZoom(Number(e.target.value))}
                      onMouseUp={(e) => {
@@ -310,6 +399,15 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
                        setDragZoom(null)
                        api.setZoom(project.id, block.id, v).then(onChanged)
                      }} />
+              <label className="flex items-center gap-1.5 text-[11px]
+                                text-slate-400 mt-1">
+                <input type="checkbox" checked={!!block.zoom_locked}
+                       onChange={async (e) => {
+                         await api.lockZoom(project.id, block.id, e.target.checked)
+                         await onChanged()
+                       }} />
+                travar (o recálculo automático não mexe)
+              </label>
             </div>
             </div>
 

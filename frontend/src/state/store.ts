@@ -19,6 +19,8 @@ export interface AppState {
   jobs: Record<string, Job>
   activeJob: Job | null
   toasts: Toast[]
+  playing: boolean          // o player está tocando?
+  playRequest: number       // contador: qualquer um pede play/pause por aqui
   selection: { start: number; end: number } | null
   selectedClip: string | null
   history: any[]
@@ -37,6 +39,8 @@ const initial: AppState = {
   jobs: {},
   activeJob: null,
   toasts: [],
+  playing: false,
+  playRequest: 0,
   selection: null,
   selectedClip: null,
   history: [],

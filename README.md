@@ -386,24 +386,80 @@ Medido num caso com quatro palavras esticadas: **11,6 s de vale** ficavam no
 vídeo; com qualquer uma das duas defesas, **zero**. O painel da direita conta
 quantas palavras foram encaixadas.
 
-### O jogo de zoom
+### Zoom entre cenas — multicâmera simulada
 
-Corte de silêncio sem troca de enquadramento parece defeito de arquivo. Com o
-enquadramento mudando, o mesmo corte vira linguagem — é assim que VSL é
-montada. O editor faz isso sozinho, **a cada fim de frase**.
+O vídeo é um take só, câmera fixa. O zoom é **recorte digital**: recorta-se
+uma área menor do quadro e reescala de volta. Trocar essa área periodicamente
+cria a impressão de troca de plano.
 
-- A troca é por **frase**, não por corte. Corta-se dentro de uma frase o tempo
-  todo para tirar respiro, e o quadro não pode pular no meio de um pensamento.
-  Medido: 71 trocas de enquadramento, **nenhuma** no meio de frase.
-- Bloco **contíguo** (onde só a velocidade muda, sem corte) mantém o
-  enquadramento.
-- Bloco curto herda o do vizinho.
-- É um crop central com volta ao tamanho de saída, **no mesmo encode dos
-  blocos**: não custa geração nenhuma e a resolução não muda.
+A regra que sustenta tudo: **a troca só acontece em cima de um corte.** Durante
+fala contínua o olho lê como salto; exatamente no corte, lê como câmera nova.
 
-Desligue em **Jogo de zoom nos cortes**, no painel da direita, ou ajuste bloco
-a bloco em **Enquadramento**. O canto marcado no bloco, na timeline, mostra
-quais estão fechados.
+**O critério é tempo de tela acumulado**, não troca de frase. Trocar a cada
+bloco fazia o enquadramento piscar duas ou três vezes por segundo — o corte de
+silêncio produz blocos de 0,13 s. Agora o tempo acumula e a cena vira no corte
+mais próximo do alvo.
+
+| | VSL | Criativo 60s | Story |
+|---|---|---|---|
+| segundos por enquadramento | 4,5 | 3,2 | 2,5 |
+| amplitude da escada | ±0,08 | ±0,14 | ±0,18 |
+| zoom máximo | 1,15x | 1,20x | 1,25x |
+
+**A escada não é sorteada.** É uma sequência fixa que alterna e volta ao
+neutro: `1,00 · 1,08 · 1,00 · 1,14 · 1,05 · 1,17 · 1,00 · 1,11 · 1,06 · 1,14`.
+O 1,00 reaparece porque voltar ao plano aberto dá respiro — escada que só fecha
+sufoca o vídeo. Duas cenas vizinhas nunca ficam a menos de 0,05 uma da outra:
+abaixo disso não lê como troca de plano, lê como erro de render.
+
+Cada etapa narrativa tem um `zoom_base` que multiplica a escada — fecha onde a
+fala é emocional, abre onde é explicativa: Gancho 1,06 · Dor 1,00 · Virada 1,09
+· Explicação 1,00 · Revelação 1,08 · Prova 1,03 · Monetização 1,00 · Oferta
+1,10 · Garantia 1,06 · CTA 1,12.
+
+**O recorte é concêntrico no rosto, sem pan.** Somar deslocamento aleatório
+"para dar variedade" faz o rosto mudar de posição a cada corte e o olho cansa
+perseguindo. Só a escala muda — é o que uma segunda câmera faria. O centro do
+rosto é medido sozinho: sem detector de rosto e sem dependência pesada, o
+editor amostra pares de quadros vizinhos ao longo do vídeo e acha o centro do
+**movimento** (a boca abre e fecha; o fundo fica parado), pela mediana das
+amostras. Medido em três posições conhecidas: erro de 2 a 3% do quadro. Se
+você tiver OpenCV instalado, o haarcascade entra na frente. Dá para corrigir na
+mão em **Rosto X / Rosto Y**.
+
+**O teto depende da resolução da fonte.** Recortar 1,20x de um vídeo de 1080 de
+largura é pegar 900 px e esticar de volta — perde nitidez. O editor nunca
+estica mais que 15% acima do que a fonte entrega: fonte 1080 para saída 1080 dá
+teto 1,15x; fonte 4K para saída 1080 dá 1,25x. Quando o preset pede mais que
+isso, a escada é reduzida **proporcionalmente** em vez de cortada no teto —
+cortar faria vários degraus virarem o mesmo valor e a troca sumiria.
+
+Um resíduo é irredutível e vale saber: um ponto a D pixels da âncora anda
+`D × (zoom_maior − zoom_menor)` pixels entre o plano mais aberto e o mais
+fechado. Medido: rosto a 0,42 da altura, âncora forçada para 0,472 pela
+geometria do zoom 1,06 — 9 px em 1920, **0,47% da altura**. É o mínimo que a
+matemática permite.
+
+Tudo entra no mesmo `filter_complex` do bloco, junto com a velocidade. Cada
+bloco continua sendo encodado **uma única vez**.
+
+### Camadas
+
+A trilha tem faixas separadas, e cada uma aceita itens:
+
+| trilho | o que entra |
+|---|---|
+| **Vídeo** | o take principal, já cortado |
+| **Sobreposição** | vídeo ou imagem por cima, por tempo determinado |
+| **Desfoque** | proteção de rosto e documento |
+| **Trilha** | música de fundo, com ducking automático na fala |
+
+Arraste um item para movê-lo, arraste a borda para mudar a duração,
+**Shift+clique** apaga. Os botões **+ sobreposição** e **+ trilha** na barra da
+timeline levam para a aba onde se importa o arquivo.
+
+**A agulha** atravessa todas as camadas. Pegue nela e arraste para qualquer
+lugar; o **▶ tocar** fica na própria barra da timeline, ao lado do zoom.
 
 **Por que ele não confunde palma com palavra forte.** Pico, salto de volume,
 duração e ataque a partir do silêncio — os quatro critérios de envelope — não
