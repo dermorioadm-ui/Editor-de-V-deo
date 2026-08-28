@@ -290,6 +290,7 @@ def main() -> int:
     testar_controle_manual_de_zoom()
     testar_ia_opina_codigo_executa()
     testar_chave_da_ia_nao_vaza()
+    testar_trilha_acompanha_o_corte()
     testar_presets_atualizam()
 
     print()
@@ -1392,6 +1393,50 @@ def testar_chave_da_ia_nao_vaza() -> None:
               f"chave recusada com motivo legível e sem eco da chave: {detalhe[:60]}")
     finally:
         cliente.post("/api/ai/config", json={"chave": ""})
+
+
+def testar_trilha_acompanha_o_corte() -> None:
+    """Cortar no começo não pode deixar a música deslocada.
+
+    plan.music é um dicionário solto, não um item de lista, e por isso ficava
+    de fora do laço que reancora cutaway, overlay e desfoque. O sintoma: você
+    posiciona a trilha, refaz a edição, e ela toca em cima do conteúdo errado.
+    """
+    from editor.edit.ops import remap_output_items
+    from editor.edit.timeline import Timeline
+    from editor.models import Clip, EditPlan
+
+    def linha(pares):
+        return Timeline([Clip(id=f"c{i}", source="main", src_start=a, src_end=b)
+                         for i, (a, b) in enumerate(pares)])
+
+    plan = EditPlan()
+    plan.music = {"media_id": "m1", "out_start": 12.0, "out_end": 20.0,
+                  "enabled": True}
+    # a edição tirou 4 s no começo: tudo que vinha depois anda 4 s para trás
+    velha = linha([(0.0, 10.0), (10.0, 30.0)])
+    nova = linha([(4.0, 10.0), (10.0, 30.0)])
+    movidos = remap_output_items(plan, velha, nova)
+
+    check(any(m["kind"] == "music" for m in movidos),
+          "a trilha aparece na lista do que foi reancorado")
+    check(abs(plan.music["out_start"] - 8.0) < 0.05,
+          f"a trilha andou os 4 s do corte (12,0 s -> "
+          f"{plan.music['out_start']:.1f} s)")
+    check(abs((plan.music["out_end"] - plan.music["out_start"]) - 8.0) < 0.05,
+          f"e continua com os mesmos 8 s de duração "
+          f"({plan.music['out_end'] - plan.music['out_start']:.1f} s)")
+
+    # e quando a região onde ela começava foi apagada inteira, ela vai para o
+    # começo em vez de ficar parada num tempo que já não quer dizer nada
+    plan2 = EditPlan()
+    plan2.music = {"media_id": "m1", "out_start": 2.0, "out_end": 9.0,
+                   "enabled": True}
+    remap_output_items(plan2, linha([(0.0, 30.0)]), linha([(20.0, 30.0)]))
+    dur2 = plan2.music["out_end"] - plan2.music["out_start"]
+    check(plan2.music["out_start"] >= 0.0 and abs(dur2 - 7.0) < 0.05,
+          f"trilha órfã vai para o começo mas mantém os 7 s que tinha "
+          f"({plan2.music['out_start']:.1f}-{plan2.music['out_end']:.1f} s)")
 
 
 def testar_presets_atualizam() -> None:

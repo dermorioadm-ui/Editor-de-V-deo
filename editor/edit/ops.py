@@ -328,6 +328,35 @@ def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
                     nt = remap(float(kf.get("t", 0.0)))
                     if nt is not None:
                         kf["t"] = round(nt, 4)
+
+    # A TRILHA também vive na linha do tempo de saída, e ficava de fora deste
+    # laço só porque é um dicionário solto (plan.music) em vez de um item de
+    # lista. Sem ela aqui, cortar dez segundos no começo deixava a música dez
+    # segundos deslocada em cima do conteúdo errado — o mesmo defeito que este
+    # arquivo existe para consertar, valendo para todo mundo menos ela.
+    musica = getattr(plan, "music", None)
+    if isinstance(musica, dict) and musica.get("media_id"):
+        a0 = float(musica.get("out_start", 0.0) or 0.0)
+        b0 = float(musica.get("out_end", 0.0) or 0.0)
+        if b0 > a0:
+            a = remap(a0)
+            b = remap(b0)
+            # A região onde a trilha estava pode ter sido apagada inteira. Aí
+            # ela vai para o começo — mas COM A DURAÇÃO QUE TINHA. Encolher uma
+            # trilha de oito segundos para meio segundo é o mesmo que apagá-la
+            # sem avisar, e trilha de fundo não é ancorada em fala nenhuma:
+            # o lugar dela é uma preferência, não um vínculo.
+            duracao = max(0.5, b0 - a0)
+            if a is None:
+                a = 0.0
+            if b is None or b <= a:
+                b = min(max(new_tl.duration, a + duracao), a + duracao)
+            if abs(a - a0) > 0.005 or abs(b - b0) > 0.005:
+                moved.append({"kind": "music", "id": "music",
+                              "from": [round(a0, 3), round(b0, 3)],
+                              "to": [round(a, 3), round(b, 3)]})
+            musica["out_start"] = round(a, 4)
+            musica["out_end"] = round(b, 4)
     return moved
 
 

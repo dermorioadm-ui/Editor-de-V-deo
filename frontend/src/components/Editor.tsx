@@ -483,18 +483,36 @@ export default function Editor() {
                         setTab('midia')
                         return
                       }
+                      // O modelo suporta UMA trilha (plan.music é um
+                      // dicionário, não uma lista): soltar a segunda SUBSTITUI
+                      // a primeira. Substituir é razoável — trocar de música é
+                      // o gesto normal — mas em silêncio não é.
+                      const jaTem = trackId === 'A1'
+                        && !!project.plan?.music?.media_id
                       snapshot()
                       const m = await api.addMedia(project.id, achado.path, kind)
                       const mid = m?.id ?? m?.media?.id
                       if (trackId === 'A1') {
+                        const antes = project.plan?.music ?? {}
                         await api.setMusic(project.id, {
-                          media_id: mid, gain_db: -18, ducking: true,
-                          duck_amount: 12, fade_in: 1, fade_out: 2, enabled: true,
-                          out_start: 0,
+                          media_id: mid,
+                          // trocar de música não devolve o volume e o ducking
+                          // ao padrão: o que ele ajustou continua valendo
+                          gain_db: antes.gain_db ?? -18,
+                          ducking: antes.ducking ?? true,
+                          duck_amount: antes.duck_amount ?? 12,
+                          fade_in: antes.fade_in ?? 1, fade_out: antes.fade_out ?? 2,
+                          muted: antes.muted ?? false, enabled: true,
+                          out_start: antes.out_start ?? 0,
+                          out_end: antes.out_end ?? (timeline?.duration ?? 0),
                         })
-                        toast('ok', 'Trilha no lugar',
-                          'Já entra abaixando na fala. Arraste as bordas para mudar '
-                          + 'onde ela toca, e o volume fica no painel da direita.')
+                        toast('ok', jaTem ? 'Trilha trocada' : 'Trilha no lugar',
+                          jaTem
+                            ? 'Só cabe uma trilha: a anterior saiu. O volume e o '
+                              + 'ducking que você ajustou continuam valendo.'
+                            : 'Já entra abaixando na fala. Arraste as bordas para '
+                              + 'mudar onde ela toca, e o volume fica no painel '
+                              + 'da direita.')
                       } else if (kind === 'image') {
                         await api.addOverlay(project.id, {
                           media_id: mid, out_start: getPlayhead(),
