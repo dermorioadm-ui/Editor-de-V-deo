@@ -27,6 +27,27 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
 
   if (!project || !view) return null
 
+  // O controle de corte é o pedido "FALO DEVAGAR, GOSTO DE CORTES MAIS
+  // DINÂMICOS, CORTADOS MAIS EM CIMA" virado numa alavanca só. O back já
+  // sabia fazer isso (CutParams.aggressiveness); faltava por onde pedir.
+  const [agressivo, setAgressivo] = useState<number>(
+    project?.plan?.cut?.aggressiveness ?? -1)
+  useEffect(() => {
+    setAgressivo(project?.plan?.cut?.aggressiveness ?? -1)
+  }, [project?.plan?.cut?.aggressiveness])
+
+  const aplicarCorte = async () => {
+    if (!project || agressivo < 0) return
+    snapshot()
+    setBusy(true)
+    try {
+      await api.params(project.id, { cut: { aggressiveness: agressivo } })
+      // mudar o corte muda o plano inteiro: refaz a edição, como o preset faz
+      const job = await api.autoedit(project.id)
+      setState({ activeJob: job })
+    } finally { setBusy(false) }
+  }
+
   const setSpeed = async (value: number) => {
     if (!block) return
     snapshot()
@@ -45,6 +66,50 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
 
   return (
     <div className="p-3 space-y-4">
+      {/* ------------------------------------------- quão em cima o corte cai */}
+      <section className="card p-3">
+        <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+          Corte
+        </h3>
+        <p className="text-[11px] text-slate-500 mt-1">
+          Um controle só, em vez de três números. Para a direita, a pausa que
+          vira corte fica menor e sobra menos ar nas pontas.
+        </p>
+        <input type="range" min={0} max={1} step={0.05}
+               className="w-full mt-2"
+               value={agressivo < 0 ? 0.5 : agressivo}
+               disabled={busy}
+               onChange={(e) => setAgressivo(+e.target.value)}
+               onMouseUp={() => aplicarCorte()}
+               onTouchEnd={() => aplicarCorte()} />
+        <div className="flex justify-between text-[10px] text-slate-500">
+          <span>respira</span>
+          <span className="text-slate-400">
+            {agressivo < 0 ? 'como o preset manda' : `${Math.round(agressivo * 100)}%`}
+          </span>
+          <span>cola</span>
+        </div>
+        <label className="flex items-center gap-2 text-[11px] text-slate-400 mt-2">
+          <input type="checkbox" disabled={busy}
+                 checked={project?.plan?.cut?.adaptive_floor !== false}
+                 onChange={async (e) => {
+                   setBusy(true)
+                   try {
+                     await api.params(project!.id, {
+                       cut: { adaptive_floor: e.target.checked } })
+                     await onChanged()
+                   } finally { setBusy(false) }
+                 }} />
+          medir a pausa na minha fala
+        </label>
+        <p className="text-[10px] text-slate-600 leading-snug">
+          Quem fala devagar tem pausa longa DENTRO da frase. Sem medir, ou o
+          corte come a frase, ou o vale fica. Medido na sua fala, o piso sai
+          sozinho — 0,53 s para quem fala devagar contra 0,22 s para quem fala
+          rápido, no mesmo preset.
+        </p>
+      </section>
+
       {/* --------------------------------------------- ajustes automáticos */}
       {(() => {
         const fixed = view.audit_fixed ?? []
@@ -288,6 +353,96 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
                 )}
               </>
             )}
+          </section>
+        )
+      })()}
+
+      {/* -------------------------------------------------- assobios */}
+      {(() => {
+        const assobios = view.whistles ?? []
+        if (!assobios.length) return null
+        const ativos = assobios.filter((a) => a.enabled !== false)
+        const calibrada = project?.plan?.whistle_freq
+        return (
+          <section className="card p-3">
+            <h3 className="text-xs font-semibold text-emerald-300 uppercase
+                           tracking-wide mb-1">
+              Assobios · {ativos.length}
+            </h3>
+            <p className="hint mb-2">
+              O assobio é o contrário da palma: ele <b>aprova</b> o que você
+              acabou de falar e manda colar o corte. Todo o silêncio dali até a
+              próxima palavra sai — você pode demorar o quanto quiser para
+              recomeçar.
+            </p>
+            <div className="space-y-1.5 max-h-52 overflow-auto">
+              {assobios.map((a) => (
+                <div key={a.id}
+                     className="flex items-center gap-1.5 text-[11px]">
+                  <span className={`chip ${a.enabled === false
+                    ? 'border-slate-700 text-slate-600'
+                    : 'border-emerald-800 text-emerald-300'}`}>
+                    {Math.round(a.freq)} Hz
+                  </span>
+                  <button className="font-mono text-slate-500 hover:text-slate-300"
+                          onClick={() => setPlayhead(Math.max(0, a.start - 0.3))}>
+                    {timecode(a.start, true)}
+                  </button>
+                  <span className="text-slate-600">{a.duration.toFixed(2)}s</span>
+                  <button className="btn btn-xs ml-auto" disabled={busy}
+                          onClick={async () => {
+                            setBusy(true)
+                            try {
+                              snapshot()
+                              await api.setWhistle(project!.id, a.id,
+                                a.enabled === false)
+                              const job = await api.autoedit(project!.id)
+                              setState({ activeJob: job })
+                            } finally { setBusy(false) }
+                          }}>
+                    {a.enabled === false ? 'era assobio' : 'não era'}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-line">
+              {calibrada ? (
+                <>
+                  <span className="text-[11px] text-emerald-300">
+                    calibrado em {Math.round(calibrada)} Hz
+                  </span>
+                  <button className="btn btn-xs ml-auto" disabled={busy}
+                          onClick={async () => {
+                            await api.clearWhistleCalibration(project!.id)
+                            await onChanged()
+                            toast('info', 'Calibração apagada',
+                              'Volto a aceitar assobio de qualquer frequência.')
+                          }}>
+                    apagar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="text-[10px] text-slate-500 flex-1 leading-snug">
+                    Assobio varia muito de pessoa para pessoa. Guardando o SEU,
+                    a busca fica estreita e quase não erra.
+                  </span>
+                  <button className="btn btn-xs" disabled={busy || ativos.length < 2}
+                          onClick={async () => {
+                            setBusy(true)
+                            try {
+                              const r = await api.calibrateWhistle(project!.id)
+                              await onChanged()
+                              toast('ok', 'Assobio calibrado', r.detail)
+                            } catch (e: any) {
+                              toast('warn', 'Não deu para calibrar', e.message)
+                            } finally { setBusy(false) }
+                          }}>
+                    calibrar
+                  </button>
+                </>
+              )}
+            </div>
           </section>
         )
       })()}

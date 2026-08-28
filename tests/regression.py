@@ -130,6 +130,8 @@ def main() -> int:
     check(any(s["text"] == "TEXTO MEU, NÃO MEXE" for s in subs2),
           "texto editado da legenda sobrevive ao refazer a edição")
 
+    testar_controle_de_corte_pela_rota(client, pid)
+
     # ---- 4) overlay reancorado depois de um corte anterior -------------
     tl = client.get(f"/api/projects/{pid}").json()["timeline"]
     fim = tl["duration"]
@@ -1341,6 +1343,22 @@ def testar_ia_opina_codigo_executa() -> None:
     # 5) a etapa vira enquadramento pela tabela de sempre, não por número da IA
     check(all(SECTIONS.get(c.section) for c in plan.clips if c.section),
           "toda etapa aplicada existe na tabela")
+
+
+def testar_controle_de_corte_pela_rota(client, pid) -> None:
+    """O controle de corte existia no back e não tinha por onde ser pedido."""
+    r = client.post(f"/api/projects/{pid}/params",
+                    json={"cut": {"aggressiveness": 0.85}})
+    cut = r.json().get("plan", {}).get("cut", {})
+    check(abs(float(cut.get("aggressiveness", -1)) - 0.85) < 1e-6,
+          f"a agressividade chega pela rota ({cut.get('aggressiveness')})")
+    r = client.post(f"/api/projects/{pid}/params",
+                    json={"cut": {"adaptive_floor": False}})
+    cut = r.json().get("plan", {}).get("cut", {})
+    check(cut.get("adaptive_floor") is False,
+          "dá para desligar o piso adaptativo pela rota")
+    client.post(f"/api/projects/{pid}/params",
+                json={"cut": {"aggressiveness": -1.0, "adaptive_floor": True}})
 
 
 def testar_chave_da_ia_nao_vaza() -> None:

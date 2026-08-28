@@ -99,6 +99,7 @@ export interface Envelope {
 export interface TimelineView {
   duration: number; source_duration: number
   blocks: Clip[]; removed: RemovedRegion[]; takes: Take[]; claps: Clap[]
+  whistles?: Whistle[]
   subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]
   repeats?: Repeat[]
   zoom?: {
@@ -126,6 +127,14 @@ export interface Project {
   analysis?: any
   plan?: any
   timeline?: TimelineView
+}
+
+/** Assobio: o marcador de "acertei". Não apaga fala nenhuma — valida o take e
+ *  manda cortar rente até a próxima palavra, por mais que você demore. */
+export interface Whistle {
+  id: string; time: number; start: number; end: number; duration: number
+  freq: number; grave: number; concentracao: number; deriva: number
+  peak_db: number; enabled: boolean; reason: string
 }
 
 export interface Job {

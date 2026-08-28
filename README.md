@@ -186,6 +186,25 @@ de transcrição. Depois disso você pode desligar o wi-fi que continua
 funcionando — a não ser que você ligue a aba IA, que é a única parte do
 programa que fala com fora. Ver [12. A aba IA](#12-a-aba-ia).
 
+### A prévia é leve de propósito
+
+Tocar um arquivo de 2 GB direto no navegador engasga. Na primeira análise o
+editor faz uma **cópia leve** da fonte (854 px no lado maior, 30 fps) e é ela
+que toca na prévia — o mesmo truque do CapCut. A exportação continua saindo da
+fonte, em qualidade cheia; a cópia leve serve só para você navegar sem travar.
+Um chip **prévia leve** aparece no canto do player quando ela está em uso.
+
+### Trilha de fundo
+
+Arraste o arquivo de música para o trilho **Trilha** (A1) da linha do tempo.
+Ele é procurado no seu disco pelo nome — em Música, Downloads, Documentos e nas
+outras pastas de sempre — e **não é copiado nem enviado a lugar nenhum**: o
+editor só guarda o caminho.
+
+Depois, no painel da direita: volume, **mudo**, e o *ducking* (a trilha abaixa
+sozinha quando você fala). Para mudar onde ela entra e onde termina, arraste o
+bloco no trilho, ou as bordas dele.
+
 ### Três jeitos de usar
 
 | Modo | Como | Quando serve |
@@ -354,6 +373,59 @@ estava em andamento (não tudo que veio antes — só a tentativa que deu errado
 Os takes descartados aparecem em cinza na timeline. Se o take novo tiver saído
 pior que o antigo, passe o mouse por cima e clique em **recuperar este take**.
 
+### O protocolo do assobio
+
+O assobio é o **contrário** da palma:
+
+| | o que significa | o que acontece |
+|---|---|---|
+| **palma** | errei | joga fora a frase que eu estava falando |
+| **assobio** | acertei | fecha aqui — o vazio até a próxima palavra sai |
+
+Assobie quando terminar uma frase boa. O corte cola na última palavra, e todo o
+silêncio até você voltar a falar sai — **três segundos ou sessenta, tanto faz**.
+É isso que te deixa respirar, beber água e recomeçar sem pressa.
+
+Os assobios aparecem em verde na régua de marcas, com a bandeirinha virada para
+a esquerda (a da palma vira para a direita). No painel da direita dá para
+desligar um que não era assobio.
+
+**Calibração.** Assobio varia muito de pessoa para pessoa — uns fazem 1 kHz,
+outros 3 kHz. Se este vídeo tiver dois assobios ou mais, o botão **calibrar**
+guarda a SUA frequência e a busca fica bem mais estreita dali em diante. Não
+precisa gravar nada à parte: sai de graça do arquivo que você já soltou.
+
+**Como ele separa assobio de palma, de fala e de chiado.** Pela CONCENTRAÇÃO:
+quanto da energia cabe numa faixa de ±4% em volta da frequência de pico. É a
+definição direta de “isto é um tom”. Medido:
+
+| | concentração |
+|---|---|
+| palma | 0,073 – 0,081 |
+| fala | 0,103 |
+| fricativas /s/, /f/, /ʃ/ | 0,057 – 0,077 |
+| **assobio** | **0,464 – 0,966** |
+
+A margem é de 4,5x entre o pior assobio e o caso não-assobio mais próximo. O
+mesmo número serve dos dois lados: um som tonal **nunca** é lido como palma, o
+que impede o assobio de apagar a frase que ele acabou de aprovar.
+
+### Corte mais em cima
+
+No painel da direita, o card **Corte** tem um controle só — para a direita, a
+pausa que vira corte fica menor e sobra menos ar nas pontas:
+
+| | pausa que vira corte | ar por lado |
+|---|---|---|
+| respira (0%) | 0,90 s | 0,32 s |
+| meio (50%) | 0,59 s | 0,20 s |
+| cola (100%) | 0,28 s | 0,07 s |
+
+Junto dele vem **medir a pausa na minha fala**, ligado por padrão. Quem fala
+devagar tem pausa longa *dentro* da frase, e um número fixo ou come a frase ou
+deixa o vale. Medido na sua fala, o piso sai sozinho: 0,53 s para quem fala
+devagar contra 0,22 s para quem fala rápido, no mesmo preset.
+
 ### O que o editor tira sozinho
 
 Três coisas saem do vídeo sem perguntar nada:
@@ -361,6 +433,7 @@ Três coisas saem do vídeo sem perguntar nada:
 | o quê | como ele sabe |
 |---|---|
 | **o take que você refez batendo palma** | o timbre da palma (tabela abaixo). Descarta a frase que estava em andamento — a última palavra dita antes da palma manda, não a respirada. |
+| **o vazio depois de uma palma ou de um assobio** | o corte cola na fala dos dois lados, por mais que você demore para voltar. |
 | **o take que você refez SEM bater palma** | você disse quase a mesma coisa duas vezes seguidas. Fica a **última**; a primeira foi a que deu errado. |
 | **a borda de corte que encostava em fala** | acerta sozinho; e onde não dá para cortar limpo, não corta — a pausa fica. |
 

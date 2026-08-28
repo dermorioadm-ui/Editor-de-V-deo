@@ -1521,6 +1521,65 @@ def index() -> HTMLResponse:
         "<code>frontend/</code>.</p>", status_code=200)
 
 
+# ---------------------------------------------------------------- assobio
+@app.post("/api/projects/{pid}/whistles/{wid}")
+def api_whistle(pid: str, wid: str, payload: dict = Body(...)) -> dict:
+    """Liga ou desliga um assobio.
+
+    Desligar não é raro: às vezes um som agudo qualquer entra na conta. A
+    decisão sobrevive a uma reanálise (analyze casa pelo instante).
+    """
+    project = _project(pid)
+    achou = False
+    for lista in (project.plan.whistles, project.analysis.get("whistles") or []):
+        for a in lista:
+            if a.get("id") == wid:
+                a["enabled"] = bool(payload.get("enabled", True))
+                achou = True
+    if not achou:
+        raise HTTPException(404, "assobio não encontrado")
+    project.save_plan()
+    project.save_analysis()
+    return {"ok": True, "timeline": svc.timeline_summary(project)}
+
+
+@app.post("/api/projects/{pid}/whistle/calibrate")
+def api_whistle_calibrate(pid: str) -> dict:
+    """Mede a frequência do assobio DO USUÁRIO a partir deste próprio vídeo.
+
+    Assobio varia muito de pessoa para pessoa (uns fazem 1 kHz, outros 3 kHz).
+    Em vez de pedir uma gravação separada, a calibração sai de graça do arquivo
+    que ele já soltou: os assobios já foram achados, basta guardar a mediana da
+    frequência deles. Com ela, a busca fica bem mais estreita e a chance de
+    falso positivo cai.
+    """
+    project = _project(pid)
+    freqs = sorted(float(a.get("freq", 0.0))
+                   for a in (project.analysis.get("whistles") or [])
+                   if a.get("enabled", True) and a.get("freq"))
+    if len(freqs) < 2:
+        raise HTTPException(400,
+            "preciso de pelo menos dois assobios neste vídeo para medir o seu. "
+            "Grave assobiando duas ou três vezes e rode a análise.")
+    mediana = freqs[len(freqs) // 2]
+    espalha = max(abs(f - mediana) / max(mediana, 1.0) for f in freqs)
+    project.plan.whistle_freq = round(mediana, 1)
+    project.save_plan()
+    return {"ok": True, "freq": round(mediana, 1), "amostras": len(freqs),
+            "espalhamento": round(espalha, 3),
+            "detail": (f"{len(freqs)} assobios, {mediana:.0f} Hz"
+                       + (f" (variação de {espalha * 100:.0f}%)"
+                          if espalha > 0.05 else ""))}
+
+
+@app.delete("/api/projects/{pid}/whistle/calibrate")
+def api_whistle_uncalibrate(pid: str) -> dict:
+    project = _project(pid)
+    project.plan.whistle_freq = None
+    project.save_plan()
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------------- IA
 # A IA OPINA, O CÓDIGO EXECUTA. Ela devolve etapa, ênfase e onde um anexo
 # ajuda; quem traduz isso em enquadramento e em janela de anexo é a maquinaria

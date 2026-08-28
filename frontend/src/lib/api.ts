@@ -171,6 +171,13 @@ export const api = {
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
 
+  setWhistle: (id: string, wid: string, enabled: boolean) =>
+    post<any>(`/api/projects/${id}/whistles/${wid}`, { enabled }),
+  calibrateWhistle: (id: string) =>
+    post<any>(`/api/projects/${id}/whistle/calibrate`),
+  clearWhistleCalibration: (id: string) =>
+    del<any>(`/api/projects/${id}/whistle/calibrate`),
+
   // IA — a chave NUNCA volta por aqui, só se ela existe e os quatro últimos
   // caracteres, o bastante para o usuário reconhecer qual chave está lá
   aiConfig: () => req<any>('/api/ai/config'),

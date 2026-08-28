@@ -435,6 +435,22 @@ export default function Timeline(props: Props) {
         g.beginPath(); g.moveTo(x - 3, yMarks + 8); g.lineTo(x + 9, yMarks + 2); g.stroke()
       }
     }
+    // ASSOBIO — o marcador oposto ao da palma, e por isso desenhado ao
+    // contrário: bandeirinha para a ESQUERDA, em verde. A palma joga fora o
+    // que veio antes; o assobio aprova o que veio antes e manda colar o corte.
+    for (const a of view.whistles ?? []) {
+      const x = toX(a.time)
+      if (x < -8 || x > size.w + 8) continue
+      g.fillStyle = a.enabled === false ? '#475569' : '#34d399'
+      g.fillRect(x - 1, yMarks + 2, 1.5, ROW.marks - 3)
+      g.beginPath()
+      g.moveTo(x - 1, yMarks + 2); g.lineTo(x - 9, yMarks + 5)
+      g.lineTo(x - 1, yMarks + 8); g.closePath(); g.fill()
+      if (a.enabled === false) {
+        g.strokeStyle = '#0f1218'; g.lineWidth = 1
+        g.beginPath(); g.moveTo(x + 3, yMarks + 8); g.lineTo(x - 9, yMarks + 2); g.stroke()
+      }
+    }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip,
       subsOnSource, subDrag, redDrag, itemDrag, dropAlvo, bands, extras, toX,
       outputToSourceT, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
