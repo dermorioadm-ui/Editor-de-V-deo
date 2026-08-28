@@ -14,7 +14,11 @@ Cada teste aqui corresponde a um bug que existiu:
 9. quando a frase era refeita SEM palma, as duas versões ficavam no vídeo;
 10. o corte de silêncio nascia do BURACO ENTRE palavras — quando o Whisper
     esticava uma palavra por cima de uma pausa, o buraco não existia e o vale
-    inteiro ia para o vídeo, para o usuário apagar na mão.
+    inteiro ia para o vídeo, para o usuário apagar na mão;
+11. a legenda podia terminar em palavra pendurada ("perdeu também o");
+12. os presets embutidos entravam no banco com INSERT OR IGNORE e toda
+    melhoria posterior no código era ignorada em silêncio;
+13. depois de palma ou assobio sobrava vazio na emenda.
 """
 from __future__ import annotations
 
@@ -260,6 +264,11 @@ def main() -> int:
     testar_repeticao()
     testar_zoom()
     testar_silencio()
+    testar_assobio()
+    testar_corte_rente()
+    testar_agressividade()
+    testar_quebra_pendurada()
+    testar_presets_atualizam()
 
     print()
     if FALHAS:
@@ -637,6 +646,282 @@ def testar_silencio() -> None:
     fora = [f for f in fixes if f["to"][0] > f["from"][0] + 0.5]
     check(not fora,
           f"a palavra fica onde foi ouvida, não no fim do vazio ({len(fora)})")
+
+
+def testar_assobio() -> None:
+    """Assobio contra fala, vogal, sibilante e palma."""
+    import numpy as np
+
+    from editor.audio.clap import detect_claps
+    from editor.audio.whistle import calibrar, detect_whistles
+    from tests.speech import ESPEAK, SR, say
+
+    if not ESPEAK:
+        print("  --    assobio (espeak-ng não instalado)")
+        return
+
+    def assobio(f0: float, dur: float = 0.7) -> np.ndarray:
+        n = int(dur * SR)
+        t = np.arange(n) / SR
+        freq = f0 * (1.0 + 0.012 * np.sin(2 * np.pi * 5.5 * t))
+        fase = 2 * np.pi * np.cumsum(freq) / SR
+        x = np.sin(fase) + 0.06 * np.sin(2 * fase)
+        env = np.minimum(1.0, np.minimum(t * 14, (dur - t) * 10))
+        ruido = np.random.default_rng(3).normal(0, 0.02, n)
+        return ((x * env + ruido * env) * 0.45).astype(np.float32)
+
+    def palma(seed: int = 1) -> np.ndarray:
+        rng = np.random.default_rng(seed)
+        n = int(0.11 * SR)
+        t = np.arange(n) / SR
+        return (rng.normal(0, 1, n).astype(np.float32) * np.exp(-t * 42) * 0.95)
+
+    partes, marcas, t = [], [], 0.0
+
+    def por(x, rot=None):
+        nonlocal t
+        partes.append(x)
+        if rot:
+            marcas.append((rot, t + len(x) / SR / 2))
+        t += len(x) / SR
+
+    def sil(d):
+        nonlocal t
+        partes.append(np.zeros(int(d * SR), dtype=np.float32))
+        t += d
+
+    sil(0.4)
+    por(say("Presta atenção nisso aqui porque muda tudo"))
+    sil(0.35); por(assobio(1650), "assobio")
+    sil(1.1); por(say("O problema não é o preço"))
+    sil(0.35); por(palma(), "palma")
+    sil(1.0); por(say("O problema não é o preço é a foto"))
+    sil(0.35); por(assobio(1700, 0.45), "assobio")
+    sil(0.9); por(say("Clica no link aqui embaixo agora"))
+    # casos que NÃO podem virar assobio
+    for v in ("aaaaaaaaaa", "iiiiiiiiii", "ssssssssss"):
+        sil(0.6); por(say(v, speed=90))
+    sil(0.5)
+    x = np.clip(np.concatenate(partes)
+                + np.random.default_rng(2).normal(0, 0.0012, int(t * SR)
+                                                  ).astype(np.float32), -1, 1)
+    env = compute_envelope(x, SR)
+
+    reais = [m for m in marcas if m[0] == "assobio"]
+    achados = detect_whistles(x, SR, env)
+    certos = [a for a in achados if any(abs(a.time - m[1]) < 0.6 for m in reais)]
+    falsos = [a for a in achados if a not in certos]
+    check(len(certos) == len(reais),
+          f"achou os {len(reais)} assobios ({len(certos)})")
+    check(not falsos,
+          f"vogal, sibilante e palma não viraram assobio ({len(falsos)} falso(s))")
+
+    claps = detect_claps(x, SR, env)
+    cruzados = [c for c in claps if any(abs(c.time - a.time) < 0.3 for a in achados)]
+    check(not cruzados, f"palma e assobio não se confundem ({len(cruzados)})")
+
+    # a energia grave é o critério que sustenta tudo: confere a margem
+    check(all(a.grave < 0.02 for a in achados),
+          f"todo assobio tem quase nada de grave "
+          f"({max((a.grave for a in achados), default=0):.4f})")
+
+    cal = np.concatenate([assobio(1680), np.zeros(int(0.6 * SR), dtype=np.float32),
+                          assobio(1710), np.zeros(int(0.6 * SR), dtype=np.float32),
+                          assobio(1655)])
+    r = calibrar(cal, SR, env)
+    check(r["ok"] and abs(r["freq"] - 1682) < 120,
+          f"a calibração mede a frequência do usuário ({r.get('freq')} Hz)")
+
+
+def testar_corte_rente() -> None:
+    """Depois do marcador não pode sobrar vazio."""
+    import numpy as np
+
+    from editor.config import CutParams, SpeedParams
+    from editor.edit.plan_builder import build_auto_plan
+    from tests.speech import ESPEAK, SR, say
+
+    if not ESPEAK:
+        print("  --    corte rente (espeak-ng não instalado)")
+        return
+    a1 = say("Presta atenção nisso aqui porque muda tudo")
+    a2 = say("O problema não é o preço é a foto")
+    a3 = say("Clica no link aqui embaixo agora")
+    partes, t = [], 0.0
+
+    def por(x):
+        nonlocal t
+        partes.append(x)
+        r = (t, t + len(x) / SR)
+        t += len(x) / SR
+        return r
+
+    def sil(d):
+        nonlocal t
+        partes.append(np.zeros(int(d * SR), dtype=np.float32))
+        t += d
+
+    sil(0.5); f1 = por(a1)
+    marcador = t + 0.15                 # o assobio cairia aqui
+    sil(6.0)                            # ele demora 6 s para recomeçar
+    f2 = por(a2)
+    sil(1.4)                            # pausa normal, SEM marcador
+    f3 = por(a3)
+    sil(0.5)
+    x = np.clip(np.concatenate(partes)
+                + np.random.default_rng(1).normal(0, 0.0012, int(t * SR)
+                                                  ).astype(np.float32), -1, 1)
+    env = compute_envelope(x, SR)
+    words, i = [], 0
+    for (t0, t1), txt in ((f1, "a b c d e f g"), (f2, "h i j k l m"),
+                          (f3, "n o p q r s")):
+        toks = txt.split()
+        passo = (t1 - t0) / len(toks)
+        for k, tok in enumerate(toks):
+            s0 = t0 + k * passo
+            words.append({"i": i, "start": round(s0, 3),
+                          "end": round(s0 + passo * 0.9, 3), "text": tok})
+            i += 1
+    cut = CutParams(silence_min=0.70, air=0.25, margin=0.15, min_block=1.0,
+                    adaptive_floor=False)
+
+    def sobra(markers):
+        r = build_auto_plan(words, env, cut, SpeedParams(), [], markers=markers)
+        cl = sorted([c for c in r["clips"] if c.enabled], key=lambda c: c.src_start)
+        fim = max(w["end"] for w in words if w["end"] < marcador)
+        esq = max((c.src_end for c in cl if c.src_end <= marcador + 0.5), default=None)
+        return None if esq is None else (esq - fim)
+
+    sem = sobra(None)
+    com = sobra([marcador])
+    check(sem is not None and com is not None, "as duas emendas foram medidas")
+    if sem is None or com is None:
+        return
+    check(com < sem - 0.05,
+          f"o marcador cola a emenda ({sem * 1000:.0f} ms -> {com * 1000:.0f} ms)")
+    check(com < 0.12,
+          f"quase nada de silêncio sobra depois do marcador ({com * 1000:.0f} ms)")
+
+
+def testar_agressividade() -> None:
+    """O controle único e o piso medido na fala do usuário."""
+    import random
+
+    from editor.config import CutParams
+    from editor.edit.plan_builder import aplicar_agressividade, piso_de_silencio
+
+    valores = [aplicar_agressividade(CutParams(aggressiveness=a))
+               for a in (0.0, 0.5, 1.0)]
+    check(valores[0].silence_min > valores[1].silence_min > valores[2].silence_min,
+          "subir o controle corta pausas cada vez menores")
+    check(all(v.margin <= v.air for v in valores),
+          "a margem nunca passa o ar (senão a geometria come mais do que o corte pediu)")
+    check(aplicar_agressividade(CutParams()).silence_min == CutParams().silence_min,
+          "sem o controle, os três parâmetros do preset valem como estão")
+
+    def fala(base: float) -> list[dict]:
+        rng = random.Random(3)
+        t, w = 0.0, []
+        for i in range(120):
+            d = rng.uniform(0.2, 0.5)
+            w.append({"i": i, "start": round(t, 3), "end": round(t + d, 3), "text": "x"})
+            t += d + (rng.uniform(base * 0.5, base * 1.6) if i % 9
+                      else rng.uniform(0.9, 1.8))
+        return w
+
+    lento, _ = piso_de_silencio(fala(0.28), CutParams(silence_min=0.70))
+    rapido, _ = piso_de_silencio(fala(0.08), CutParams(silence_min=0.70))
+    check(lento > rapido,
+          f"quem fala devagar ganha piso maior ({lento:.2f} s contra {rapido:.2f} s)")
+    check(rapido < 0.70 and lento < 0.70,
+          "o piso medido destrava pausas que o preset deixaria passar")
+    check(piso_de_silencio(fala(0.28),
+                           CutParams(silence_min=0.70, adaptive_floor=False))[0] == 0.70,
+          "dá para desligar o piso adaptativo")
+
+
+def testar_quebra_pendurada() -> None:
+    """A legenda não pode terminar esperando a próxima palavra."""
+    from editor.config import SubtitleStyle
+    from editor.subtitles.linebreak import build_cues, termina_pendurado
+
+    texto = ("você que tem AirBnB já perdeu também o prazer de administrar, "
+             "até porque você, no final das contas, arca com todos os prejuízos. "
+             "Por mais que você pague 20% para uma administradora, no final de "
+             "tudo, ela traz o problema para você e o que ela faz? Só responde "
+             "aos hóspedes, coisa que a inteligência artificial poderia fazer.")
+    t, words = 0.0, []
+    for i, tok in enumerate(texto.split()):
+        d = 0.11 + len(tok) * 0.052
+        words.append({"i": i, "start": round(t, 3), "end": round(t + d, 3), "text": tok})
+        t += d + (0.34 if tok[-1] in ".?!" else 0.16 if tok[-1] == "," else 0.045)
+    st = SubtitleStyle(fontsize=35, max_chars_per_line=24, max_lines=2,
+                       max_duration=2.6)
+    cues = build_cues(words, st)
+
+    pend = [c for c in cues if termina_pendurado(c["text"])]
+    check(not pend, f"nenhuma legenda termina pendurada ({len(pend)})")
+    curtas = [c for c in cues[:-1]
+              if len(c["text"].replace("\n", " ").split()) <= 1]
+    check(not curtas, f"nenhuma legenda de uma palavra só ({len(curtas)})")
+    orfas = [c for c in cues if "\n" in c["text"]
+             and min(len(l) for l in c["text"].split("\n")) < 6]
+    check(not orfas, f"nenhuma linha órfã de um fiapo ({len(orfas)})")
+    check(termina_pendurado("perdeu também o") and not termina_pendurado("perdeu tudo."),
+          "a regra sabe distinguir palavra pendurada de fim de ideia")
+
+
+def testar_presets_atualizam() -> None:
+    """Melhoria no preset embutido tem que CHEGAR em quem já instalou."""
+    import json as _json
+    import tempfile as _tmp
+
+    from editor import db as _db
+    from editor.presets import PRESETS_VERSION
+
+    anterior = os.environ.get("EDITOR_DATA_DIR")
+    novo = _tmp.mkdtemp(prefix="preset-")
+    os.environ["EDITOR_DATA_DIR"] = novo
+    try:
+        import importlib
+
+        import editor.config as _cfg
+        importlib.reload(_cfg)
+        importlib.reload(_db)
+        _db.connect()
+        from editor.presets import get_preset
+        vsl = get_preset("VSL")
+        check(vsl is not None and vsl["style"]["fontsize"] == 35,
+              f"o preset novo entra com fonte 35 ({vsl['style']['fontsize']})")
+        check("zoom" in (vsl or {}),
+              "o preset novo traz os parâmetros de zoom")
+
+        # simula o banco de quem instalou antes: preset velho + versão velha
+        velho = {**vsl, "style": {**vsl["style"], "fontsize": 64}}
+        _db.ex("UPDATE presets SET data_json=? WHERE name='VSL'",
+               (_json.dumps(velho),))
+        _db.ex("INSERT INTO presets(name,data_json,builtin,updated_at) VALUES(?,?,0,0)",
+               ("Meu preset", _json.dumps({"name": "Meu preset",
+                                           "style": {"fontsize": 99}})))
+        _db.ex("INSERT INTO settings(key,value) VALUES('presets_version','1') "
+               "ON CONFLICT(key) DO UPDATE SET value='1'")
+        _db._initialized = False
+        _db.connect()
+        check(get_preset("VSL")["style"]["fontsize"] == 35,
+              "o preset embutido é atualizado quando a versão sobe")
+        check(get_preset("Meu preset")["style"]["fontsize"] == 99,
+              "o preset que o usuário salvou NÃO é tocado")
+        check(int(_db.get_setting("presets_version")) == PRESETS_VERSION,
+              "a versão fica gravada")
+    finally:
+        if anterior:
+            os.environ["EDITOR_DATA_DIR"] = anterior
+        import importlib
+
+        import editor.config as _cfg
+        importlib.reload(_cfg)
+        importlib.reload(_db)
+        _db.connect()
 
 
 if __name__ == "__main__":
