@@ -425,7 +425,20 @@ def analyze(project: Project, ctx) -> dict:
                                  [c.to_dict() for c in claps],
                                  [a.to_dict() for a in assobios])
     if relatorio_ia and relatorio_ia.get("ok"):
-        takes = relatorio_ia["takes"]
+        # A IA SOMA, nunca substitui. Os takes determinísticos vêm de uma
+        # ORDEM do usuário — palma ou "corta" dito — e uma resposta da IA que
+        # não os mencione (o esquema aceita remover:[]) não pode ressuscitar a
+        # tentativa que ele mandou apagar. O take da IA só entra onde não há
+        # um determinístico dizendo a mesma coisa.
+        def _cobre(a: dict, b: dict) -> float:
+            inter = min(float(a["end"]), float(b["end"])) \
+                - max(float(a["start"]), float(b["start"]))
+            dur = float(a["end"]) - float(a["start"])
+            return max(0.0, inter) / max(dur, 1e-9)
+
+        novos = [t for t in relatorio_ia["takes"]
+                 if not any(_cobre(t, d) >= 0.5 for d in takes)]
+        takes = sorted(takes + novos, key=lambda t: float(t["start"]))
 
     for take in takes:
         for old in previous.get("takes", []):
@@ -522,8 +535,12 @@ def auto_edit(project: Project, ctx) -> dict:
     takes = project.analysis.get("takes", [])
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
-    # a palavra de comando ("corta", "ok") é instrução, não fala: sai sempre
-    manual_removed |= set(project.analysis.get("command_word_ids", []))
+    # a palavra de comando ("corta", "ok") é instrução, não fala: sai — mas
+    # o conjunto é recalculado AQUI, respeitando enabled. O conjunto congelado
+    # do analyze mantinha a palavra fora do vídeo mesmo depois de o usuário
+    # desligar a bandeirinha do comando.
+    from .audio.comandos import ids_de_comando as _ids_cmd
+    manual_removed |= _ids_cmd(project.analysis.get("comandos", []))
 
     # Repetição: quando a mesma coisa é dita duas vezes, a que vale é a última.
     # Roda DEPOIS da regra do take (o que a palma já descartou não entra na
@@ -570,6 +587,19 @@ def auto_edit(project: Project, ctx) -> dict:
     old_tl = Timeline(plan.active_clips, fps)
     travados = _enquadramentos_travados(plan.clips)
     plan.clips = result["clips"]
+    if not plan.clips:
+        # Vídeo sem fala transcritível (b-roll, microfone mudo) — ou um teste
+        # em que a única palavra dita era comando. Antes isto saía como
+        # "Pronto para exportar · 0 blocos" e a exportação estourava. Regra:
+        # sem fala não há o que cortar, então o vídeo fica INTEIRO, num bloco
+        # só, e o aviso diz o porquê.
+        from .models import Clip
+        dur = float(project.info.duration if project.info else 0.0)
+        if dur > 0.05:
+            plan.clips = [Clip(source="main", src_start=0.0,
+                               src_end=round(dur, 3))]
+        ctx.progress(0.5, "não achei fala para cortar: o vídeo ficou inteiro. "
+                          "Sem transcrição não há corte, legenda nem câmeras.")
     _restaurar_travados(plan.clips, travados)
     plan.removed = result["removed"]
     plan.discarded_takes = takes

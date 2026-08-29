@@ -300,9 +300,14 @@ export default function Editor() {
         // Só o pipeline de ENTRADA esconde o editor: o refazer-edição de um
         // retoque (kind 'edicao') roda a cada toggle e não pode piscar a tela
         // inteira — ele mostra progresso na JobBar, com o editor de pé.
+        // conferir o project_id é obrigatório: activeJob é global e o
+        // WebSocket transmite jobs de TODOS os projetos — sem o filtro, o
+        // clique-único do projeto A sequestrava o editor do projeto B
         const pipeline = activeJob
+          && activeJob.project_id === project.id
           && ['clique-unico', 'analise'].includes(activeJob.kind)
-          && ['fila', 'rodando', 'erro'].includes(activeJob.status)
+          && ['fila', 'rodando', 'erro', 'ok'].includes(activeJob.status)
+          && !(activeJob.status === 'ok' && analysed)
         if (pipeline || !analysed) {
           return <ProcessingView />
         }

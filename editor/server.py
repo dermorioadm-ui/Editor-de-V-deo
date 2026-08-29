@@ -902,6 +902,29 @@ def api_take(pid: str, payload: dict = Body(...)) -> dict:
                                                 "para o plano refletir a mudança"}
 
 
+def _sincronizar_comando(project, evento_id: str, enabled: bool) -> None:
+    """Um marcador sintético desligado desliga TAMBÉM o comando falado.
+
+    A revisão adversarial provou o buraco: os toggles escreviam só em
+    claps/whistles, e analysis["comandos"] ficava com enabled=True para
+    sempre. Consequência dupla: a palavra dita ("corta"/"ok") continuava
+    removida do vídeo mesmo com a bandeirinha desligada, e a decisão não
+    sobrevivia a uma reanálise. Aqui a decisão desce até a raiz — o comando —
+    e o conjunto de palavras removidas é recalculado na hora.
+    """
+    from .audio.comandos import ids_de_comando
+
+    comandos = project.analysis.get("comandos") or []
+    mudou = False
+    for cmd in comandos:
+        if cmd.get("id") == evento_id:
+            cmd["enabled"] = enabled
+            mudou = True
+    if mudou:
+        project.analysis["comandos"] = comandos
+        project.analysis["command_word_ids"] = sorted(ids_de_comando(comandos))
+
+
 @app.post("/api/projects/{pid}/ops/clap")
 def api_clap(pid: str, payload: dict = Body(...)) -> dict:
     """Confirma ou descarta uma palma suspeita."""
@@ -915,6 +938,8 @@ def api_clap(pid: str, payload: dict = Body(...)) -> dict:
             break
     else:
         raise HTTPException(404, "palma não encontrada")
+    _sincronizar_comando(project, str(payload.get("clap_id")),
+                         bool(payload.get("enabled")))
     project.analysis["claps"] = claps
     project.save_analysis()
     project.plan.claps = claps
@@ -1570,6 +1595,7 @@ def api_whistle(pid: str, wid: str, payload: dict = Body(...)) -> dict:
                 achou = True
     if not achou:
         raise HTTPException(404, "assobio não encontrado")
+    _sincronizar_comando(project, wid, bool(payload.get("enabled", True)))
     project.save_plan()
     project.save_analysis()
     return {"ok": True, "timeline": svc.timeline_summary(project)}

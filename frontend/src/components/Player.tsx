@@ -91,8 +91,11 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       setBox((b) => {
         const novo = { left: (rc.width - w) / 2, top: (rc.height - h) / 2,
                        width: w, height: h, vh }
+        // comparar TODOS os campos: deixar top de fora prendia o quadro (e a
+        // legenda junto) no lugar velho quando só a altura do palco mudava
         return Math.abs(b.width - w) < 0.5 && Math.abs(b.height - h) < 0.5
-          && Math.abs(b.left - novo.left) < 0.5 ? b : novo
+          && Math.abs(b.left - novo.left) < 0.5
+          && Math.abs(b.top - novo.top) < 0.5 && b.vh === vh ? b : novo
       })
     }
     medir()
@@ -294,9 +297,15 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     const alcance = 1 / (2 * z)
     const cx = Math.min(1 - alcance, Math.max(alcance, zoomAnchor?.x ?? 0.5))
     const cy = Math.min(1 - alcance, Math.max(alcance, zoomAnchor?.y ?? 0.4))
+    // transform-origin NÃO é o centro do recorte: com scale(z) e origin o, a
+    // janela visível é [o(1-1/z), o(1-1/z)+1/z]. Para o centro da janela cair
+    // na âncora (que é o que o render faz), o = (a - 1/(2z)) / (1 - 1/z).
+    // Sem esta conta a prévia mostrava o quadro ~5% deslocado do exportado.
+    const ox = (cx - alcance) / (1 - 1 / z)
+    const oy = (cy - alcance) / (1 - 1 / z)
     return {
       transform: `scale(${z})`,
-      transformOrigin: `${(cx * 100).toFixed(2)}% ${(cy * 100).toFixed(2)}%`,
+      transformOrigin: `${(ox * 100).toFixed(2)}% ${(oy * 100).toFixed(2)}%`,
     } as const
   })()
 

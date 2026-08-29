@@ -1,6 +1,6 @@
-import { useStore } from '../state/store'
+import { useEffect } from 'react'
 import { api } from '../lib/api'
-import { setState } from '../state/store'
+import { setState, useStore } from '../state/store'
 
 /** A tela entre soltar o arquivo e receber o vídeo PRONTO.
  *
@@ -24,10 +24,42 @@ export default function ProcessingView() {
   const project = useStore((s) => s.project)
   const activeJob = useStore((s) => s.activeJob)
 
-  const rodando = activeJob && ['fila', 'rodando'].includes(activeJob.status)
-  const falhou = activeJob?.status === 'erro'
-  const stage = activeJob?.stage ?? ''
+  const meu = activeJob && activeJob.project_id === project?.id ? activeJob : null
+  const rodando = !!meu && ['fila', 'rodando'].includes(meu.status)
+  // o job terminou mas o projeto ainda não foi recarregado: é "abrindo", não
+  // "parado" — mostrar o botão aqui fazia o usuário re-rodar o pipeline
+  // inteiro num clique de reflexo
+  const abrindo = meu?.status === 'ok'
+  const falhou = meu?.status === 'erro'
+  const stage = meu?.stage ?? ''
   const atual = Math.max(0, PASSOS.findIndex((p) => p.stages.includes(stage)))
+
+  // REDE DE SEGURANÇA contra o giro eterno: a fila de jobs vive em memória e
+  // o WebSocket não manda o estado ao reconectar — se o evento final se
+  // perder (servidor reiniciado, CPU saturada pelo ffmpeg), esta tela ficava
+  // girando para sempre. A cada 3 s ela mesma confere a verdade no servidor.
+  useEffect(() => {
+    if (!project) return
+    const t = window.setInterval(async () => {
+      try {
+        const jobs = await api.jobs(project.id)
+        const vivo = jobs.find((j: any) =>
+          ['fila', 'rodando'].includes(j.status))
+        if (vivo) { setState({ activeJob: vivo }); return }
+        const p = await api.project(project.id)
+        if (p.analysis?.words?.length) {
+          setState({
+            project: p, timeline: p.timeline ?? null,
+            words: p.analysis?.words ?? [],
+            removedWordIds: p.analysis?.removed_word_ids ?? [],
+            fillers: p.analysis?.fillers ?? [],
+            activeJob: null,
+          })
+        }
+      } catch { /* servidor fora: tenta no próximo tique */ }
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [project?.id])
 
   return (
     <div className="flex-1 flex items-center justify-center p-8">
@@ -97,7 +129,12 @@ export default function ProcessingView() {
             </button>
           </div>
         )}
-        {!rodando && !falhou && (
+        {abrindo && (
+          <p className="text-sm text-slate-400 mt-6 text-center">
+            abrindo o editor…
+          </p>
+        )}
+        {!rodando && !falhou && !abrindo && (
           <button className="btn btn-primary mt-6 w-full"
                   onClick={async () => {
                     const job = await api.oneclick(project!.id,

@@ -296,6 +296,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_achados_da_revisao()
     testar_presets_atualizam()
 
     print()
@@ -1754,6 +1755,62 @@ def testar_comandos_falados() -> None:
         whistles=[{"time": 7.35, "enabled": True, "reason": 'você disse "Ok"'}])
     check("[CORTA]" in pedido and "[OK]" in pedido and "[PALMA]" in pedido,
           "a IA vê [CORTA], [OK] e [PALMA] cada um com seu nome")
+
+
+def testar_achados_da_revisao() -> None:
+    """Os cenários que a revisão adversarial PROVOU quebrando — todos travados."""
+    from editor.audio.comandos import detectar, ids_de_comando
+
+    def w(i, a, b, t):
+        return {"id": i, "start": a, "end": b, "text": t}
+
+    # 1) "Corta, corta pra cena do produto": comando dobrado emendado em
+    #    conteúdo NÃO é comando — antes apagava o take bom
+    caso1 = [w(0, 0.0, 0.6, "produto."), w(1, 1.5, 1.8, "Corta,"),
+             w(2, 1.9, 2.2, "corta"), w(3, 2.25, 2.4, "pra"),
+             w(4, 2.45, 2.7, "cena"), w(5, 2.75, 3.3, "do")]
+    check(detectar(caso1) == [],
+          '"Corta, corta pra cena..." é conteúdo, não comando')
+
+    # 2) "Corta. não. Corta.": a fusão não atravessa conteúdo
+    caso2 = [w(0, 0.0, 0.5, "frase"), w(1, 1.0, 1.3, "Corta."),
+             w(2, 1.7, 2.0, "não"), w(3, 2.4, 2.7, "Corta."),
+             w(4, 4.0, 4.5, "refeita")]
+    r2 = [(c.tipo, c.word_ids) for c in detectar(caso2)]
+    check(r2 == [("corta", [1]), ("corta", [3])],
+          f'dois "corta" com conteúdo no meio ficam separados ({r2})')
+
+    # 3) "corta ok" emendado vira OS DOIS comandos — antes se anulavam
+    caso3 = [w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta"),
+             w(2, 2.0, 2.3, "ok"), w(3, 4.0, 4.5, "refeita")]
+    r3 = [(c.tipo, c.word_ids) for c in detectar(caso3)]
+    check(r3 == [("corta", [1]), ("ok", [2])],
+          f'"corta ok" emendado descarta E aprova ({r3})')
+
+    # 4) desligar o comando devolve a palavra: ids respeitam enabled
+    achado = detectar([w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta")])
+    achado[0].enabled = False
+    check(ids_de_comando(achado) == set(),
+          "comando desligado devolve a palavra ao vídeo")
+    como_dict = [c.to_dict() for c in detectar(
+        [w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta")])]
+    como_dict[0]["enabled"] = False
+    check(ids_de_comando(como_dict) == set(),
+          "e o mesmo vale para o dicionário salvo na análise")
+
+    # 5) a IA SOMA com os takes do marcador, nunca substitui: remover []
+    #    não pode ressuscitar a tentativa que o "corta" mandou apagar
+    deterministico = {"id": "t1", "start": 2.0, "end": 6.0, "text": "errada",
+                      "reason": "palma", "restored": False}
+    resposta_vazia: list = []
+    def _cobre(a, b):
+        inter = min(a["end"], b["end"]) - max(a["start"], b["start"])
+        return max(0.0, inter) / max(a["end"] - a["start"], 1e-9)
+    novos = [t for t in resposta_vazia
+             if not any(_cobre(t, d) >= 0.5 for d in [deterministico])]
+    final = sorted([deterministico] + novos, key=lambda t: t["start"])
+    check(final == [deterministico],
+          'IA respondendo "nada a remover" não ressuscita o take do marcador')
 
 
 def testar_presets_atualizam() -> None:

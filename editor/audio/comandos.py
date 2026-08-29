@@ -56,46 +56,94 @@ def _norm(texto: str) -> str:
 def detectar(words: list[dict]) -> list[Comando]:
     """Acha os comandos falados na transcrição.
 
-    Um comando é UMA palavra do vocabulário, isolada por pausa dos dois lados.
-    Duas seguidas do mesmo tipo ("corta, corta") fundem num comando só.
+    O critério é por SEQUÊNCIA, não por palavra: primeiro se junta a corrida
+    de palavras de vocabulário emendadas ("corta", "corta corta", "corta ok"),
+    e o isolamento — pausa dos dois lados — é exigido nas bordas EXTERNAS da
+    corrida inteira. A revisão adversarial reproduziu os três buracos da
+    versão por palavra:
+
+      "Corta, corta pra cena do produto"  a primeira palavra virava comando
+                                          (o vizinho ser do vocabulário
+                                          dispensava a pausa) e o take BOM
+                                          era apagado;
+      "Corta. não. Corta."                dois comandos fundiam atravessando
+                                          conteúdo, porque a fusão só olhava
+                                          distância no tempo;
+      "corta ok" emendado                 os dois se anulavam (cada um exigia
+                                          pausa contra o outro) e NADA era
+                                          cortado.
+
+    Agora: a corrida emendada em conteúdo não é comando nenhum; a fusão só
+    acontece dentro da própria corrida; e "corta ok" vira os dois comandos,
+    na ordem em que foram ditos.
     """
     import uuid
 
-    achados: list[Comando] = []
+    vocab = CORTA | OK
     n = len(words)
-    for i, w in enumerate(words):
-        token = _norm(str(w.get("text", "")))
-        tipo = "corta" if token in CORTA else ("ok" if token in OK else None)
-        if tipo is None:
+
+    def token(i: int) -> str:
+        return _norm(str(words[i].get("text", "")))
+
+    def dur_ok(i: int) -> bool:
+        return float(words[i]["end"]) - float(words[i]["start"]) <= MAX_DUR
+
+    achados: list[Comando] = []
+    brutos: list[tuple[str, int, int]] = []
+    i = 0
+    while i < n:
+        if token(i) not in vocab or not dur_ok(i):
+            i += 1
             continue
-        inicio = float(w["start"])
-        fim = float(w["end"])
-        if fim - inicio > MAX_DUR:
-            continue
+        # a corrida: palavras de vocabulário emendadas umas nas outras
+        j = i
+        while (j + 1 < n and token(j + 1) in vocab and dur_ok(j + 1)
+               and float(words[j + 1]["start"]) - float(words[j]["end"])
+               < PAUSA_MIN):
+            j += 1
+        # isolamento nas bordas EXTERNAS da corrida inteira
         antes = float(words[i - 1]["end"]) if i > 0 else -1e9
-        depois = float(words[i + 1]["start"]) if i + 1 < n else 1e9
-        # o vizinho pode ser OUTRO comando do mesmo tipo ("corta, corta"):
-        # aí a pausa exigida é a de fora do par
-        viz_antes = _norm(str(words[i - 1].get("text", ""))) if i > 0 else ""
-        viz_depois = _norm(str(words[i + 1].get("text", ""))) if i + 1 < n else ""
-        mesmo = CORTA if tipo == "corta" else OK
-        if inicio - antes < PAUSA_MIN and viz_antes not in mesmo:
-            continue
-        if depois - fim < PAUSA_MIN and viz_depois not in mesmo:
-            continue
-        wid = w.get("id", i)
-        if achados and achados[-1].tipo == tipo \
-                and inicio - achados[-1].end < PAUSA_MIN + MAX_DUR:
-            achados[-1].end = round(fim, 3)
-            achados[-1].time = round((achados[-1].start + fim) / 2.0, 3)
-            achados[-1].word_ids.append(wid)
-            achados[-1].texto += f" {w.get('text', '')}".rstrip()
-            continue
+        depois = float(words[j + 1]["start"]) if j + 1 < n else 1e9
+        isolada = (float(words[i]["start"]) - antes >= PAUSA_MIN
+                   and depois - float(words[j]["end"]) >= PAUSA_MIN)
+        if isolada:
+            # dentro da corrida, um comando por trecho contíguo do mesmo tipo:
+            # "corta corta ok" -> [corta] e [ok], na ordem
+            k = i
+            while k <= j:
+                tipo = "corta" if token(k) in CORTA else "ok"
+                m = k
+                while m + 1 <= j and ("corta" if token(m + 1) in CORTA
+                                      else "ok") == tipo:
+                    m += 1
+                brutos.append((tipo, k, m))
+                k = m + 1
+        i = j + 1
+
+    # "corta ... corta" com pausa no meio mas SEM NENHUMA PALAVRA entre eles
+    # ainda é um gesto só: funde. A adjacência é por índice — havendo
+    # conteúdo no meio, não funde nunca (era o buraco da fusão por tempo).
+    fundidos: list[list] = []
+    for tipo, k0, k1 in brutos:
+        if (fundidos and fundidos[-1][0] == tipo
+                and k0 == fundidos[-1][2] + 1
+                and float(words[k0]["start"]) - float(words[fundidos[-1][2]]["end"])
+                < PAUSA_MIN + MAX_DUR):
+            fundidos[-1][2] = k1
+        else:
+            fundidos.append([tipo, k0, k1])
+
+    for tipo, k0, k1 in fundidos:
+        bloco = words[k0:k1 + 1]
         achados.append(Comando(
             id=f"cmd_{uuid.uuid4().hex[:8]}", tipo=tipo,
-            time=round((inicio + fim) / 2.0, 3),
-            start=round(inicio, 3), end=round(fim, 3),
-            word_ids=[wid], texto=str(w.get("text", "")).strip()))
+            time=round((float(bloco[0]["start"])
+                        + float(bloco[-1]["end"])) / 2.0, 3),
+            start=round(float(bloco[0]["start"]), 3),
+            end=round(float(bloco[-1]["end"]), 3),
+            word_ids=[w.get("id", idx) for idx, w in enumerate(words)
+                      if k0 <= idx <= k1],
+            texto=" ".join(str(w.get("text", "")).strip() for w in bloco)))
     return achados
 
 
