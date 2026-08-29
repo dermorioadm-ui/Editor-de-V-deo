@@ -16,12 +16,20 @@ export default function Home() {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [locating, setLocating] = useState('')
+  // A CHAVE MORA AQUI, na primeira tela. Antes ela só existia na aba IA —
+  // dentro do editor, que só abre DEPOIS do processamento, que é justamente
+  // quem precisa dela. Ovo e galinha: a etapa da IA era pulada em silêncio na
+  // primeira vez de todo mundo.
+  const [ia, setIa] = useState<any>(null)
+  const [chave, setChave] = useState('')
+  const [salvandoChave, setSalvandoChave] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
   const refresh = () => api.projects().then(setProjects).catch(() => {})
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
+    api.aiConfig().then(setIa).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
     refresh()
   }, [])
@@ -68,6 +76,26 @@ export default function Home() {
    *  O explorador escrito em HTML continua existindo, mas só como recuo para
    *  a máquina onde a janela não abre. Ninguém quer aprender um explorador de
    *  arquivos novo para abrir um MP4. */
+  /** Guarda e TESTA a chave na hora: um erro de chave tem que aparecer aqui,
+   *  com o campo na frente, e não no meio do processamento de um vídeo de
+   *  2 GB — que é onde ele aparecia (e nem aparecia: era pulo em silêncio). */
+  async function salvarChave() {
+    const k = chave.trim()
+    if (!k) return
+    setSalvandoChave(true)
+    try {
+      await api.setAiConfig({ chave: k, cortes: true })
+      const r = await api.testAi()
+      setIa(await api.aiConfig())
+      setChave('')
+      toast('ok', 'Chave guardada e testada', `vai usar ${r.modelo}`)
+    } catch (e: any) {
+      await api.setAiConfig({ chave: '' })
+      setIa(await api.aiConfig())
+      toast('error', 'A chave não passou', String(e.message ?? e))
+    } finally { setSalvandoChave(false) }
+  }
+
   async function escolherNoDisco() {
     try {
       const r = await api.escolher('video', 'Escolher o vídeo para editar')
@@ -137,6 +165,54 @@ export default function Home() {
             </ul>
           </div>
         )}
+
+        {/* A IA decide os cortes. Sem a chave, o editor cai na regra
+            determinística — e o usuário TEM que saber disso antes de soltar
+            o arquivo, não depois. */}
+        <div className={`card p-3 mb-3 flex items-center gap-3
+          ${ia?.tem_chave ? 'border-emerald-900/50 bg-emerald-950/15'
+            : 'border-amber-900/50 bg-amber-950/15'}`}>
+          <span className={`text-lg leading-none
+            ${ia?.tem_chave ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {ia?.tem_chave ? '✓' : '!'}
+          </span>
+          {ia?.tem_chave ? (
+            <>
+              <div className="min-w-0">
+                <p className="text-sm text-slate-200">
+                  A IA vai cortar este vídeo
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  chave …{ia.final} · o vídeo não sai da máquina, só o texto
+                </p>
+              </div>
+              <button className="btn btn-xs ml-auto"
+                      onClick={async () => setIa(await api.setAiConfig({ chave: '' }))}>
+                trocar
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="min-w-0 shrink-0">
+                <p className="text-sm text-slate-200">
+                  Cole a chave do Gemini para a IA cortar
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  uma vez só, fica guardada · sem ela o corte é só pela regra
+                </p>
+              </div>
+              <input className="field flex-1 font-mono text-xs" type="password"
+                     placeholder="AIza…" value={chave}
+                     onChange={(e) => setChave(e.target.value)}
+                     onKeyDown={(e) => { if (e.key === 'Enter') salvarChave() }} />
+              <button className="btn btn-primary btn-xs shrink-0"
+                      disabled={!chave.trim() || salvandoChave}
+                      onClick={salvarChave}>
+                {salvandoChave ? 'testando…' : 'guardar'}
+              </button>
+            </>
+          )}
+        </div>
 
         <div
           ref={dropRef}

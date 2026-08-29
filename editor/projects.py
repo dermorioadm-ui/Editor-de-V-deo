@@ -414,32 +414,6 @@ def analyze(project: Project, ctx) -> dict:
     takes = [t.to_dict() for t in build_discarded_takes(env, claps, words,
                                                         whistles=assobios)]
 
-    # A IA DECIDE OS CORTES — automática, sem botão, assim que a transcrição
-    # existe. Quando há chave e o modo está ligado, quem escolhe o que sai é
-    # o modelo lendo a fala inteira (a regra determinística acertava ~75%:
-    # marcador diz ONDE algo aconteceu, não O QUE deve sair). A resposta volta
-    # em faixas de palavras, vira take restaurável, e toda trava continua no
-    # código. Qualquer falha — sem rede, cota, resposta ruim — cai de volta
-    # na regra determinística com o motivo escrito no progresso.
-    relatorio_ia = _cortes_da_ia(project, ctx, words,
-                                 [c.to_dict() for c in claps],
-                                 [a.to_dict() for a in assobios])
-    if relatorio_ia and relatorio_ia.get("ok"):
-        # A IA SOMA, nunca substitui. Os takes determinísticos vêm de uma
-        # ORDEM do usuário — palma ou "corta" dito — e uma resposta da IA que
-        # não os mencione (o esquema aceita remover:[]) não pode ressuscitar a
-        # tentativa que ele mandou apagar. O take da IA só entra onde não há
-        # um determinístico dizendo a mesma coisa.
-        def _cobre(a: dict, b: dict) -> float:
-            inter = min(float(a["end"]), float(b["end"])) \
-                - max(float(a["start"]), float(b["start"]))
-            dur = float(a["end"]) - float(a["start"])
-            return max(0.0, inter) / max(dur, 1e-9)
-
-        novos = [t for t in relatorio_ia["takes"]
-                 if not any(_cobre(t, d) >= 0.5 for d in takes)]
-        takes = sorted(takes + novos, key=lambda t: float(t["start"]))
-
     for take in takes:
         for old in previous.get("takes", []):
             if abs(float(old.get("start", -9)) - take["start"]) < 0.2                     and old.get("restored"):
@@ -465,8 +439,6 @@ def analyze(project: Project, ctx) -> dict:
         "manual_removed_word_ids": previous.get("manual_removed_word_ids", []),
         "comandos": [c.to_dict() for c in comandos],
         "command_word_ids": sorted(ids_de_comando(comandos)),
-        "ai_cortes": ({k: v for k, v in relatorio_ia.items() if k != "takes"}
-                      if relatorio_ia else None),
         "analyzed_at": time.time(),
     }
     project.save_analysis()
@@ -490,12 +462,19 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     from . import db
     from .ai import cortes as cortes_ia, gemini
 
+    # A etapa SEMPRE aparece, mesmo quando não roda. Pular em silêncio foi o
+    # defeito relatado: o usuário via a etapa da IA sumir da lista e não tinha
+    # como saber que era falta de chave — ainda mais porque a chave só existia
+    # dentro do editor, que só abre DEPOIS deste processamento.
+    ctx.stage("ia", "a IA vai decidir os cortes")
     if not db.get_setting("ai_cortes", True):
-        return None
+        ctx.progress(0.95, "IA desligada nos ajustes: corte pela regra do programa")
+        return {"ok": False, "erro": "desligada", "pulada": True}
     chave = gemini.chave_guardada()
     if not chave:
-        return None
-    ctx.stage("ia", "a IA está lendo o que você falou")
+        ctx.progress(0.95, "sem chave do Gemini: corte pela regra do programa. "
+                           "Cole a chave na tela inicial e aperte refazer edição")
+        return {"ok": False, "erro": "sem chave", "pulada": True}
     ctx.progress(0.955, "o vídeo NÃO sai da máquina — vai só o texto")
     try:
         saida = cortes_ia.decidir(chave, db.get_setting("gemini_model", "") or "",
@@ -532,7 +511,49 @@ def auto_edit(project: Project, ctx) -> dict:
         vistos = {f["i"] for f in antes}
         project.analysis["word_fixes"] = antes + [f for f in encaixes_agora
                                                   if f["i"] not in vistos]
-    takes = project.analysis.get("takes", [])
+    takes = list(project.analysis.get("takes", []))
+
+    # A IA DECIDE OS CORTES. Roda AQUI, não na análise: assim colar a chave e
+    # apertar "refazer edição" já vale, sem transcrever o vídeo inteiro de
+    # novo — que era o buraco relatado (a chave só existia dentro do editor,
+    # e o editor só abre depois do processamento que precisa dela).
+    #
+    # A IA SOMA, nunca substitui. Os takes determinísticos vêm de uma ORDEM do
+    # usuário — palma, ou "corta" dito — e uma resposta que não os mencione (o
+    # esquema aceita remover:[]) não pode ressuscitar a tentativa que ele
+    # mandou apagar. O take da IA só entra onde não há um determinístico
+    # dizendo a mesma coisa.
+    relatorio_ia = _cortes_da_ia(
+        project, ctx, words,
+        [c for c in project.analysis.get("claps", []) if c.get("enabled")],
+        [a for a in project.analysis.get("whistles", []) if a.get("enabled", True)])
+    if relatorio_ia and relatorio_ia.get("ok"):
+        def _cobre(a: dict, b: dict) -> float:
+            inter = min(float(a["end"]), float(b["end"])) \
+                - max(float(a["start"]), float(b["start"]))
+            return max(0.0, inter) / max(float(a["end"]) - float(a["start"]), 1e-9)
+
+        vindos_da_ia = [t for t in relatorio_ia["takes"]
+                        if not any(_cobre(t, d) >= 0.5 for d in takes)]
+        # a decisão de restaurar sobrevive: casa por sobreposição, porque as
+        # bordas do modelo mudam alguns décimos entre chamadas
+        anteriores = [t for t in project.analysis.get("takes", [])
+                      if t.get("restored")]
+        for t in vindos_da_ia:
+            for old in anteriores:
+                inter = min(float(old["end"]), float(t["end"])) \
+                    - max(float(old["start"]), float(t["start"]))
+                uni = max(float(old["end"]), float(t["end"])) \
+                    - min(float(old["start"]), float(t["start"]))
+                if inter > 0 and inter / max(uni, 1e-9) >= 0.5:
+                    t["restored"] = True
+        takes = sorted([t for t in takes if t.get("source") != "ia"] + vindos_da_ia,
+                       key=lambda t: float(t["start"]))
+        project.analysis["takes"] = takes
+    project.analysis["ai_cortes"] = (
+        {k: v for k, v in relatorio_ia.items() if k != "takes"}
+        if relatorio_ia else None)
+
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
     # a palavra de comando ("corta", "ok") é instrução, não fala: sai — mas

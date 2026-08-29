@@ -1697,9 +1697,27 @@ def testar_ia_decide_cortes() -> None:
               "IA fora do ar vira fallback, não exceção")
         check(any("regra do programa" in m for m in ctx.msgs),
               "e o usuário fica sabendo no progresso")
+        # com o modo desligado a IA não é chamada — mas a etapa APARECE e diz
+        # o porquê. Pular em silêncio era o defeito: o usuário via a etapa da
+        # IA sumir da lista e não tinha como saber que faltava a chave.
         db.set_setting("ai_cortes", False)
-        check(svc._cortes_da_ia(ProjFalso(), CtxFalso(), palavras, [], []) is None,
+        ctx2 = CtxFalso()
+        ctx2.msgs = []
+        out2 = svc._cortes_da_ia(ProjFalso(), ctx2, palavras, [], [])
+        check(out2 is not None and out2.get("pulada") and not out2["ok"],
               "com o modo desligado a IA nem é chamada")
+        check(any("desligada" in m for m in ctx2.msgs),
+              "e o pulo é dito na tela, não feito em silêncio")
+
+        db.set_setting("ai_cortes", True)
+        db.set_setting("gemini_api_key", "")
+        ctx3 = CtxFalso()
+        ctx3.msgs = []
+        out3 = svc._cortes_da_ia(ProjFalso(), ctx3, palavras, [], [])
+        check(out3 is not None and out3.get("erro") == "sem chave",
+              "sem chave também vira motivo, não silêncio")
+        check(any("chave" in m and "tela inicial" in m for m in ctx3.msgs),
+              "e a mensagem diz ONDE colar a chave")
     finally:
         cortes_mod.decidir = original
         db.set_setting("gemini_api_key", "")

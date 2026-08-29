@@ -1007,12 +1007,20 @@ do botão.
 ### Como ligar
 
 1. Pegue uma chave no Google AI Studio.
-2. Aba **IA** → cole a chave → **guardar** → **testar**.
-3. O campo de modelo pode ficar em branco: o programa pergunta ao Google quais
-   modelos aquela chave alcança e escolhe. Nome de modelo chumbado no código
-   é um app que quebra sozinho — os identificadores do Gemini mudaram quatro
-   vezes em menos de dois anos.
-4. **Ler o roteiro** → veja a sugestão → **Aplicar** ou **Descartar**.
+2. **Na tela inicial**, no card do topo: cole a chave → **guardar**. Ela é
+   testada na hora, então um erro de chave aparece ali, com o campo na frente
+   — e não no meio do processamento de um vídeo de 2 GB.
+3. Pronto. Todo vídeo que você soltar dali em diante já sai cortado pela IA.
+   O campo de modelo (aba IA) pode ficar em branco: o programa pergunta ao
+   Google quais modelos aquela chave alcança e escolhe. Nome de modelo
+   chumbado no código é um app que quebra sozinho — os identificadores do
+   Gemini mudaram quatro vezes em menos de dois anos.
+
+**Esqueceu de colar antes de soltar o vídeo?** Sem problema. A etapa da IA
+aparece na tela de processamento dizendo *"sem chave do Gemini: corte pela
+regra do programa"*, e o editor abre com uma faixa amarela oferecendo o
+conserto. Cole a chave e aperte **refazer edição**: a IA roda em cima da
+transcrição que já existe, **sem transcrever o vídeo de novo**.
 
 A chave fica guardada no banco local do programa. Ela **nunca** volta por
 nenhuma rota da API — só um "tem chave: sim" e os quatro últimos caracteres,

@@ -107,11 +107,11 @@ export default function ProcessingView() {
 
         <div className="mt-6 h-1.5 rounded-full bg-ink-700 overflow-hidden">
           <div className="h-full bg-accent rounded-full transition-[width] duration-500"
-               style={{ width: `${Math.round((activeJob?.progress ?? 0) * 100)}%` }} />
+               style={{ width: `${Math.round((meu?.progress ?? 0) * 100)}%` }} />
         </div>
-        {activeJob?.message && (
+        {meu?.message && (
           <p className="text-[11px] text-slate-500 mt-2 truncate">
-            {activeJob.message}
+            {meu.message}
           </p>
         )}
 

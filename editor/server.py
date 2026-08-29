@@ -1654,8 +1654,8 @@ def _chave_ia() -> str:
 
     chave = chave_guardada()
     if not chave:
-        raise HTTPException(400, "sem chave do Gemini. Cole a sua na aba IA — "
-                                 "uma vez só; ela fica guardada.")
+        raise HTTPException(400, "sem chave do Gemini. Cole a sua na tela "
+                                 "inicial — uma vez só; ela fica guardada.")
     return chave
 
 

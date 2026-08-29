@@ -314,6 +314,25 @@ export default function Editor() {
         return null
       })() || <>
 
+      {/* O vídeo saiu SEM a IA (faltava a chave na hora): em vez de o usuário
+          descobrir sozinho, a faixa diz e oferece o conserto em um clique —
+          refazer a edição usa a chave nova sem transcrever tudo de novo. */}
+      {analysed && project.analysis?.ai_cortes?.erro === 'sem chave' && (
+        <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
+                        border-amber-900/50 bg-amber-950/25">
+          <span className="text-amber-200 font-medium">
+            Este vídeo foi cortado sem a IA
+          </span>
+          <span className="text-slate-400">
+            faltava a chave do Gemini. Cole na aba IA e refaça a edição —
+            não precisa transcrever de novo.
+          </span>
+          <button className="btn btn-xs ml-auto" onClick={() => setTab('ia')}>
+            colar a chave
+          </button>
+        </div>
+      )}
+
       {analysed && view && (() => {
         // O veredito. O usuário reclamou que o editor não entregava pronto:
         // ou está pronto e ele exporta, ou aqui diz exatamente o que falta.
