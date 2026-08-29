@@ -295,6 +295,7 @@ def main() -> int:
     testar_janela_do_sistema()
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
+    testar_comandos_falados()
     testar_presets_atualizam()
 
     print()
@@ -1702,6 +1703,57 @@ def testar_ia_decide_cortes() -> None:
         cortes_mod.decidir = original
         db.set_setting("gemini_api_key", "")
         db.set_setting("ai_cortes", True)
+
+
+def testar_comandos_falados() -> None:
+    """"corta" apaga, "ok" aprova — dito com a boca, sem acústica nenhuma.
+
+    Ideia do usuário depois de os marcadores acústicos falharem no teste dele.
+    A palavra já vem do Whisper com tempo exato; o critério todo é ISOLAMENTO:
+    comando é palavra sozinha com pausa dos dois lados. "Corta" dentro de
+    "corta para a cena" é conteúdo e fica.
+    """
+    from editor.audio.comandos import detectar, ids_de_comando
+
+    def w(i, a, b, t):
+        return {"id": i, "start": a, "end": b, "text": t}
+
+    palavras = [
+        w(0, 0.0, 0.4, "o"), w(1, 0.45, 0.9, "preço"), w(2, 0.95, 1.3, "é"),
+        w(3, 1.35, 1.7, "esse"),
+        w(4, 2.6, 2.9, "Corta."),          # isolado -> comando
+        w(5, 3.9, 4.2, "o"), w(6, 4.25, 4.8, "preço"),
+        w(7, 4.85, 5.2, "corta"),          # no meio da frase -> conteúdo
+        w(8, 5.25, 5.7, "a"), w(9, 5.75, 6.2, "dúvida"),
+        w(10, 7.2, 7.5, "Ok"),             # isolado -> comando
+        w(11, 8.6, 8.9, "ok"),
+        w(12, 8.95, 9.4, "então"),         # "ok então" emendado -> conteúdo
+        w(13, 9.45, 9.9, "vamos"),
+    ]
+    achados = detectar(palavras)
+    tipos = [(c.tipo, c.word_ids) for c in achados]
+    check(tipos == [("corta", [4]), ("ok", [10])],
+          f'só os isolados viram comando ({tipos})')
+    check(ids_de_comando(achados) == {4, 10},
+          "as palavras de comando saem do vídeo e da legenda")
+
+    # "corta, corta" dito duas vezes funde num comando só
+    dupla = [w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta"),
+             w(2, 2.2, 2.5, "corta"), w(3, 4.0, 4.5, "refeita")]
+    achados2 = detectar(dupla)
+    check(len(achados2) == 1 and achados2[0].word_ids == [1, 2],
+          '"corta, corta" vira um comando só')
+
+    # e o pedido da IA rotula o comando como [CORTA]/[OK], não como acústica
+    from editor.ai.cortes import montar_pedido
+
+    pedido = montar_pedido(
+        palavras,
+        claps=[{"time": 2.75, "enabled": True, "reason": 'você disse "Corta."'},
+               {"time": 12.0, "enabled": True, "reason": "estouro seco"}],
+        whistles=[{"time": 7.35, "enabled": True, "reason": 'você disse "Ok"'}])
+    check("[CORTA]" in pedido and "[OK]" in pedido and "[PALMA]" in pedido,
+          "a IA vê [CORTA], [OK] e [PALMA] cada um com seu nome")
 
 
 def testar_presets_atualizam() -> None:

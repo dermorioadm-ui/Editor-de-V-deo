@@ -8,6 +8,7 @@ import MediaPanel from './MediaPanel'
 import LookPanel from './LookPanel'
 import AudioPanel from './AudioPanel'
 import AIPanel from './AIPanel'
+import ProcessingView from './ProcessingView'
 import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
 import { api } from '../lib/api'
@@ -34,7 +35,7 @@ export default function Editor() {
   const history = useStore((s) => s.history)
   const future = useStore((s) => s.future)
   const activeJob = useStore((s) => s.activeJob)
-  const [tab, setTab] = useState<string>('texto')
+  const [tab, setTab] = useState<string | null>(null)
   const [presets, setPresets] = useState<any[]>([])
   const [safeZone, setSafeZone] = useState<any>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -295,6 +296,19 @@ export default function Editor() {
 
       <JobBar />
 
+      {(() => {
+        // Só o pipeline de ENTRADA esconde o editor: o refazer-edição de um
+        // retoque (kind 'edicao') roda a cada toggle e não pode piscar a tela
+        // inteira — ele mostra progresso na JobBar, com o editor de pé.
+        const pipeline = activeJob
+          && ['clique-unico', 'analise'].includes(activeJob.kind)
+          && ['fila', 'rodando', 'erro'].includes(activeJob.status)
+        if (pipeline || !analysed) {
+          return <ProcessingView />
+        }
+        return null
+      })() || <>
+
       {analysed && view && (() => {
         // O veredito. O usuário reclamou que o editor não entregava pronto:
         // ou está pronto e ele exporta, ou aqui diz exatamente o que falta.
@@ -348,13 +362,45 @@ export default function Editor() {
       })()}
 
       <div className="flex-1 flex min-h-0">
-        <aside className="w-[320px] shrink-0 border-r border-line p-3 flex flex-col gap-3
-                          min-h-0 overflow-hidden">
+        {/* rail de ferramentas: o painel só abre quando pedido — o vídeo
+            é o centro da tela, como em qualquer editor de verdade */}
+        <nav className="w-[72px] shrink-0 border-r border-line bg-ink-800
+                        flex flex-col py-2 gap-0.5 overflow-y-auto">
+          {TABS.map((t) => (
+            <button key={t.id}
+                    className={`mx-1.5 rounded-md px-1 py-2.5 text-[11px]
+                      leading-tight transition-colors cursor-pointer
+                      ${tab === t.id
+                        ? 'bg-accent/15 text-accent font-medium'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-ink-700'}`}
+                    onClick={() => setTab(tab === t.id ? null : t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {tab && (
+          <aside className="w-[400px] shrink-0 border-r border-line overflow-auto
+                            min-h-0">
+            {tab === 'texto' && <TextEditor onChanged={refresh} snapshot={snapshot} />}
+            {tab === 'legendas' && <SubtitlePanel onChanged={refresh} snapshot={snapshot} />}
+            {tab === 'midia' && <MediaPanel onChanged={refresh} snapshot={snapshot} safeZone={safeZone} />}
+            {tab === 'filtro' && <LookPanel onChanged={refresh} snapshot={snapshot} />}
+            {tab === 'audio' && <AudioPanel onChanged={refresh} />}
+            {tab === 'ia' && <AIPanel onChanged={refresh} />}
+            {tab === 'exportar' && <ExportPanel onChanged={refresh} />}
+          </aside>
+        )}
+
+        <main className="flex-1 flex flex-col min-w-0 min-h-0 p-3">
           <Player projectId={project.id}
                   blocks={view?.blocks ?? []}
                   cues={view?.subtitles ?? []}
                   duration={view?.duration ?? project.info?.duration ?? 0}
                   style={project.plan?.style}
+                  zoomAnchor={project.plan?.zoom
+                    ? { x: project.plan.zoom.face_x ?? 0.5,
+                        y: project.plan.zoom.face_y ?? 0.4 } : null}
                   sourceSize={project.info
                     ? [project.info.display_width || project.info.width,
                        project.info.display_height || project.info.height]
@@ -370,42 +416,6 @@ export default function Editor() {
                   }}
                   safeZone={safeZone?.band?.found
                     ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null} />
-        </aside>
-
-        <main className="flex-1 flex flex-col min-w-0 min-h-0">
-          <nav className="flex items-center gap-1 px-3 border-b border-line bg-ink-800
-                          overflow-x-auto">
-            {TABS.map((t) => (
-              <button key={t.id}
-                      className={`tab ${tab === t.id ? 'tab-active' : ''}`}
-                      onClick={() => setTab(t.id)}>
-                {t.label}
-              </button>
-            ))}
-            {view && (
-              <span className="ml-auto text-[11px] text-slate-500 font-mono pr-2">
-                {view.blocks.length} blocos · {timecode(view.duration)} de{' '}
-                {timecode(view.source_duration)}
-                {view.audit?.length ? ` · ${view.audit.length} alerta(s)` : ''}
-              </span>
-            )}
-          </nav>
-          <div className="flex-1 overflow-auto min-h-0">
-            {!analysed && (
-              <div className="p-8 text-center text-slate-400">
-                <p className="text-sm">
-                  Este projeto ainda não foi analisado. Aperte <b>EDITAR</b> no topo.
-                </p>
-              </div>
-            )}
-            {analysed && tab === 'texto' && <TextEditor onChanged={refresh} snapshot={snapshot} />}
-            {analysed && tab === 'legendas' && <SubtitlePanel onChanged={refresh} snapshot={snapshot} />}
-            {analysed && tab === 'midia' && <MediaPanel onChanged={refresh} snapshot={snapshot} safeZone={safeZone} />}
-            {analysed && tab === 'filtro' && <LookPanel onChanged={refresh} snapshot={snapshot} />}
-            {analysed && tab === 'audio' && <AudioPanel onChanged={refresh} />}
-            {analysed && tab === 'ia' && <AIPanel onChanged={refresh} />}
-            {analysed && tab === 'exportar' && <ExportPanel onChanged={refresh} />}
-          </div>
         </main>
 
         <aside className="w-[300px] shrink-0 border-l border-line overflow-auto">
@@ -625,6 +635,7 @@ export default function Editor() {
                     await refresh()
                   }} />
       )}
+      </>}
     </div>
   )
 }

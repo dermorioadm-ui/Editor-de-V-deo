@@ -37,11 +37,14 @@ só, cheio de tentativas refeitas.
 Você recebe a transcrição PALAVRA POR PALAVRA, numerada, com os marcadores \
 que a própria pessoa fez durante a gravação:
 
-- [PALMA] = "errei". A tentativa em andamento deve ser descartada. A pessoa \
-normalmente conta "1, 2, 3" depois da palma e refaz a frase — a contagem sai \
-junto.
-- [ASSOBIO] = "acertei". Tudo o que veio antes do assobio está APROVADO: \
-nunca remova nada que termina num assobio.
+- [CORTA] = a pessoa DISSE "corta" (ou "apaga", "errei"): a tentativa em \
+andamento deve ser descartada, e ela refaz em seguida. A própria palavra de \
+comando já é removida pelo programa.
+- [OK] = a pessoa DISSE "ok" (ou "boa", "fechou"): tudo o que veio antes está \
+APROVADO. Nunca remova nada que termina num [OK].
+- [PALMA] = mesma coisa que [CORTA], marcada com uma palma. A pessoa \
+normalmente conta "1, 2, 3" depois e refaz a frase — a contagem sai junto.
+- [ASSOBIO] = mesma coisa que [OK], marcada com assobio.
 - [PAUSA Xs] = silêncio longo. O silêncio já é cortado pelo programa; você \
 não precisa se ocupar dele.
 
@@ -90,10 +93,12 @@ def montar_pedido(words: list[dict], claps: list[dict],
     eventos: list[tuple[float, str]] = []
     for c in claps:
         if c.get("enabled", True):
-            eventos.append((float(c["time"]), "[PALMA]"))
+            dito = "disse" in str(c.get("reason", ""))
+            eventos.append((float(c["time"]), "[CORTA]" if dito else "[PALMA]"))
     for a in whistles:
         if a.get("enabled", True):
-            eventos.append((float(a["time"]), "[ASSOBIO]"))
+            dito = "disse" in str(a.get("reason", ""))
+            eventos.append((float(a["time"]), "[OK]" if dito else "[ASSOBIO]"))
     eventos.sort()
 
     linhas: list[str] = []

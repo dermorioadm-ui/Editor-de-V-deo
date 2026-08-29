@@ -1,0 +1,120 @@
+import { useStore } from '../state/store'
+import { api } from '../lib/api'
+import { setState } from '../state/store'
+
+/** A tela entre soltar o arquivo e receber o vídeo PRONTO.
+ *
+ *  O editor não aparece pela metade: enquanto o pipeline roda — transcrição,
+ *  IA decidindo os cortes, legendas, jogo de câmeras, prévia — o usuário vê
+ *  ONDE o processo está, não uma interface vazia cheia de botões que ainda
+ *  não fazem nada. Editar começa quando há o que editar. */
+
+// os ~14 estágios internos, agrupados em 5 passos que uma pessoa entende
+const PASSOS: { rotulo: string; stages: string[] }[] = [
+  { rotulo: 'Ouvindo o áudio', stages: ['audio', 'envelope', 'palmas'] },
+  { rotulo: 'Transcrevendo o que você falou',
+    stages: ['transcricao', 'encaixe', 'comandos', 'assobio', 'rosto'] },
+  { rotulo: 'Cortando (IA + marcadores)',
+    stages: ['ia', 'takes', 'repeticao', 'cortes', 'auditoria'] },
+  { rotulo: 'Jogo de câmeras e legendas', stages: ['zoom', 'legendas'] },
+  { rotulo: 'Gerando a prévia', stages: ['proxy'] },
+]
+
+export default function ProcessingView() {
+  const project = useStore((s) => s.project)
+  const activeJob = useStore((s) => s.activeJob)
+
+  const rodando = activeJob && ['fila', 'rodando'].includes(activeJob.status)
+  const falhou = activeJob?.status === 'erro'
+  const stage = activeJob?.stage ?? ''
+  const atual = Math.max(0, PASSOS.findIndex((p) => p.stages.includes(stage)))
+
+  return (
+    <div className="flex-1 flex items-center justify-center p-8">
+      <div className="w-full max-w-md">
+        <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">
+          preparando o seu vídeo
+        </p>
+        <h2 className="text-lg font-semibold text-slate-100 truncate mb-6">
+          {project?.name}
+        </h2>
+
+        <ol className="space-y-3">
+          {PASSOS.map((p, i) => {
+            const feito = rodando && i < atual
+            const agora = rodando && i === atual
+            return (
+              <li key={p.rotulo} className="flex items-center gap-3">
+                <span className={`w-6 h-6 shrink-0 rounded-full grid place-items-center
+                  text-[11px] font-bold transition-colors
+                  ${feito ? 'bg-emerald-500 text-ink-900'
+                    : agora ? 'bg-accent text-ink-900'
+                    : 'bg-ink-700 text-slate-500'}`}>
+                  {feito ? (
+                    <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none"
+                         stroke="currentColor" strokeWidth="2.5">
+                      <path d="M3 8.5 6.5 12 13 4.5" strokeLinecap="round" />
+                    </svg>
+                  ) : agora ? (
+                    <svg viewBox="0 0 16 16"
+                         className="w-3.5 h-3.5 animate-spin" fill="none"
+                         stroke="currentColor" strokeWidth="2.5">
+                      <path d="M8 2a6 6 0 1 1-6 6" strokeLinecap="round" />
+                    </svg>
+                  ) : i + 1}
+                </span>
+                <span className={`text-sm transition-colors
+                  ${agora ? 'text-slate-100 font-medium'
+                    : feito ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {p.rotulo}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+
+        <div className="mt-6 h-1.5 rounded-full bg-ink-700 overflow-hidden">
+          <div className="h-full bg-accent rounded-full transition-[width] duration-500"
+               style={{ width: `${Math.round((activeJob?.progress ?? 0) * 100)}%` }} />
+        </div>
+        {activeJob?.message && (
+          <p className="text-[11px] text-slate-500 mt-2 truncate">
+            {activeJob.message}
+          </p>
+        )}
+
+        {falhou && (
+          <div className="mt-6 card border-red-900/60 bg-red-950/20 p-3">
+            <p className="text-sm text-red-300 font-medium">Não deu</p>
+            <p className="text-[12px] text-slate-400 mt-1">{activeJob?.error}</p>
+            <button className="btn btn-xs mt-2"
+                    onClick={async () => {
+                      const job = await api.oneclick(project!.id,
+                        project!.preset ?? 'VSL')
+                      setState({ activeJob: job })
+                    }}>
+              tentar de novo
+            </button>
+          </div>
+        )}
+        {!rodando && !falhou && (
+          <button className="btn btn-primary mt-6 w-full"
+                  onClick={async () => {
+                    const job = await api.oneclick(project!.id,
+                      project!.preset ?? 'VSL')
+                    setState({ activeJob: job })
+                  }}>
+            Editar este vídeo
+          </button>
+        )}
+
+        <p className="text-[11px] text-slate-600 mt-8 leading-relaxed">
+          Na próxima gravação: diga <b className="text-slate-400">"corta"</b> quando
+          errar (a tentativa sai sozinha) e <b className="text-slate-400">"ok"</b>{' '}
+          quando acertar (o corte cola na fala). As palavras de comando não
+          aparecem no vídeo.
+        </p>
+      </div>
+    </div>
+  )
+}

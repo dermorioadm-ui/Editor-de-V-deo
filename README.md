@@ -412,6 +412,36 @@ sumiria junto). A vinheta de cada filtro pode ser forçada no controle abaixo.
   “s” tendem a ficar agressivos. Esse botão mede a sibilância antes e depois e
   procura sozinho a intensidade de de-esser que devolve o som ao nível original.
 
+### O protocolo FALADO: "corta" e "ok" (o principal)
+
+O jeito mais confiável de marcar a gravação é com a boca, porque a
+transcrição já traz a palavra com o tempo exato — não existe falso positivo
+de acústica, microfone ruim nem calibração:
+
+| você diz | o que acontece |
+|---|---|
+| **"corta"** (ou "apaga", "errei") | a tentativa em andamento sai sozinha; refaça em seguida |
+| **"ok"** (ou "boa", "fechou") | tudo até ali está aprovado; o corte cola na fala |
+
+A palavra tem que ser dita **sozinha**, com uma pequena pausa antes e depois —
+"corta" dentro de uma frase é conteúdo e fica. As palavras de comando **nunca
+aparecem no vídeo nem na legenda**: são instrução, não fala. E a IA que decide
+os cortes vê `[CORTA]` e `[OK]` escritos na transcrição, no lugar exato.
+
+Palma e assobio continuam funcionando como alternativa de mão ocupada.
+
+### O vídeo abre PRONTO
+
+Soltou o arquivo, o editor não aparece pela metade: uma tela de progresso
+mostra as cinco etapas — ouvir o áudio, transcrever, cortar (IA + marcadores),
+câmeras e legendas, prévia — e **o editor só abre com o vídeo pronto**:
+cortado, legendado, com o jogo de câmeras decidido e a prévia leve gerada.
+Editar é retoque, não trabalho.
+
+O preview toca a EDIÇÃO (pula o que saiu, mostra a legenda queimada na régua
+certa) e agora mostra também o **jogo de câmeras ao vivo**: o mesmo recorte
+concêntrico no rosto que a exportação aplica, trocando seco no corte.
+
 ### O protocolo da palma
 
 Se você errar uma frase durante a gravação: **bata uma palma, conte até três e

@@ -30,8 +30,12 @@ interface Props {
 // Faixas, de cima para baixo. Marcas (palma, alerta) saíram de cima da onda:
 // riscos vermelhos em cima da onda vermelha do trecho removido era o que
 // deixava a trilha confusa.
-const ROW = { ruler: 18, marks: 15, wave: 74, sections: 14, blocks: 24,
-              scenes: 15, subs: 22, track: 22 }
+// Alturas dos trilhos. Cresceram porque editar em trilho de 22 px é mirar
+// com pinça: os alvos de arrasto precisam de área de toque de verdade
+// (>= 40 px para o trilho principal; as alças de borda ganham 6 px de folga
+// no lugar de 3). O custo é vertical, e a timeline vive numa faixa própria.
+const ROW = { ruler: 18, marks: 16, wave: 96, sections: 14, blocks: 34,
+              scenes: 16, subs: 26, track: 34 }
 const PAD_TOP = 12
 
 /** Cor por velocidade: dá para ver onde está acelerado sem ler número nenhum. */
@@ -574,9 +578,9 @@ export default function Timeline(props: Props) {
         const b = outputToSourceT(item.out_end)
         if (a == null || b == null) continue
         const x0 = toX(a); const x1 = toX(b)
-        if (x < x0 - 3 || x > x1 + 3) continue
+        if (x < x0 - 6 || x > x1 + 6) continue
         const side: 'move' | 'start' | 'end' =
-          Math.abs(x - x0) <= 5 ? 'start' : Math.abs(x - x1) <= 5 ? 'end' : 'move'
+          Math.abs(x - x0) <= 8 ? 'start' : Math.abs(x - x1) <= 8 ? 'end' : 'move'
         return { item, side, track: extras[i] }
       }
     }

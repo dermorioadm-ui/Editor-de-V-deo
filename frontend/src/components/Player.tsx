@@ -14,6 +14,10 @@ interface Props {
    *  prévia leve, o elemento de vídeo tem 854 de altura contra 1920 da fonte,
    *  e usar a dele deixava a legenda 2,25x maior. */
   sourceSize?: [number, number] | null
+  /** Centro do rosto (0..1), medido na análise. É a âncora do jogo de
+   *  câmeras: o preview aplica o MESMO recorte concêntrico da exportação,
+   *  via transform de CSS — de graça, sem renderizar nada. */
+  zoomAnchor?: { x: number; y: number } | null
   cues: SubtitleCue[]
   duration: number
   style: any
@@ -32,7 +36,7 @@ interface Props {
  * legenda por cima.
  */
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
-                                sourceSize,
+                                sourceSize, zoomAnchor,
                                  previewUrl, onRequestPreview, previewBusy,
                                  proxyUrl }: Props) {
   const video = useRef<HTMLVideoElement>(null)
@@ -53,6 +57,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // painel de 320px com o vídeo pequeno dentro, isso dava uma fonte ~4x maior
   // e o texto quebrava em 4 linhas onde a exportação faz 2.
   const [box, setBox] = useState({ left: 0, top: 0, width: 0, height: 0, vh: 1920 })
+  const palco = useRef<HTMLDivElement | null>(null)
 
   const enterStill = useCallback((clip: Clip, offset: number) => {
     stillRef.current = { clip, perfStart: performance.now(), offset0: offset }
@@ -69,30 +74,38 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     const el = video.current
     if (!el) return
     const medir = () => {
-      const pai = el.parentElement
-      if (!pai) return
-      const r = el.getBoundingClientRect()
-      const rp = pai.getBoundingClientRect()
-      const vw = el.videoWidth || 1080
-      const vh = el.videoHeight || 1920
-      // o vídeo é desenhado em 'contain': cabe dentro da caixa preservando a
-      // proporção, e sobra tarja. A legenda tem que ir sobre a IMAGEM.
-      const escala = Math.min(r.width / vw, r.height / vh)
+      const cont = palco.current
+      if (!cont) return
+      // a proporção vem da FONTE quando o metadata ainda não chegou: assim o
+      // quadro já nasce no lugar certo em vez de pular quando o vídeo carrega
+      const vw = el.videoWidth || sourceSize?.[0] || 1080
+      const vh = el.videoHeight || sourceSize?.[1] || 1920
+      const rc = cont.getBoundingClientRect()
+      // 'contain' calculado a partir do PALCO, não do elemento: o vídeo agora
+      // vive dentro de uma moldura com overflow escondido (é ela que faz o
+      // zoom parecer recorte, não crescimento), então o elemento não serve
+      // mais de régua para si mesmo
+      const escala = Math.min(rc.width / vw, rc.height / vh)
       const w = vw * escala
       const h = vh * escala
-      setBox({
-        left: r.left - rp.left + (r.width - w) / 2,
-        top: r.top - rp.top + (r.height - h) / 2,
-        width: w, height: h, vh,
+      setBox((b) => {
+        const novo = { left: (rc.width - w) / 2, top: (rc.height - h) / 2,
+                       width: w, height: h, vh }
+        return Math.abs(b.width - w) < 0.5 && Math.abs(b.height - h) < 0.5
+          && Math.abs(b.left - novo.left) < 0.5 ? b : novo
       })
     }
     medir()
     const ro = new ResizeObserver(medir)
-    ro.observe(el)
-    if (el.parentElement) ro.observe(el.parentElement)
+    if (palco.current) ro.observe(palco.current)
     el.addEventListener('loadedmetadata', medir)
-    return () => { ro.disconnect(); el.removeEventListener('loadedmetadata', medir) }
-  }, [previewUrl, proxyUrl, projectId])
+    el.addEventListener('resize', medir)
+    return () => {
+      ro.disconnect()
+      el.removeEventListener('loadedmetadata', medir)
+      el.removeEventListener('resize', medir)
+    }
+  }, [previewUrl, proxyUrl, projectId, sourceSize?.[0], sourceSize?.[1]])
 
   const linear = !!previewUrl
 
@@ -269,14 +282,44 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const cue = cueAt(playhead, cues)
   const block = blockAtOutput(playhead, blocks)
 
+  // O JOGO DE CÂMERAS, ao vivo. O bloco atual carrega o zoom que a exportação
+  // vai aplicar; aqui ele vira transform de CSS com a MESMA âncora concêntrica
+  // do render: o centro alcançável é clamp(face, 1/(2z), 1-1/(2z)) — abaixo
+  // disso o recorte sairia do quadro. A troca é seca, no corte, igual ao
+  // arquivo final. A prévia 480p renderizada já vem com o zoom queimado, e as
+  // fotos/insertos não têm zoom — nos dois casos o transform desliga.
+  const zoomCss = (() => {
+    const z = !linear && !stillClip ? (block?.zoom ?? 1.0) : 1.0
+    if (z <= 1.001) return undefined
+    const alcance = 1 / (2 * z)
+    const cx = Math.min(1 - alcance, Math.max(alcance, zoomAnchor?.x ?? 0.5))
+    const cy = Math.min(1 - alcance, Math.max(alcance, zoomAnchor?.y ?? 0.4))
+    return {
+      transform: `scale(${z})`,
+      transformOrigin: `${(cx * 100).toFixed(2)}% ${(cy * 100).toFixed(2)}%`,
+    } as const
+  })()
+
   return (
     <div className="flex flex-col gap-2 h-full min-h-0">
-      <div className="relative flex-1 min-h-0 bg-black rounded-lg overflow-hidden
-                      border border-line grid place-items-center">
-        <video ref={video} className="max-h-full max-w-full" playsInline muted={muted}
-               key={previewUrl ?? proxyUrl ?? 'source'}
-               src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
-               onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+      <div ref={palco} className="relative flex-1 min-h-0 bg-black rounded-lg
+                      overflow-hidden border border-line">
+        {/* a MOLDURA do quadro: exatamente o retângulo da imagem, com
+            overflow escondido. É ela que transforma o scale do zoom em
+            RECORTE — sem ela o vídeo parecia crescer sobre as tarjas em vez
+            de fechar o plano. */}
+        <div className="absolute overflow-hidden"
+             style={box.width > 0
+               ? { left: box.left, top: box.top,
+                   width: box.width, height: box.height }
+               : { inset: 0 }}>
+          <video ref={video} className="w-full h-full object-contain" playsInline
+                 muted={muted}
+                 style={zoomCss}
+                 key={previewUrl ?? proxyUrl ?? 'source'}
+                 src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
+                 onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+        </div>
         {stillClip && !linear && (
           <div className="absolute inset-0 bg-black grid place-items-center">
             <img className="max-h-full max-w-full object-contain"

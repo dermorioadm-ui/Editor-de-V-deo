@@ -335,10 +335,27 @@ def analyze(project: Project, ctx) -> dict:
         except Exception as exc:  # noqa: BLE001
             ctx.progress(0.93, f"não deu para achar o rosto: {exc}")
 
-    ctx.stage("assobio", "procurando assobios")
-    # lido logo abaixo e também na etapa dos takes; ficava atribuído só lá
-    # embaixo, o que rebentava a análise de toda gravação com assobio
+    # COMANDOS FALADOS — "corta" apaga a tentativa, "ok" aprova. Ideia do
+    # usuário, e a mais robusta das três formas de marcar: o Whisper já
+    # transcreveu a palavra com o tempo exato, então não existe falso positivo
+    # de acústica. Cada comando vira um marcador SINTÉTICO do tipo certo e
+    # reaproveita toda a maquinaria: barreira, take, corte rente, bandeirinha.
+    ctx.stage("comandos", "procurando comandos falados")
+    from .audio.comandos import detectar as detectar_comandos, ids_de_comando
+    comandos = detectar_comandos(words)
     previous = project.analysis or {}
+    for cmd in comandos:
+        for antigo in previous.get("comandos", []):
+            if (abs(float(antigo.get("time", -1)) - cmd.time) < 0.15
+                    and antigo.get("enabled") is False):
+                cmd.enabled = False
+    if comandos:
+        n_corta = sum(1 for c in comandos if c.tipo == "corta" and c.enabled)
+        n_ok = len([c for c in comandos if c.enabled]) - n_corta
+        ctx.progress(0.935, f'{n_corta}x "corta" e {n_ok}x "ok" ditos — '
+                            f"as palavras de comando saem do vídeo")
+
+    ctx.stage("assobio", "procurando assobios")
     freq = project.plan.whistle_freq or None
     assobios = detect_whistles(samples, sr, env, freq_alvo=freq)
     # a decisão do usuário sobrevive à reanálise: assobio desligado continua
@@ -362,6 +379,27 @@ def analyze(project: Project, ctx) -> dict:
         if len(claps) < antes:
             ctx.progress(0.945, f"{antes - len(claps)} palma(s) eram assobio; "
                                 f"a fala fica")
+
+    # os comandos entram como eventos sintéticos DEPOIS da rede acústica,
+    # para nenhum filtro de som derrubar uma palavra dita com todas as letras
+    from .audio.clap import ClapEvent
+    from .audio.whistle import WhistleEvent
+    for cmd in comandos:
+        if cmd.tipo == "corta":
+            claps.append(ClapEvent(
+                id=cmd.id, time=cmd.time, start=cmd.start, end=cmd.end,
+                peak_db=0.0, jump_db=0.0, duration=round(cmd.end - cmd.start, 3),
+                confirmed=True, suspect=False, attack_floor_db=0.0,
+                timbre_score=3, enabled=cmd.enabled,
+                reason=f'você disse "{cmd.texto}"'))
+        else:
+            assobios.append(WhistleEvent(
+                id=cmd.id, time=cmd.time, start=cmd.start, end=cmd.end,
+                duration=round(cmd.end - cmd.start, 3), freq=0.0, grave=0.0,
+                concentracao=1.0, deriva=0.0, peak_db=0.0, enabled=cmd.enabled,
+                reason=f'você disse "{cmd.texto}"'))
+    claps.sort(key=lambda c: c.time)
+    assobios.sort(key=lambda a: a.time)
 
     ctx.stage("takes", "aplicando a regra do take")
 
@@ -412,6 +450,8 @@ def analyze(project: Project, ctx) -> dict:
                      "audit_threshold": env.audit_threshold,
                      "duration": env.duration},
         "manual_removed_word_ids": previous.get("manual_removed_word_ids", []),
+        "comandos": [c.to_dict() for c in comandos],
+        "command_word_ids": sorted(ids_de_comando(comandos)),
         "ai_cortes": ({k: v for k, v in relatorio_ia.items() if k != "takes"}
                       if relatorio_ia else None),
         "analyzed_at": time.time(),
@@ -482,6 +522,8 @@ def auto_edit(project: Project, ctx) -> dict:
     takes = project.analysis.get("takes", [])
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))
+    # a palavra de comando ("corta", "ok") é instrução, não fala: sai sempre
+    manual_removed |= set(project.analysis.get("command_word_ids", []))
 
     # Repetição: quando a mesma coisa é dita duas vezes, a que vale é a última.
     # Roda DEPOIS da regra do take (o que a palma já descartou não entra na
@@ -594,11 +636,24 @@ def auto_edit(project: Project, ctx) -> dict:
 
 
 def one_click(project: Project, ctx) -> dict:
-    """O clique único (Parte 1)."""
+    """O clique único — TUDO antes de o editor abrir.
+
+    O usuário solta o arquivo e recebe o vídeo PRONTO: cortado (pela IA, com
+    os comandos falados e os marcadores), legendado, com o jogo de câmeras
+    decidido e a prévia leve gerada. Editar é retoque, não trabalho.
+    """
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.86, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.86, 1.0, lambda c: auto_edit(project, c))
-    return {"analysis": a, "edit": b}
+    a = _scoped(ctx, 0.0, 0.72, lambda c: analyze(project, c))
+    b = _scoped(ctx, 0.72, 0.86, lambda c: auto_edit(project, c))
+    # a prévia leve entra no pacote: sem ela o player abre engasgando na
+    # fonte pesada, e a primeira impressão é a que ele reclamou
+    try:
+        p = _scoped(ctx, 0.86, 1.0, lambda c: build_proxy_job(project, c))
+    except Exception as exc:  # noqa: BLE001 — sem proxy ainda dá para editar
+        ctx.progress(1.0, f"prévia leve falhou ({exc}); tocando a fonte")
+        p = {"ok": False}
+    project.set_status("pronto")
+    return {"analysis": a, "edit": b, "proxy": p}
 
 
 class _ScopedCtx:
