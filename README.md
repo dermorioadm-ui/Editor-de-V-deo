@@ -200,7 +200,38 @@ o caminho. Por isso o arrasto precisa achar o arquivo — o navegador entrega s�
 o nome e o tamanho, nunca o caminho, e copiar 2 GB à toa está fora de questão.
 A janela do sistema não tem esse problema: ela devolve o caminho de verdade.
 
-### A prévia é feia de propósito
+### Antes de gerar: velocidade e zoom
+
+Na tela inicial, dois controles que valem **antes** do EDITAR, porque mudam o
+plano inteiro (refazer depois custa uma volta do pipeline):
+
+- **Velocidade** — multiplica o que cada etapa já pede. Em 0% cada bloco fica
+  com a velocidade da própria etapa (Explicação acelera mais que CTA, por
+  exemplo). Em +10%, tudo sobe 10% em cima disso.
+- **Zoom entre cenas** — de *quase parado* a *agressivo*. É o quanto o
+  enquadramento muda a cada corte. Medido: em 0 a escada inteira fica em
+  1,00x (imagem parada); em 2,0 a variação dobra a do preset.
+
+### A prévia que não trava
+
+Duas prévias, cada uma para uma coisa — e a razão veio de medição que inverteu
+o meu diagnóstico:
+
+**Baixar resolução não resolvia o travamento.** A cópia de 480p já decodifica
+122x mais rápido que o tempo real; a 240p vai a 150x. Resolução nunca foi o
+gargalo. O que trava é o **pulo**: tocar a edição sobre o arquivo da fonte é
+uma busca por bloco (~55 ms cada), e o corte de silêncio produz um bloco a
+cada poucos segundos. Tranco, tranco, tranco.
+
+A cura é **renderizar a edição**: um arquivo linear, com zero buscas. Custa
+7,5 s para 38 s de vídeo e entra no clique único. É essa que você assiste — e
+como o zoom e a legenda já vêm queimados, **o que você vê é o que vai baixar**.
+
+Quando você edita, ela envelhece e se refaz sozinha depois de uns segundos
+parado; enquanto isso o player cai na cópia leve da fonte, que acompanha na
+hora. O chip no canto diz qual das duas está tocando.
+
+### A cópia leve da fonte
 
 Tocar um arquivo de 2 GB direto no navegador engasga. Na primeira análise o
 editor faz uma **cópia leve** da fonte e é ela que toca — o mesmo truque do
@@ -976,6 +1007,45 @@ se ele não existir, o app cai para o flash mais próximo). A chave é colada
 **uma vez** e fica guardada no banco local — fora da pasta do programa, então
 sobrevive a atualização e reinstalação. Quem preferir não ter chave em disco
 usa a variável de ambiente `EDITOR_GEMINI_KEY` no `iniciar.bat`.
+
+### A IA também corta a COPY
+
+Além de achar a tentativa refeita, a IA lê o que você falou como **diretor de
+criação** e tira o que atrapalha: redundância (já disse com outras palavras),
+preâmbulo ("então, olha, deixa eu te falar"), auto-comentário ("não sei se
+ficou claro"), divagação que não volta, e final duplo.
+
+**Mas quem decide se dá para cortar é o áudio, não a IA.** Medido antes de
+escrever a regra: dentro de uma frase corrida, 4 de 5 pontos não têm vale
+nenhum onde esconder a emenda, e a costura salta até 6 dB. Na fronteira de
+frase o vale tem 250 ms e o salto é 0,0 dB. Então a regra não é "palavra ×
+frase" — é **tem respiro ou não tem**:
+
+| | tem vale? | emenda |
+|---|---|---|
+| 1 palavra no meio da frase | 4 de 5 pontos: nenhum | até 6,1 dB |
+| frase inteira na pausa | 250 ms | 0,0 dB |
+| muleta cercada de micro-pausa | 210 ms | 0,0 dB |
+
+Toda proposta de corte de copy passa por esse veto. Sem vale nas duas bordas,
+ela é **recusada com o motivo na tela** ("não tem respiro aqui — cortar no
+meio da fala corrida sai picotado").
+
+Mais três travas: o **gancho é intocável** (os primeiros 8 s, ou 15% do vídeo
+se ele for curto), o copy não passa de **25% do vídeo** (o resto é só o que
+você mandou), e cada emenda de copy **força troca de enquadramento** — porque
+o som emenda perfeito mas a imagem pula, e é jump cut de cabeça falante.
+
+Tudo isso aparece em **"Saiu sozinho"** com o texto e o motivo, e um clique
+traz de volta.
+
+### Qual modelo usar
+
+A diferença de preço entre os modelos é de **centavos por vídeo** (um vídeo de
+2 min custa R$ 0,018 no Flash contra R$ 0,053 no Pro), então escolher por
+preço é bobagem. Na aba IA, o botão **Comparar modelos neste vídeo** roda os
+dois no *seu* vídeo e mostra lado a lado o que cada um quis cortar, com o
+motivo. Você decide olhando.
 
 ### O botão "Ler o roteiro" (opcional, além dos cortes)
 

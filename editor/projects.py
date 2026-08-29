@@ -478,7 +478,8 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     ctx.progress(0.955, "o vídeo NÃO sai da máquina — vai só o texto")
     try:
         saida = cortes_ia.decidir(chave, db.get_setting("gemini_model", "") or "",
-                                  words, claps, whistles)
+                                  words, claps, whistles,
+                                  env=project.envelope())
     except gemini.ErroDaIA as exc:
         ctx.progress(0.96, f"IA indisponível ({exc}); a regra do programa "
                            f"decide sozinha desta vez")
@@ -607,6 +608,14 @@ def auto_edit(project: Project, ctx) -> dict:
     fps = project.info.fps if project.info else None
     old_tl = Timeline(plan.active_clips, fps)
     travados = _enquadramentos_travados(plan.clips)
+    # marca os blocos cuja ENTRADA nasceu de um corte de copy: o zoom vai
+    # abrir cena ali de propósito, para a troca de enquadramento disfarçar o
+    # jump cut. Sem isso o som emenda perfeito e a cabeça pula na imagem.
+    fins_de_copy = [float(t["end"]) for t in takes
+                    if t.get("source") == "ia_copy" and not t.get("restored")]
+    for c in result["clips"]:
+        c.copy_seam = any(abs(c.src_start - f) < 0.35 for f in fins_de_copy)
+
     plan.clips = result["clips"]
     if not plan.clips:
         # Vídeo sem fala transcritível (b-roll, microfone mudo) — ou um teste
@@ -686,6 +695,36 @@ def auto_edit(project: Project, ctx) -> dict:
     }
 
 
+PREVIA_ESCALA = "240"      # lado maior da prévia renderizada
+PREVIA_CRF = 32
+
+
+def previa_da_edicao(project: Project, ctx) -> dict:
+    """Renderiza a EDIÇÃO em 240p — a prévia que toca sem tranco nenhum.
+
+    Medido, e o resultado inverteu o diagnóstico: baixar a resolução da cópia
+    da FONTE não resolvia o travamento. A 480p ela já decodifica 122x mais
+    rápido que o tempo real; a 240p vai a 150x. Resolução nunca foi o gargalo.
+
+    O que trava é o PULO. Tocar a edição sobre o arquivo da fonte é uma busca
+    por bloco (~55 ms cada), e um corte de silêncio produz um bloco a cada
+    poucos segundos: tranco, tranco, tranco.
+
+    Renderizar a edição já montada resolve por construção — o arquivo é
+    LINEAR, então são ZERO buscas. Custa 7,5 s para 38 s de vídeo (5x o tempo
+    real) e cabe folgado num pipeline que já gasta minutos transcrevendo. De
+    quebra o zoom e a legenda vêm queimados: o que ele vê é, ao pixel, o que
+    vai baixar.
+    """
+    ctx.stage("previa", "montando a prévia que toca liso")
+    return export(project, ctx, {
+        "filename": "previa-edicao.mp4", "restart": True,
+        "export_override": {"scale": PREVIA_ESCALA, "crf": PREVIA_CRF,
+                            "preset": "ultrafast", "codec": "h264",
+                            "audio_bitrate": "96k"},
+    })
+
+
 def one_click(project: Project, ctx) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
@@ -694,17 +733,23 @@ def one_click(project: Project, ctx) -> dict:
     decidido e a prévia leve gerada. Editar é retoque, não trabalho.
     """
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.72, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.72, 0.86, lambda c: auto_edit(project, c))
-    # a prévia leve entra no pacote: sem ela o player abre engasgando na
-    # fonte pesada, e a primeira impressão é a que ele reclamou
+    a = _scoped(ctx, 0.0, 0.62, lambda c: analyze(project, c))
+    b = _scoped(ctx, 0.62, 0.74, lambda c: auto_edit(project, c))
+    # a cópia leve da FONTE serve para arrastar a agulha e raspar a timeline
     try:
-        p = _scoped(ctx, 0.86, 1.0, lambda c: build_proxy_job(project, c))
+        p = _scoped(ctx, 0.74, 0.82, lambda c: build_proxy_job(project, c))
     except Exception as exc:  # noqa: BLE001 — sem proxy ainda dá para editar
-        ctx.progress(1.0, f"prévia leve falhou ({exc}); tocando a fonte")
+        ctx.progress(0.82, f"cópia leve falhou ({exc}); usando a fonte")
         p = {"ok": False}
+    # e a EDIÇÃO renderizada é o que ele assiste: linear, sem pulo, com zoom
+    # e legenda queimados — igual ao arquivo final
+    try:
+        v = _scoped(ctx, 0.82, 1.0, lambda c: previa_da_edicao(project, c))
+    except Exception as exc:  # noqa: BLE001
+        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
+        v = {"ok": False}
     project.set_status("pronto")
-    return {"analysis": a, "edit": b, "proxy": p}
+    return {"analysis": a, "edit": b, "proxy": p, "previa": v}
 
 
 class _ScopedCtx:

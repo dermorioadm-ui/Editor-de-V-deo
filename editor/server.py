@@ -1718,6 +1718,47 @@ def api_ia_plan(pid: str, payload: dict = Body(...)) -> dict:
                                                        com_anexos=com_anexos))
 
 
+@app.post("/api/projects/{pid}/ai/comparar")
+def api_ia_comparar(pid: str, payload: dict = Body(default={})) -> dict:
+    """Roda DOIS modelos no MESMO vídeo e devolve as duas listas.
+
+    Escolher modelo por opinião é chute; por preço, bobagem (a diferença é de
+    centavos por vídeo). O jeito honesto é rodar os dois no vídeo DELE e
+    olhar. O teste inteiro custa menos que dez centavos.
+    """
+    project = _project(pid)
+    _chave_ia()
+    from .ai import cortes as cortes_ia, gemini
+
+    modelos = payload.get("modelos") or ["gemini-3.7-flash", "gemini-3.1-pro"]
+    words = project.analysis.get("words") or []
+    if not words:
+        raise HTTPException(400, "rode a edição antes: sem transcrição não há "
+                                 "o que comparar")
+    claps = [c for c in project.analysis.get("claps", []) if c.get("enabled")]
+    ass = [a for a in project.analysis.get("whistles", [])
+           if a.get("enabled", True)]
+    env = project.envelope()
+    saida = []
+    for m in modelos[:3]:
+        try:
+            r = cortes_ia.decidir(_chave_ia(), str(m), words, claps, ass, env=env)
+            fora = sum(t["end"] - t["start"] for t in r["takes"])
+            saida.append({
+                "modelo": r.get("modelo", m), "ok": True,
+                "cortes": [{"texto": t["text"][:110], "motivo": t["reason"],
+                            "tipo": "copy" if t["source"] == "ia_copy" else "refeito",
+                            "start": t["start"], "end": t["end"]}
+                           for t in r["takes"]],
+                "segundos_fora": round(fora, 1),
+                "recusados": r.get("recusados", []),
+                "leitura": r.get("leitura", ""),
+            })
+        except gemini.ErroDaIA as exc:
+            saida.append({"modelo": m, "ok": False, "erro": str(exc)})
+    return {"ok": True, "resultados": saida}
+
+
 @app.post("/api/projects/{pid}/ai/apply")
 def api_ia_apply(pid: str, payload: dict = Body(...)) -> dict:
     """Aplica o que a IA sugeriu — depois de o usuário ver e concordar."""

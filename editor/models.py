@@ -82,6 +82,10 @@ class Clip:
     zoom: float = 1.0               # enquadramento (recorte concêntrico no rosto)
     zoom_locked: bool = False       # travado: o recálculo automático não mexe
     emphasis: str = ""              # "", "aberto" ou "fechado" — só ESCOLHE
+    # a borda de entrada nasceu de um corte de COPY (a IA tirou uma ideia
+    # inteira daqui). O áudio emenda limpo, mas a IMAGEM pula: é jump cut de
+    # cabeça falante. Por isso este bloco força troca de enquadramento.
+    copy_seam: bool = False
     section_source: str = ""        # "" (regra), "ia" ou "usuario"
     emphasis_source: str = ""
     label: str = ""

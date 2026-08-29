@@ -52,8 +52,9 @@ export const api = {
     post<Job>(`/api/projects/${id}/oneclick`, { preset }),
   exportProject: (id: string, options: any) =>
     post<Job>(`/api/projects/${id}/export`, options),
-  preview: (id: string, scale = '480') =>
-    post<Job>(`/api/projects/${id}/preview`, { scale }),
+  preview: (id: string, opts: { scale?: string; crf?: number } = {}) =>
+    post<Job>(`/api/projects/${id}/preview`,
+      { scale: opts.scale ?? '240', crf: opts.crf ?? 32 }),
   calibrateDeesser: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/audio/calibrate-deesser`, payload),
   validate: (id: string, output?: string) =>
@@ -193,6 +194,8 @@ export const api = {
   testAi: () => post<any>('/api/ai/test'),
   aiPlan: (id: string, anexos = true) =>
     post<Job>(`/api/projects/${id}/ai/plan`, { anexos }),
+  compararModelos: (id: string, modelos: string[]) =>
+    post<any>(`/api/projects/${id}/ai/comparar`, { modelos }),
   applyAiPlan: (id: string, plano: any) =>
     post<any>(`/api/projects/${id}/ai/apply`, { plano }),
 

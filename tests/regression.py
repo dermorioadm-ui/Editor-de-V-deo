@@ -297,6 +297,8 @@ def main() -> int:
     testar_ia_decide_cortes()
     testar_comandos_falados()
     testar_achados_da_revisao()
+    testar_corte_de_copy()
+    testar_controles_antes_de_gerar()
     testar_presets_atualizam()
 
     print()
@@ -1620,7 +1622,10 @@ def testar_ia_decide_cortes() -> None:
     """A IA decide O QUE sai, por faixa de palavras — e toda bobagem é barrada."""
     from editor.ai.cortes import MAX_REMOCAO, aplicar, montar_pedido
 
-    palavras = [{"start": i * 1.0, "end": i * 1.0 + 0.6,
+    # espaçamento de fala CORRIDA (0,05 s entre palavras). Antes eram 0,4 s,
+    # que é pausa de verdade — e com a regra nova de não fundir através de
+    # pausa, o teste passava a medir outra coisa.
+    palavras = [{"start": round(i * 0.45, 3), "end": round(i * 0.45 + 0.40, 3),
                  "text": f"p{i}", "id": i} for i in range(20)]
 
     # 1) o pedido carrega os marcadores NO LUGAR onde aconteceram
@@ -1629,12 +1634,21 @@ def testar_ia_decide_cortes() -> None:
         claps=[{"time": 7.5, "enabled": True}],
         whistles=[{"time": 3.5, "enabled": True}])
     linhas = pedido.splitlines()
-    i_assobio = next(i for i, ln in enumerate(linhas) if "[ASSOBIO]" in ln)
-    i_palma = next(i for i, ln in enumerate(linhas) if "[PALMA]" in ln)
-    check("4 |" in linhas[i_assobio + 1],
-          "o assobio aparece antes da palavra 4, onde ele aconteceu")
-    check("8 |" in linhas[i_palma + 1],
-          "a palma aparece antes da palavra 8")
+
+    def entre(marca: str) -> tuple[int, int]:
+        """Entre quais palavras o marcador caiu, ignorando linhas de pausa."""
+        i = next(k for k, ln in enumerate(linhas) if marca in ln)
+        antes = [int(ln.split("|")[0]) for ln in linhas[:i] if "|" in ln]
+        depois = [int(ln.split("|")[0]) for ln in linhas[i:] if "|" in ln]
+        return (antes[-1] if antes else -1, depois[0] if depois else -1)
+
+    # palavras a cada 0,45 s: o assobio dos 3,5 s cai na palavra 7
+    # ([3,15–3,55]) e é anunciado antes da 8 (que começa em 3,60)
+    check(entre("[ASSOBIO]") == (7, 8),
+          f"o assobio cai no instante em que aconteceu ({entre('[ASSOBIO]')})")
+    # e a palma dos 7,5 s cai na palavra 16 ([7,20–7,60]), antes da 17
+    check(entre("[PALMA]") == (16, 17),
+          f"a palma também ({entre('[PALMA]')})")
     pedido2 = montar_pedido(palavras, [{"time": 7.5, "enabled": False}], [])
     check("[PALMA]" not in pedido2, "palma desligada não vai no pedido")
 
@@ -1649,7 +1663,7 @@ def testar_ia_decide_cortes() -> None:
     check(len(r["takes"]) == 2,
           f"faixas encostadas são fundidas ({len(r['takes'])} takes)")
     t0 = r["takes"][0]
-    check(t0["start"] <= 2.0 and t0["end"] >= 7.6,
+    check(t0["start"] <= 0.95 and t0["end"] >= 3.55,
           f"o take cobre as palavras 2-7 ({t0['start']}-{t0['end']})")
     check("p2" in t0["text"] and t0["reason"], "take leva texto e motivo")
     check(t0["restored"] is False and t0["source"] == "ia",
@@ -1829,6 +1843,143 @@ def testar_achados_da_revisao() -> None:
     final = sorted([deterministico] + novos, key=lambda t: t["start"])
     check(final == [deterministico],
           'IA respondendo "nada a remover" não ressuscita o take do marcador')
+
+
+def testar_corte_de_copy() -> None:
+    """O corte de copy só acontece onde EXISTE respiro para esconder a emenda.
+
+    Medido antes de escrever a regra: dentro de uma frase corrida, 4 de 5
+    pontos não têm vale nenhum e a costura salta até 6 dB. Na fronteira de
+    frase o vale tem 250 ms e o salto é 0,0 dB. Então a regra não é
+    "palavra x frase" — é TEM VALE OU NÃO TEM, e quem decide é o envelope,
+    não a IA.
+    """
+    import numpy as np
+
+    from editor.ai.cortes import GANCHO, MAX_COPY, VALE_MIN, aplicar
+    from editor.audio.envelope import compute_envelope
+    from tests.speech import ESPEAK, SR, say
+
+    if not ESPEAK:
+        print("  --    corte de copy (espeak-ng não instalado)")
+        return
+
+    # trilha: gancho | pausa | ideia A | pausa | ideia B EMENDADA na C
+    partes, marcas, t = [], {}, 0.0
+
+    def sem_silencio(x):
+        """O espeak entrega silêncio nas pontas; aparar é o que faz duas
+        ideias ficarem REALMENTE emendadas, sem vale entre elas."""
+        forte = np.flatnonzero(np.abs(x) > 0.02)
+        return x[forte[0]:forte[-1] + 1] if forte.size else x
+
+    def por(x, nome=None):
+        nonlocal t
+        if nome:
+            marcas[nome] = (t, t + len(x) / SR)
+        partes.append(x)
+        t += len(x) / SR
+
+    def sil(d):
+        nonlocal t
+        partes.append(np.zeros(int(d * SR), dtype=np.float32))
+        t += d
+
+    por(say("presta atenção nisso aqui porque muda tudo agora comigo"), "gancho")
+    sil(0.7)
+    por(say("o preço desse método é muito menor do que você imagina"), "ideiaA")
+    sil(0.7)
+    por(say("e uma coisa que eu preciso muito que você entenda bem"), "meio")
+    sil(0.7)
+    # estas duas saem EMENDADAS: o silêncio das pontas é aparado, então não
+    # existe vale nenhum entre uma e outra
+    por(sem_silencio(say("e eu vou te mostrar exatamente por quê")), "ideiaB")
+    por(sem_silencio(say("olha esse número comigo agora")), "ideiaC")
+    sil(0.7)
+    por(say("por isso clica no link aqui embaixo agora mesmo"), "fim")
+    trilha = np.concatenate(partes)
+    env = compute_envelope(trilha, SR)
+
+    # palavras sintéticas cobrindo cada trecho
+    words, wid = [], 0
+    ids = {}
+    for nome, (a, b) in marcas.items():
+        n = max(2, int((b - a) / 0.35))
+        ids[nome] = []
+        for k in range(n):
+            words.append({"id": wid, "start": round(a + k * (b - a) / n, 3),
+                          "end": round(a + (k + 1) * (b - a) / n - 0.02, 3),
+                          "text": f"{nome}{k}"})
+            ids[nome].append(wid)
+            wid += 1
+
+    def faixa(nome, tipo="copy"):
+        return {"de": ids[nome][0], "ate": ids[nome][-1], "tipo": tipo,
+                "motivo": "teste"}
+
+    # 1) o GANCHO é intocável, mesmo com vale perfeito em volta
+    r = aplicar(words, {"leitura": "", "remover": [faixa("gancho")]}, env=env)
+    check(not r["takes"] and any("gancho" in x["motivo"] for x in r["recusados"]),
+          f"o gancho (primeiros {GANCHO:.0f} s) não é cortado por julgamento")
+
+    # 2) ideia com pausa dos dois lados: PASSA
+    r = aplicar(words, {"leitura": "", "remover": [faixa("ideiaA")]}, env=env)
+    check(len(r["takes"]) == 1 and r["takes"][0]["source"] == "ia_copy",
+          f"ideia cercada de pausa é cortada ({len(r['takes'])})")
+
+    # 3) ideia emendada na seguinte: RECUSADA, com o motivo em português
+    r = aplicar(words, {"leitura": "", "remover": [faixa("ideiaB")]}, env=env)
+    motivos = " | ".join(x["motivo"] for x in r["recusados"])
+    check(not r["takes"] and "respiro" in motivos,
+          f"ideia emendada na seguinte é recusada: {motivos[:70]}")
+
+    # 4) o mesmo trecho como "refeito" (ordem do usuário) NÃO passa pelo veto:
+    #    ali quem mandou cortar foi ele, não a IA
+    r = aplicar(words, {"leitura": "",
+                        "remover": [faixa("ideiaB", tipo="refeito")]}, env=env)
+    check(len(r["takes"]) == 1,
+          "o veto vale só para copy — take refeito é ordem do usuário")
+
+    # 5) teto próprio do copy: pedir o vídeo todo não leva o vídeo todo
+    todas = [faixa(n) for n in ("ideiaA", "meio", "ideiaB", "ideiaC", "fim")]
+    r = aplicar(words, {"leitura": "", "remover": todas}, env=env)
+    palavras_fora = sum(1 for w in words
+                        for t in r["takes"] if t["source"] == "ia_copy"
+                        and t["start"] - 0.05 <= w["start"] <= t["end"] + 0.05)
+    fatia = palavras_fora / len(words)
+    check(fatia <= MAX_COPY + 0.05,
+          f"o copy não passa de {MAX_COPY:.0%} das palavras ({fatia:.0%})")
+    check(any("já tirei" in x["motivo"] for x in r["recusados"]),
+          "e o teto é dito com todas as letras quando morde")
+    check(len(r["takes"]) >= 1,
+          f"mas o que cabia dentro do teto entrou ({len(r['takes'])})")
+
+
+def testar_controles_antes_de_gerar() -> None:
+    """Velocidade e zoom escolhidos ANTES de gerar mudam a saída de verdade."""
+    from editor.config import SpeedParams, ZoomParams
+    from editor.edit.speed import apply_global, suggest_speed
+    from editor.edit.zoom import escada_efetiva
+
+    base = {s: apply_global(suggest_speed(s, 2.6, SpeedParams()), SpeedParams())
+            for s in ("gancho", "explicacao", "cta")}
+    for g in (1.1, 1.2):
+        sp = SpeedParams(global_multiplier=g)
+        for sec, antes in base.items():
+            agora = apply_global(suggest_speed(sec, 2.6, sp), sp)
+            check(agora > antes,
+                  f"+{(g-1)*100:.0f}% acelera {sec} ({antes:.2f}x -> {agora:.2f}x)")
+        check(all(apply_global(suggest_speed(s, 2.6, sp), sp) <= sp.max_speed
+                  for s in base), "e nunca passa do teto de velocidade")
+
+    variacoes = []
+    for i in (0.0, 1.0, 2.0):
+        esc = escada_efetiva(ZoomParams(amplitude=0.14, intensity=i), 1.15)
+        variacoes.append(max(esc) - min(esc))
+    check(variacoes[0] == 0.0, "intensidade 0 deixa o enquadramento parado")
+    check(variacoes[1] < variacoes[2],
+          f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
+          f"{variacoes[2]:.3f})")
 
 
 def testar_presets_atualizam() -> None:

@@ -22,6 +22,8 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
   const [plano, setPlano] = useState<any>(null)
   const [comAnexos, setComAnexos] = useState(true)
   const [relatorio, setRelatorio] = useState<any>(null)
+  const [comparando, setComparando] = useState(false)
+  const [comparacao, setComparacao] = useState<any>(null)
 
   useEffect(() => {
     api.aiConfig().then((c) => { setCfg(c); setModelo(c.modelo || '') })
@@ -149,6 +151,66 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
           Sem internet ou sem chave, a regra do programa decide sozinha — o
           editor nunca trava por causa da IA.
         </p>
+      </section>
+
+      {/* Escolher modelo por opinião é chute e por preço é bobagem: a
+          diferença é de centavos por vídeo. Roda os dois no vídeo DELE. */}
+      <section className="card space-y-3">
+        <h3 className="card-title">Qual modelo corta melhor o SEU vídeo</h3>
+        <p className="text-[13px] text-slate-400">
+          Roda os dois no mesmo vídeo e mostra o que cada um quis cortar, com o
+          motivo. O teste inteiro custa menos de dez centavos — decida olhando,
+          não no escuro.
+        </p>
+        <button className="btn" disabled={!cfg.tem_chave || comparando || !project}
+                onClick={async () => {
+                  setComparando(true)
+                  try {
+                    const r = await api.compararModelos(project!.id,
+                      ['gemini-3.7-flash', 'gemini-3.1-pro'])
+                    setComparacao(r)
+                  } catch (e: any) {
+                    toast('error', 'Não deu para comparar', e.message)
+                  } finally { setComparando(false) }
+                }}>
+          {comparando ? 'rodando os dois…' : 'Comparar modelos neste vídeo'}
+        </button>
+        {comparacao && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {comparacao.resultados.map((r: any) => (
+              <div key={r.modelo} className="card p-2.5 space-y-1.5">
+                <div className="flex items-baseline gap-2">
+                  <b className="text-[13px] text-slate-200">{r.modelo}</b>
+                  {r.ok && (
+                    <span className="text-[11px] text-slate-500">
+                      {r.cortes.length} corte(s) · {r.segundos_fora}s fora
+                    </span>
+                  )}
+                </div>
+                {!r.ok && <p className="text-[12px] text-red-300">{r.erro}</p>}
+                {r.ok && r.cortes.map((c: any, i: number) => (
+                  <div key={i} className="text-[11px] border-t border-line pt-1">
+                    <span className={`chip mr-1 ${c.tipo === 'copy'
+                      ? 'border-sky-800 text-sky-300'
+                      : 'border-amber-800 text-amber-300'}`}>{c.tipo}</span>
+                    <span className="text-slate-500 line-through">{c.texto}</span>
+                    <div className="text-slate-400 mt-0.5">{c.motivo}</div>
+                  </div>
+                ))}
+                {r.ok && (
+                  <button className="btn btn-xs w-full mt-1"
+                          onClick={async () => {
+                            await salvar({ modelo: r.modelo })
+                            toast('ok', `Agora usando ${r.modelo}`,
+                              'Aperte refazer edição para aplicar.')
+                          }}>
+                    usar este
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="card space-y-3">

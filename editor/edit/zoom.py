@@ -164,7 +164,14 @@ def _particionar(main: list[Clip], alvo: float) -> list[list[Clip]]:
         # alvo de 4,5. Fecha-se no corte que chega MAIS PERTO do alvo.
         estourou = (acumulado >= alvo
                     or abs(acumulado - alvo) <= abs(acumulado + clip.out_duration - alvo))
-        if atual and not contiguo and (virou_etapa or estourou):
+        # EMENDA DE COPY: a IA tirou uma ideia inteira daqui. O som emenda
+        # limpo (o corte só passa se houver vale), mas a imagem não: é jump
+        # cut numa cabeça falante, e o pulo se vê. Abrir cena aqui obriga o
+        # enquadramento a mudar, que é o disfarce que o cinema usa desde
+        # sempre. Só vale onde REALMENTE houve corte — num trecho contíguo
+        # não há emenda para disfarçar.
+        emenda_copy = bool(getattr(clip, "copy_seam", False)) and not contiguo
+        if atual and not contiguo and (virou_etapa or estourou or emenda_copy):
             grupos.append(atual)
             atual = []
             acumulado = 0.0

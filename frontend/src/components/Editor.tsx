@@ -39,6 +39,9 @@ export default function Editor() {
   const [presets, setPresets] = useState<any[]>([])
   const [safeZone, setSafeZone] = useState<any>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  // a prévia renderizada nao acompanha edicao ao vivo: marca-se velha e ela
+  // se refaz sozinha, enquanto o player cai na copia leve para nao ficar preso
+  const [previaVelha, setPreviaVelha] = useState(false)
   const [previewBusy, setPreviewBusy] = useState(false)
   const playing = useStore((s) => s.playing)
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
@@ -70,10 +73,32 @@ export default function Editor() {
     if (activeJob.status === 'ok' && activeJob.result?.download) {
       setPreviewUrl(`${activeJob.result.download}?v=${activeJob.id}`)
       setPreviewBusy(false)
-      toast('ok', 'Prévia 480p pronta', 'A exportação final continua em qualidade cheia.')
+      setPreviaVelha(false)
     }
     if (['erro', 'cancelado'].includes(activeJob.status)) setPreviewBusy(false)
   }, [activeJob?.id, activeJob?.status])
+
+  // O clique único já entrega a prévia da edição renderizada: é ela que toca
+  // sem tranco (arquivo linear, zero busca) e com o zoom e a legenda queimados.
+  useEffect(() => {
+    if (activeJob?.kind !== 'clique-unico' || activeJob.status !== 'ok') return
+    const url = activeJob.result?.previa?.download
+    if (url) { setPreviewUrl(`${url}?v=${activeJob.id}`); setPreviaVelha(false) }
+  }, [activeJob?.id, activeJob?.status])
+
+  // Editou? A prévia renderizada ficou velha. Ela se refaz sozinha, depois de
+  // uns segundos parado — refazer a cada clique seria uma fila de renders.
+  useEffect(() => {
+    if (!previewUrl || !previaVelha || !project) return
+    const t = window.setTimeout(async () => {
+      try {
+        setPreviewBusy(true)
+        const job = await api.preview(project.id, { scale: '240', crf: 32 })
+        setState({ activeJob: job })
+      } catch { setPreviewBusy(false) }
+    }, 4000)
+    return () => window.clearTimeout(t)
+  }, [previaVelha, previewUrl, project?.id])
 
   // recarrega quando um job termina
   useEffect(() => {
@@ -86,7 +111,11 @@ export default function Editor() {
     }
   }, [activeJob?.id, activeJob?.status])
 
+  // qualquer mudança na linha do tempo envelhece a prévia renderizada
+  const marcarPreviaVelha = useCallback(() => setPreviaVelha(true), [])
+
   const snapshot = useCallback(() => {
+    marcarPreviaVelha()
     const s = getState()
     if (project?.plan) {
       pushHistory(project.plan, s.removedWordIds,
@@ -429,13 +458,15 @@ export default function Editor() {
                     ? [project.info.display_width || project.info.width,
                        project.info.display_height || project.info.height]
                     : null}
-                  previewUrl={previewUrl}
+                  previewUrl={previaVelha ? null : previewUrl}
+                  previaVelha={previaVelha}
                   proxyUrl={proxyUrl}
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)
                     setPreviewUrl(null)
-                    const job = await api.preview(project.id)
+                    const job = await api.preview(project.id,
+                      { scale: '240', crf: 32 })
                     setState({ activeJob: job })
                   }}
                   safeZone={safeZone?.band?.found

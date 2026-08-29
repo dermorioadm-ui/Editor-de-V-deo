@@ -23,6 +23,10 @@ export default function Home() {
   const [ia, setIa] = useState<any>(null)
   const [chave, setChave] = useState('')
   const [salvandoChave, setSalvandoChave] = useState(false)
+  // Os dois ajustes que decidem o RITMO, e por isso valem ANTES de gerar:
+  // refazer a edição depois custa uma volta inteira do pipeline.
+  const [velocidade, setVelocidade] = useState(1.0)   // multiplicador global
+  const [zoomForca, setZoomForca] = useState(1.0)     // intensidade da escada
   const dropRef = useRef<HTMLDivElement>(null)
 
   const refresh = () => api.projects().then(setProjects).catch(() => {})
@@ -65,6 +69,14 @@ export default function Home() {
     setBusy(true)
     try {
       const project = await api.createProject(sourcePath, '', preset)
+      // grava os ajustes ANTES do clique único: eles mudam a velocidade de
+      // cada bloco e a escada de enquadramento, que nascem dentro dele
+      if (velocidade !== 1.0 || zoomForca !== 1.0) {
+        await api.params(project.id, {
+          speed: { global_multiplier: velocidade },
+          zoom: { intensity: zoomForca },
+        }).catch(() => {})
+      }
       await openProject(project.id, true)
     } catch (e: any) {
       toast('error', 'Não deu para criar o projeto', String(e.message ?? e))
@@ -257,6 +269,38 @@ export default function Home() {
               ))}
             </div>
           </div>
+          <div className="w-44">
+            <label className="label flex justify-between">
+              <span>Velocidade</span>
+              <span className="font-mono text-slate-300">
+                {velocidade === 1 ? 'a da etapa' : `+${((velocidade - 1) * 100).toFixed(0)}%`}
+              </span>
+            </label>
+            <input type="range" min={1} max={1.3} step={0.05} className="w-full"
+                   value={velocidade}
+                   onChange={(e) => setVelocidade(+e.target.value)} />
+            <p className="text-[10px] text-slate-600 leading-tight">
+              multiplica o que cada etapa já pede — 0% deixa só a da etapa
+            </p>
+          </div>
+
+          <div className="w-44">
+            <label className="label flex justify-between">
+              <span>Zoom entre cenas</span>
+              <span className="font-mono text-slate-300">
+                {zoomForca < 0.6 ? 'quase parado'
+                  : zoomForca < 1.05 ? 'do preset'
+                  : zoomForca < 1.6 ? 'marcado' : 'agressivo'}
+              </span>
+            </label>
+            <input type="range" min={0} max={2} step={0.1} className="w-full"
+                   value={zoomForca}
+                   onChange={(e) => setZoomForca(+e.target.value)} />
+            <p className="text-[10px] text-slate-600 leading-tight">
+              o quanto o enquadramento muda a cada corte
+            </p>
+          </div>
+
           <button className="btn btn-primary px-6 py-2.5 text-base ml-auto"
                   disabled={!path || busy || !ffmpegOk}
                   onClick={() => start(path)}>

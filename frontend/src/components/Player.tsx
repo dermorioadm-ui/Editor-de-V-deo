@@ -18,6 +18,10 @@ interface Props {
    *  câmeras: o preview aplica o MESMO recorte concêntrico da exportação,
    *  via transform de CSS — de graça, sem renderizar nada. */
   zoomAnchor?: { x: number; y: number } | null
+  /** A prévia renderizada ficou velha (você editou): o player volta para a
+   *  cópia leve da fonte, que acompanha a edição na hora, enquanto a
+   *  renderizada se refaz em segundo plano. */
+  previaVelha?: boolean
   cues: SubtitleCue[]
   duration: number
   style: any
@@ -36,7 +40,7 @@ interface Props {
  * legenda por cima.
  */
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
-                                sourceSize, zoomAnchor,
+                                sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
                                  proxyUrl }: Props) {
   const video = useRef<HTMLVideoElement>(null)
@@ -348,10 +352,18 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         {linear && (
           <span className="absolute top-1.5 left-1.5 chip border-accent/60
                            text-accent bg-ink-900/80">
-            prévia 480p renderizada
+            o que vai baixar
           </span>
         )}
-        {!linear && proxyUrl && (
+        {!linear && previaVelha && (
+          <span className="absolute top-1.5 left-1.5 chip border-amber-800/70
+                           text-amber-300 bg-ink-900/80"
+                title="Você editou: a prévia final está sendo refeita. Enquanto
+                       isso o player toca a cópia leve, que acompanha na hora.">
+            refazendo a prévia…
+          </span>
+        )}
+        {!linear && !previaVelha && proxyUrl && (
           <span className="absolute top-1.5 left-1.5 chip border-emerald-800/70
                            text-emerald-300 bg-ink-900/80"
                 title="Tocando uma cópia de 480p, feia de propósito, para a edição

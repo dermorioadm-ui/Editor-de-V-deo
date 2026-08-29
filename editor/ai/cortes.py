@@ -30,6 +30,16 @@ MAX_PALAVRAS = 2600      # ~15 min de fala; acima disso o pedido é truncado
 MAX_REMOCAO = 0.85       # a IA nunca remove mais que isto do vídeo
 FOLGA = 0.04             # respiro em volta da palavra, antes do snap
 
+# --- travas só do corte de COPY -----------------------------------------
+# Cortar copy é diferente de cortar tentativa refeita: a fala estava CERTA, e
+# quem julga é a IA. As três travas abaixo saíram de medição, não de opinião.
+MAX_COPY = 0.25          # no máximo um quarto do vídeo sai por julgamento
+VALE_MIN = 0.12          # o corte precisa de 120 ms de vale onde se esconder
+JANELA_VALE = 0.25       # e ele é procurado nesta janela em volta da borda
+GANCHO = 8.0             # os primeiros segundos são intocáveis...
+GANCHO_FRACAO = 0.15     # ...mas nunca mais que isto do vídeo
+PAUSA_FUNDE = 0.30       # acima disto, duas faixas vizinhas são cortes SEPARADOS
+
 INSTRUCAO = """Você é editor de vídeos verticais de anúncio em português do \
 Brasil (VSL e criativo): uma pessoa falando para a câmera, gravado num take \
 só, cheio de tentativas refeitas.
@@ -48,23 +58,51 @@ normalmente conta "1, 2, 3" depois e refaz a frase — a contagem sai junto.
 - [PAUSA Xs] = silêncio longo. O silêncio já é cortado pelo programa; você \
 não precisa se ocupar dele.
 
-Sua tarefa: dizer QUAIS FAIXAS DE PALAVRAS saem do vídeo final. Remova:
+Sua tarefa: dizer QUAIS FAIXAS DE PALAVRAS saem do vídeo final, em duas
+categorias diferentes.
+
+=== tipo "refeito" — o que deu errado na gravação ===
 1. Toda tentativa que foi refeita — fica sempre a ÚLTIMA versão completa.
 2. Falsos começos ("então... então hoje eu vou") — sai o tropeço, fica a frase.
 3. Contagens e vinhetas de gravação ("1, 2, 3", "gravando", "de novo").
-4. Muletas ISOLADAS que não carregam sentido ("éé", "tipo assim" solto) — só
-   quando removê-las não deixa a frase manca.
+4. Muletas ISOLADAS que não carregam sentido ("éé", "tipo assim" solto).
 
-NUNCA remova:
-- conteúdo que só aparece uma vez, mesmo que a dicção não esteja perfeita;
-- um trecho que termina em [ASSOBIO];
-- uma palavra do meio de uma frase que vai ficar.
+=== tipo "copy" — o que foi dito certo mas ATRAPALHA o anúncio ===
+Aqui você é diretor de criação, não revisor. Um anúncio perde a pessoa em
+segundos: tudo que não empurra a venda para frente está roubando tempo do que
+empurra. Corte:
+
+5. REDUNDÂNCIA: ele já disse isso, com outras palavras. Fica a versão mais
+   forte — normalmente a mais curta e concreta.
+6. PREÂMBULO: "então, olha, deixa eu te falar uma coisa", "antes de começar
+   eu queria dizer". A frase de verdade começa depois disso.
+7. AUTO-COMENTÁRIO: "não sei se ficou claro", "deixa eu explicar melhor",
+   "voltando aqui", "como eu tinha falado".
+8. DIVAGAÇÃO: um assunto que abre e não volta, e que ninguém sentiria falta.
+9. FINAL DUPLO: ele fecha duas ou três vezes. Fica o fechamento mais forte.
+
+NUNCA remova, em nenhuma das duas categorias:
+- conteúdo que aparece UMA VEZ SÓ, mesmo com dicção imperfeita;
+- número, preço, prazo, garantia, prova ou nome de produto;
+- os primeiros 8 segundos (o gancho é o que segura a pessoa);
+- a chamada para ação;
+- um trecho que termina em [OK] ou [ASSOBIO];
+- pedaço do MEIO de uma frase que vai ficar.
+
+Sobre o tipo "copy", duas regras que valem mais que sua vontade de melhorar:
+- a unidade é a IDEIA INTEIRA. Marque da primeira à última palavra do
+  pensamento, nunca meia frase. Meia frase soa picotado e o programa vai
+  recusar.
+- seja PARCIMONIOSO. Um anúncio bom não é o mais curto: é o que não tem
+  gordura. Se você não souber dizer em uma frase por que aquilo atrapalha,
+  deixe.
 
 Na dúvida entre tirar e deixar: DEIXE. Errar deixando custa um clique do
 usuário; errar tirando apaga fala que não volta.
 
 Responda somente o JSON do esquema. Cada faixa: "de" e "ate" são índices de
-palavra INCLUSIVOS, e "motivo" tem no máximo 12 palavras."""
+palavra INCLUSIVOS, "tipo" é "refeito" ou "copy", e "motivo" tem no máximo
+12 palavras e explica para o usuário, não para você."""
 
 ESQUEMA = {
     "type": "OBJECT",
@@ -76,10 +114,11 @@ ESQUEMA = {
             "properties": {
                 "de": {"type": "INTEGER"},
                 "ate": {"type": "INTEGER"},
+                "tipo": {"type": "STRING", "enum": ["refeito", "copy"]},
                 "motivo": {"type": "STRING"},
             },
-            "required": ["de", "ate", "motivo"],
-            "propertyOrdering": ["de", "ate", "motivo"],
+            "required": ["de", "ate", "tipo", "motivo"],
+            "propertyOrdering": ["de", "ate", "tipo", "motivo"],
         }},
     },
     "required": ["leitura", "remover"],
@@ -121,9 +160,30 @@ def montar_pedido(words: list[dict], claps: list[dict],
     return "\n".join(linhas)
 
 
-def _faixas_validas(resposta: dict, n: int) -> tuple[list[dict], list[dict]]:
-    """Valida e FUNDE as faixas. O que não presta volta com o motivo."""
-    boas: list[tuple[int, int, str]] = []
+def _faixas_validas(resposta: dict, n: int,
+                    words: list[dict] | None = None
+                    ) -> tuple[list[dict], list[dict]]:
+    """Valida e FUNDE as faixas. O que não presta volta com o motivo.
+
+    O TIPO viaja junto do começo ao fim. Ele se perdia aqui, e a consequência
+    era grave e silenciosa: sem tipo, nenhum corte era tratado como copy, e
+    então o gancho podia ser cortado, o veto acústico nunca rodava e o teto
+    de 25% nunca contava. Só a regressão pegou.
+
+    E faixas encostadas de tipos DIFERENTES não se fundem: um "refeito" é
+    ordem do usuário e não passa por veto; um "copy" é julgamento e passa.
+    Fundir os dois faria um herdar as regras do outro.
+
+    Nem se funde ATRAVÉS DE UMA PAUSA. Duas ideias separadas por respiro são
+    dois cortes, mesmo sendo vizinhas na numeração das palavras. Fundir fazia
+    cinco ideias virarem um bloco só — que estourava o teto de copy e era
+    recusado INTEIRO, em vez de o teto pegar o que coubesse.
+    """
+    def emendadas(i: int, j: int) -> bool:
+        if not words or not (0 <= i < len(words) and 0 <= j < len(words)):
+            return True
+        return float(words[j]["start"]) - float(words[i]["end"]) < PAUSA_FUNDE
+    boas: list[tuple[int, int, str, str]] = []
     recusadas: list[dict] = []
     for item in (resposta.get("remover") or []):
         try:
@@ -131,35 +191,63 @@ def _faixas_validas(resposta: dict, n: int) -> tuple[list[dict], list[dict]]:
         except (TypeError, ValueError):
             continue
         motivo = str(item.get("motivo", ""))[:120]
+        tipo = "copy" if str(item.get("tipo", "")).strip() == "copy" else "refeito"
         if de > ate:
             de, ate = ate, de
         if de < 0 or ate >= n:
             recusadas.append({"o_que": f"palavras {de}-{ate}",
                               "motivo": "essa faixa não existe na transcrição"})
             continue
-        boas.append((de, ate, motivo))
+        boas.append((de, ate, motivo, tipo))
     boas.sort()
     fundidas: list[list] = []
-    for de, ate, motivo in boas:
-        if fundidas and de <= fundidas[-1][1] + 1:
+    for de, ate, motivo, tipo in boas:
+        if (fundidas and de <= fundidas[-1][1] + 1 and fundidas[-1][3] == tipo
+                and emendadas(fundidas[-1][1], de)):
             fundidas[-1][1] = max(fundidas[-1][1], ate)
             if motivo and motivo not in fundidas[-1][2]:
                 fundidas[-1][2] = f"{fundidas[-1][2]}; {motivo}"[:160]
         else:
-            fundidas.append([de, ate, motivo])
-    return ([{"de": f[0], "ate": f[1], "motivo": f[2]} for f in fundidas],
-            recusadas)
+            fundidas.append([de, ate, motivo, tipo])
+    return ([{"de": f[0], "ate": f[1], "motivo": f[2], "tipo": f[3]}
+             for f in fundidas], recusadas)
 
 
-def aplicar(words: list[dict], resposta: dict) -> dict:
+def _tem_vale(env, t: float) -> float:
+    """Existe respiro em volta deste instante? Devolve a duração do maior."""
+    if env is None:
+        return 9.9              # sem envelope, não há como vetar
+    runs = env.silence_runs(max(0.0, t - JANELA_VALE),
+                            min(env.duration, t + JANELA_VALE),
+                            min_duration=0.02)
+    return max((r.duration for r in runs), default=0.0)
+
+
+def aplicar(words: list[dict], resposta: dict, env=None,
+            duracao: float = 0.0) -> dict:
     """Faixas de palavras -> takes descartados, com todas as travas.
 
     Cada faixa vira um take na lista "Saiu sozinho": restaurável com um
     clique, com o texto riscado e o motivo que a IA deu. A borda em tempo é
     provisória de propósito — quem a encosta no vale é o snap de sempre.
+
+    O VETO ACÚSTICO do corte de copy mora aqui. Medido: tirar uma ideia no
+    meio de fala corrida não tem onde esconder a emenda — em 4 de 5 pontos
+    dentro de uma frase fluente não existe vale nenhum, e a costura salta até
+    6 dB. Na fronteira de frase o vale tem 250 ms e o salto é 0,0 dB. Então a
+    regra não é "palavra ou frase": é TEM VALE OU NÃO TEM. Uma palavra pode
+    sair, se estiver cercada de micro-pausa; uma frase não pode, se o falante
+    emendou na seguinte.
     """
     n = len(words)
-    faixas, recusadas = _faixas_validas(resposta, n)
+    faixas, recusadas = _faixas_validas(resposta, n, words)
+    # O gancho é medido em segundos, mas 8 s fixos comeriam 60% de um criativo
+    # de 13 s — a proteção viraria uma mordaça. Vale o MENOR entre os 8 s e
+    # 15% do vídeo: num criativo de 40 s protege 6 s, numa VSL de 5 min
+    # protege os 8 s de sempre.
+    if duracao <= 0:
+        duracao = float(words[-1]["end"]) if words else 0.0
+    gancho = min(GANCHO, duracao * GANCHO_FRACAO) if duracao > 0 else GANCHO
 
     removidas = sum(f["ate"] - f["de"] + 1 for f in faixas)
     if n and removidas / n > MAX_REMOCAO:
@@ -171,9 +259,40 @@ def aplicar(words: list[dict], resposta: dict) -> dict:
             "leitura": str(resposta.get("leitura", ""))[:300], "ok": False}
 
     takes: list[dict] = []
+    gasto_copy = 0
     for f in faixas:
         bloco = words[f["de"]:f["ate"] + 1]
         texto = " ".join(str(w.get("text", "")).strip() for w in bloco)
+        t0, t1 = float(bloco[0]["start"]), float(bloco[-1]["end"])
+        copy = f.get("tipo") == "copy"
+
+        if copy:
+            # 1) o gancho não se toca
+            if t0 < gancho:
+                recusadas.append({
+                    "o_que": texto[:40],
+                    "motivo": f"está nos primeiros {gancho:.1f} s — o gancho é "
+                              f"o que segura a pessoa, não corto"})
+                continue
+            # 2) as DUAS bordas precisam de vale
+            va, vb = _tem_vale(env, t0), _tem_vale(env, t1)
+            if min(va, vb) < VALE_MIN:
+                recusadas.append({
+                    "o_que": texto[:40],
+                    "motivo": f"não tem respiro aqui ({min(va, vb)*1000:.0f} ms; "
+                              f"preciso de {VALE_MIN*1000:.0f}). Cortar no meio "
+                              f"da fala corrida sai picotado"})
+                continue
+            # 3) teto próprio, bem mais apertado que o do take
+            n_bloco = f["ate"] - f["de"] + 1
+            if n and (gasto_copy + n_bloco) / n > MAX_COPY:
+                recusadas.append({
+                    "o_que": texto[:40],
+                    "motivo": f"já tirei {MAX_COPY:.0%} do vídeo por julgamento "
+                              f"de copy; daqui em diante só o que você mandou"})
+                continue
+            gasto_copy += n_bloco
+
         takes.append({
             "id": f"ia_{uuid.uuid4().hex[:8]}",
             "start": round(max(0.0, float(bloco[0]["start"]) - FOLGA), 3),
@@ -181,8 +300,9 @@ def aplicar(words: list[dict], resposta: dict) -> dict:
             "clap_id": None,
             "clap_time": None,
             "text": texto[:400],
-            "reason": f["motivo"] or "a IA marcou como refeito",
-            "source": "ia",
+            "reason": f["motivo"] or ("a IA achou que atrapalha" if copy
+                                      else "a IA marcou como refeito"),
+            "source": "ia_copy" if copy else "ia",
             "restored": False,
         })
     return {"takes": takes, "recusados": recusadas,
@@ -190,7 +310,7 @@ def aplicar(words: list[dict], resposta: dict) -> dict:
 
 
 def decidir(chave: str, modelo: str, words: list[dict], claps: list[dict],
-            whistles: list[dict]) -> dict:
+            whistles: list[dict], env=None) -> dict:
     """Uma chamada. Transcrição vai, faixas voltam, travas aplicam."""
     if not words:
         raise gemini.ErroDaIA("sem transcrição não há o que decidir")
@@ -200,6 +320,7 @@ def decidir(chave: str, modelo: str, words: list[dict], claps: list[dict],
         montar_pedido(words, claps, whistles),
         ESQUEMA, temperatura=0.1,
         maximo=min(escolhido.get("saida") or 8192, 8192))
-    saida = aplicar(words, resposta)
+    saida = aplicar(words, resposta, env=env,
+                    duracao=float(words[-1]["end"]) if words else 0.0)
     saida["modelo"] = escolhido["id"]
     return saida
