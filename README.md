@@ -290,6 +290,29 @@ arquivo de 2 GB nunca sai do lugar.
 ## 4. Abrir o editor
 
 **Windows:** duplo clique em **`iniciar.bat`**.
+
+### Atualizar (e por que o disco não enche mais)
+
+Baixe o ZIP novo, extraia **por cima** e rode o `instalar.bat`. Ele não baixa
+nada de novo: o ambiente Python é **um só**, guardado em
+`AppData\Local\Editor de Vídeo\venv`, fora da pasta do programa.
+
+Isso é conserto de um erro de projeto real. Antes o ambiente era criado
+**dentro** de cada pasta extraída — quem atualizava dez vezes ficava com dez
+cópias de ~3 GB paradas no disco, e a instalação seguinte morria no meio do
+download com `No space left on device`. Sem explicação nenhuma na tela.
+
+Agora o instalador **confere o espaço antes de começar** e, se faltar, manda
+você rodar o **`limpar.bat`** — que acha as cópias antigas, mostra o tamanho
+de cada uma e apaga só depois de você confirmar.
+
+O `limpar.bat` tem duas travas: ele só considera uma pasta se ela **for
+mesmo uma cópia deste editor** (tem `requirements.txt` e a pasta `editor/`),
+então o ambiente de qualquer outro projeto Python seu fica intocado; e nunca
+apaga o ambiente compartilhado, que é o que faz o programa rodar. **Seus
+projetos e vídeos não moram ali** — ficam em `Vídeos\Editor de Vídeo` — e a
+sua chave do Gemini também não é tocada.
+
 **macOS:** duplo clique em **`iniciar.command`**.
 
 Para abrir também do celular (mesma rede): **`iniciar-rede.bat`**. Ele mostra
