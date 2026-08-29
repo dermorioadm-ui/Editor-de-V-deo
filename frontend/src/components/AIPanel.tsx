@@ -78,6 +78,11 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
 
       <section className="card space-y-3">
         <h3 className="card-title">Chave do Gemini</h3>
+        <p className="text-[12px] text-slate-400">
+          Cola <b>uma vez</b> e ela fica guardada — no banco local do editor,
+          fora da pasta do programa, então sobrevive a atualização e
+          reinstalação. Nunca sai por nenhuma rota da API.
+        </p>
         {cfg.tem_chave ? (
           <div className="flex items-center gap-2 text-sm">
             <span className="text-emerald-400">chave guardada</span>
@@ -123,6 +128,27 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
             {' · '}{teste.disponiveis?.length} modelo(s) disponíveis
           </p>
         )}
+      </section>
+
+      <section className="card space-y-3">
+        <h3 className="card-title">A IA decide os cortes</h3>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-0.5" checked={cfg.cortes !== false}
+                 onChange={(e) => salvar({ cortes: e.target.checked })} />
+          <span>
+            <b>Automático no EDITAR.</b> Assim que a transcrição sai, a IA lê a
+            fala inteira — com as palmas e assobios marcados no lugar — e decide
+            quais trechos saem: tentativa refeita, falso começo, contagem,
+            muleta. Cada decisão vira um item em <b>"Saiu sozinho"</b>, com o
+            motivo e o botão de voltar.
+          </span>
+        </label>
+        <p className="text-[11px] text-slate-500">
+          A borda do corte continua sendo do programa: a IA diz <i>o que</i> sai
+          (por palavra), o encaixe no vale de energia diz <i>onde</i> exatamente.
+          Sem internet ou sem chave, a regra do programa decide sozinha — o
+          editor nunca trava por causa da IA.
+        </p>
       </section>
 
       <section className="card space-y-3">

@@ -5,6 +5,7 @@ const STAGE_LABEL: Record<string, string> = {
   audio: 'extraindo áudio',
   envelope: 'analisando o envelope',
   palmas: 'procurando palmas',
+  ia: 'a IA decidindo os cortes',
   transcricao: 'transcrevendo',
   takes: 'aplicando a regra do take',
   cortes: 'propondo cortes',
@@ -12,8 +13,8 @@ const STAGE_LABEL: Record<string, string> = {
   legendas: 'gerando legendas',
   exportando: 'exportando',
 }
-const ORDER = ['audio', 'envelope', 'palmas', 'transcricao', 'takes', 'cortes',
-  'auditoria', 'legendas']
+const ORDER = ['audio', 'envelope', 'palmas', 'transcricao', 'ia', 'takes',
+  'cortes', 'auditoria', 'legendas']
 
 export default function JobBar() {
   const job = useStore((s) => s.activeJob)

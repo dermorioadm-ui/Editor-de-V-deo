@@ -272,7 +272,8 @@ def detect_claps(samples: np.ndarray, sample_rate: int, env: Envelope,
 
 
 def phrase_start_before(env: Envelope, t: float, words: list | None = None,
-                        pause: float = PHRASE_PAUSE) -> float:
+                        pause: float = PHRASE_PAUSE,
+                        barreiras: list[float] | None = None) -> float:
     """Início da frase que estava em andamento quando a palma veio.
 
     A âncora é a ÚLTIMA PALAVRA dita antes da palma, não a palma. Quem bate
@@ -280,6 +281,12 @@ def phrase_start_before(env: Envelope, t: float, words: list | None = None,
     tomava por fronteira de frase, devolvendo o instante da própria palma e
     descartando um trecho vazio. Ancorando na última palavra, a respirada
     deixa de existir para a busca.
+
+    ``barreiras`` são pontos que a busca NÃO PODE atravessar: um assobio (que
+    aprovou tudo o que veio antes) e as outras palmas. Sem isso, quem fala
+    sem pausa longa — medido num teste em que o usuário contou números
+    seguidos — via o take da palma voltar 120 s e engolir inclusive o trecho
+    que um assobio tinha acabado de validar.
     """
     anchor = t
     if words:
@@ -287,10 +294,14 @@ def phrase_start_before(env: Envelope, t: float, words: list | None = None,
                 if float(w["end"] if isinstance(w, dict) else w.end) <= t + 0.02]
         if ends:
             anchor = max(ends) - 0.01
-    runs = env.silence_runs(max(0.0, anchor - 120.0), anchor, min_duration=pause)
-    if runs:
-        return runs[-1].end
-    return 0.0
+    piso = 0.0
+    for b in (barreiras or []):
+        if b < t - 0.05:
+            piso = max(piso, float(b))
+    runs = env.silence_runs(max(piso, anchor - 120.0), anchor, min_duration=pause)
+    if runs and runs[-1].end >= piso:
+        return max(runs[-1].end, piso)
+    return piso
 
 
 def resume_point_after(env: Envelope, clap_end: float, words: list,
@@ -307,6 +318,7 @@ def resume_point_after(env: Envelope, clap_end: float, words: list,
     """
     limit = clap_end + RESUME_MAX_AFTER_CLAP
     cursor = clap_end
+    contados = 0
     first_word = None       # primeira palavra que já é a refeitura
     for w in words:
         start = float(w["start"] if isinstance(w, dict) else w.start)
@@ -317,8 +329,13 @@ def resume_point_after(env: Envelope, clap_end: float, words: list,
         if start > limit:
             break
         token = "".join(ch for ch in text.lower() if ch.isalnum())
-        if start <= cursor + 0.9 and token in COUNT_TOKENS:
+        # o protocolo é "conte até TRÊS": engole no máximo 3 tokens, dentro de
+        # 4 s da palma. Sem o teto, um vídeo de contagem virava contagem
+        # inteira e o take comia a refeitura.
+        if (start <= cursor + 0.9 and token in COUNT_TOKENS
+                and contados < 3 and start <= clap_end + 4.0):
             cursor = end
+            contados += 1
             continue
         first_word = start
         break
@@ -335,13 +352,25 @@ def resume_point_after(env: Envelope, clap_end: float, words: list,
 
 
 def build_discarded_takes(env: Envelope, claps: list[ClapEvent],
-                          words: list) -> list[DiscardedTake]:
-    """Um take descartado por palma ativa, delimitado pela pausa anterior."""
+                          words: list,
+                          whistles: list | None = None) -> list[DiscardedTake]:
+    """Um take descartado por palma ativa, delimitado pela pausa anterior.
+
+    Assobios e as outras palmas entram como BARREIRA: a palma descarta a
+    tentativa em andamento, nunca o que outro marcador já resolveu.
+    """
+    barreiras = [float(getattr(a, "end", 0.0) if not isinstance(a, dict)
+                       else a.get("end", 0.0))
+                 for a in (whistles or [])
+                 if (a.get("enabled", True) if isinstance(a, dict)
+                     else getattr(a, "enabled", True))]
+    barreiras += [c.end for c in claps if c.enabled]
     takes: list[DiscardedTake] = []
     for clap in claps:
         if not clap.enabled:
             continue
-        start = phrase_start_before(env, clap.start, words)
+        start = phrase_start_before(env, clap.start, words,
+                                    barreiras=barreiras)
         end = resume_point_after(env, clap.end, words)
         if end <= start:
             end = clap.end

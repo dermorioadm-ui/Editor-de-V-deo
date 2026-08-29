@@ -293,6 +293,8 @@ def main() -> int:
     testar_trilha_acompanha_o_corte()
     testar_legenda_da_previa_bate_com_a_exportacao()
     testar_janela_do_sistema()
+    testar_take_nao_atravessa_assobio()
+    testar_ia_decide_cortes()
     testar_presets_atualizam()
 
     print()
@@ -1551,6 +1553,155 @@ def testar_janela_do_sistema() -> None:
     # cancelar não pode virar erro
     check(nativo.escolher.__doc__ and "cancelou" in nativo.escolher.__doc__,
           "cancelar devolve lista vazia, não exceção")
+
+
+def testar_take_nao_atravessa_assobio() -> None:
+    """O teste que o usuário fez na mão: contagem com marcadores intercalados.
+
+    Ele contou "1 2 3", assobiou, "4 5 6", bateu palma, "7 8 9", assobiou...
+    até 30. Resultado real: o take da palma voltou 120 s procurando uma pausa
+    longa que não existia (contagem não tem pausa de 0,7 s) e engoliu inclusive
+    o trecho que o assobio tinha acabado de APROVAR. Dois defeitos:
+
+    1. o assobio validava mas não era barreira para a busca da fronteira;
+    2. a contagem do protocolo ("conte até três") engolia QUALQUER quantidade
+       de números depois da palma — um vídeo de contagem virava contagem toda.
+    """
+    from editor.audio.clap import (ClapEvent, build_discarded_takes,
+                                   phrase_start_before, resume_point_after)
+
+    class EnvFalso:
+        duration = 60.0
+        # contagem contínua: NENHUMA pausa longa em lugar nenhum
+
+        def silence_runs(self, t0, t1, min_duration=0.0):
+            return []
+
+    # palavras: números de 0,5 s a cada 0,7 s, começando em 1,0 s
+    palavras = [{"start": 1.0 + i * 0.7, "end": 1.5 + i * 0.7,
+                 "text": str(i + 1), "id": i} for i in range(30)]
+
+    # assobio terminou em 4,0 s e aprovou tudo até ali; palma veio em 8,0 s
+    inicio = phrase_start_before(EnvFalso(), 8.0, palavras, barreiras=[4.0])
+    check(inicio >= 4.0,
+          f"o take da palma NÃO atravessa o assobio ({inicio:.1f} s >= 4,0 s)")
+    sem_barreira = phrase_start_before(EnvFalso(), 8.0, palavras, barreiras=[])
+    check(sem_barreira == 0.0,
+          f"sem a barreira ele voltava até o zero — era esse o defeito "
+          f"({sem_barreira:.1f} s)")
+
+    # depois da palma vem contagem infinita: engole no máximo o protocolo
+    # (3 tokens / 4 s), nunca a contagem inteira
+    t = resume_point_after(EnvFalso(), 8.0, palavras)
+    check(t <= 12.5,
+          f"a contagem depois da palma é engolida só até o protocolo "
+          f"({t:.1f} s <= 12,5 s; antes ia até o fim do vídeo)")
+
+    # ponta a ponta: duas palmas e um assobio no meio — cada take fica no
+    # seu quarteirão, nenhum atravessa o marcador do vizinho
+    def palma(cid, t):
+        return ClapEvent(id=cid, time=t, start=t - 0.1, end=t + 0.1,
+                         peak_db=-6.0, jump_db=40.0, duration=0.2,
+                         confirmed=True, suspect=False, attack_floor_db=-60.0)
+
+    claps = [palma("c1", 8.0), palma("c2", 16.0)]
+    assobios = [{"end": 4.0, "enabled": True}]
+    takes = build_discarded_takes(EnvFalso(), claps, palavras, whistles=assobios)
+    check(len(takes) == 2 and takes[0].start >= 4.0,
+          f"take 1 começa depois do assobio ({takes[0].start:.1f} s)")
+    check(takes[1].start >= takes[0].end - 0.05,
+          f"take 2 não engole o take 1 ({takes[1].start:.1f} s >= "
+          f"{takes[0].end:.1f} s)")
+
+
+def testar_ia_decide_cortes() -> None:
+    """A IA decide O QUE sai, por faixa de palavras — e toda bobagem é barrada."""
+    from editor.ai.cortes import MAX_REMOCAO, aplicar, montar_pedido
+
+    palavras = [{"start": i * 1.0, "end": i * 1.0 + 0.6,
+                 "text": f"p{i}", "id": i} for i in range(20)]
+
+    # 1) o pedido carrega os marcadores NO LUGAR onde aconteceram
+    pedido = montar_pedido(
+        palavras,
+        claps=[{"time": 7.5, "enabled": True}],
+        whistles=[{"time": 3.5, "enabled": True}])
+    linhas = pedido.splitlines()
+    i_assobio = next(i for i, ln in enumerate(linhas) if "[ASSOBIO]" in ln)
+    i_palma = next(i for i, ln in enumerate(linhas) if "[PALMA]" in ln)
+    check("4 |" in linhas[i_assobio + 1],
+          "o assobio aparece antes da palavra 4, onde ele aconteceu")
+    check("8 |" in linhas[i_palma + 1],
+          "a palma aparece antes da palavra 8")
+    pedido2 = montar_pedido(palavras, [{"time": 7.5, "enabled": False}], [])
+    check("[PALMA]" not in pedido2, "palma desligada não vai no pedido")
+
+    # 2) resposta boa: vira takes restauráveis com motivo, faixas fundidas
+    r = aplicar(palavras, {"leitura": "vende x", "remover": [
+        {"de": 2, "ate": 5, "motivo": "tentativa refeita"},
+        {"de": 6, "ate": 7, "motivo": "contagem"},       # encosta: funde
+        {"de": 15, "ate": 12, "motivo": "invertida de propósito"},
+        {"de": 40, "ate": 45, "motivo": "não existe"},
+    ]})
+    check(r["ok"], "resposta boa é aceita")
+    check(len(r["takes"]) == 2,
+          f"faixas encostadas são fundidas ({len(r['takes'])} takes)")
+    t0 = r["takes"][0]
+    check(t0["start"] <= 2.0 and t0["end"] >= 7.6,
+          f"o take cobre as palavras 2-7 ({t0['start']}-{t0['end']})")
+    check("p2" in t0["text"] and t0["reason"], "take leva texto e motivo")
+    check(t0["restored"] is False and t0["source"] == "ia",
+          "take da IA é restaurável e marcado como dela")
+    check(any("não existe" in x["motivo"] for x in r["recusados"]),
+          "faixa fora da transcrição é recusada com motivo")
+
+    # 3) resposta destrutiva: remover quase tudo NÃO passa
+    r2 = aplicar(palavras, {"leitura": "", "remover": [
+        {"de": 0, "ate": 18, "motivo": "tudo ruim"}]})
+    check(not r2["ok"] and not r2["takes"],
+          f"remover {19/20:.0%} das palavras é recusado inteiro "
+          f"(teto {MAX_REMOCAO:.0%})")
+    check(any("apagar o vídeo" in x["motivo"] for x in r2["recusados"]),
+          "e o motivo diz isso com todas as letras")
+
+    # 4) a análise NUNCA morre por causa da IA: erro vira fallback
+    from editor import projects as svc
+
+    class CtxFalso:
+        msgs: list = []
+
+        def stage(self, *a):
+            pass
+
+        def progress(self, _f, m=""):
+            self.msgs.append(m)
+
+    class ProjFalso:
+        id = "x"
+
+    import editor.ai.cortes as cortes_mod
+    import editor.ai.gemini as gemini_mod
+    import editor.db as db
+    db.set_setting("gemini_api_key", "AIzaSyTESTE-REGRESSAO-000")
+    db.set_setting("ai_cortes", True)
+    original = cortes_mod.decidir
+    try:
+        def explode(*a, **k):
+            raise gemini_mod.ErroDaIA("sem internet")
+        cortes_mod.decidir = explode
+        ctx = CtxFalso()
+        out = svc._cortes_da_ia(ProjFalso(), ctx, palavras, [], [])
+        check(out is not None and out["ok"] is False,
+              "IA fora do ar vira fallback, não exceção")
+        check(any("regra do programa" in m for m in ctx.msgs),
+              "e o usuário fica sabendo no progresso")
+        db.set_setting("ai_cortes", False)
+        check(svc._cortes_da_ia(ProjFalso(), CtxFalso(), palavras, [], []) is None,
+              "com o modo desligado a IA nem é chamada")
+    finally:
+        cortes_mod.decidir = original
+        db.set_setting("gemini_api_key", "")
+        db.set_setting("ai_cortes", True)
 
 
 def testar_presets_atualizam() -> None:

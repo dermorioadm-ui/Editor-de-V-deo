@@ -373,7 +373,22 @@ def analyze(project: Project, ctx) -> dict:
             if (abs(float(old.get("time", -1)) - clap.time) < 0.05
                     and old.get("enabled") is False):
                 clap.enabled = False
-    takes = [t.to_dict() for t in build_discarded_takes(env, claps, words)]
+    takes = [t.to_dict() for t in build_discarded_takes(env, claps, words,
+                                                        whistles=assobios)]
+
+    # A IA DECIDE OS CORTES — automática, sem botão, assim que a transcrição
+    # existe. Quando há chave e o modo está ligado, quem escolhe o que sai é
+    # o modelo lendo a fala inteira (a regra determinística acertava ~75%:
+    # marcador diz ONDE algo aconteceu, não O QUE deve sair). A resposta volta
+    # em faixas de palavras, vira take restaurável, e toda trava continua no
+    # código. Qualquer falha — sem rede, cota, resposta ruim — cai de volta
+    # na regra determinística com o motivo escrito no progresso.
+    relatorio_ia = _cortes_da_ia(project, ctx, words,
+                                 [c.to_dict() for c in claps],
+                                 [a.to_dict() for a in assobios])
+    if relatorio_ia and relatorio_ia.get("ok"):
+        takes = relatorio_ia["takes"]
+
     for take in takes:
         for old in previous.get("takes", []):
             if abs(float(old.get("start", -9)) - take["start"]) < 0.2                     and old.get("restored"):
@@ -397,6 +412,8 @@ def analyze(project: Project, ctx) -> dict:
                      "audit_threshold": env.audit_threshold,
                      "duration": env.duration},
         "manual_removed_word_ids": previous.get("manual_removed_word_ids", []),
+        "ai_cortes": ({k: v for k, v in relatorio_ia.items() if k != "takes"}
+                      if relatorio_ia else None),
         "analyzed_at": time.time(),
     }
     project.save_analysis()
@@ -408,6 +425,42 @@ def analyze(project: Project, ctx) -> dict:
         "fillers": len(fillers), "device": result.get("device", {}),
         "noise_floor": round(env.noise_floor, 2),
     }
+
+
+def _cortes_da_ia(project: Project, ctx, words: list[dict],
+                  claps: list[dict], whistles: list[dict]) -> dict | None:
+    """Chama a IA para decidir os cortes. None = modo desligado ou sem chave.
+
+    NUNCA levanta exceção: a análise não pode morrer porque a internet caiu.
+    Falha vira {"ok": False, "erro": ...} e a regra determinística assume.
+    """
+    from . import db
+    from .ai import cortes as cortes_ia, gemini
+
+    if not db.get_setting("ai_cortes", True):
+        return None
+    chave = gemini.chave_guardada()
+    if not chave:
+        return None
+    ctx.stage("ia", "a IA está lendo o que você falou")
+    ctx.progress(0.955, "o vídeo NÃO sai da máquina — vai só o texto")
+    try:
+        saida = cortes_ia.decidir(chave, db.get_setting("gemini_model", "") or "",
+                                  words, claps, whistles)
+    except gemini.ErroDaIA as exc:
+        ctx.progress(0.96, f"IA indisponível ({exc}); a regra do programa "
+                           f"decide sozinha desta vez")
+        return {"ok": False, "erro": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — a análise sobrevive a tudo
+        ctx.progress(0.96, f"IA falhou ({exc}); a regra do programa decide")
+        return {"ok": False, "erro": str(exc)}
+    if saida.get("ok"):
+        ctx.progress(0.97, f"{saida['modelo']}: {len(saida['takes'])} trecho(s) "
+                           f"para fora — cada um na lista, com motivo e volta")
+    else:
+        motivo = (saida.get("recusados") or [{}])[-1].get("motivo", "resposta ruim")
+        ctx.progress(0.97, f"resposta da IA recusada: {motivo}")
+    return saida
 
 
 def auto_edit(project: Project, ctx) -> dict:
@@ -910,7 +963,7 @@ def plano_da_ia(project: Project, ctx, com_anexos: bool = True) -> dict:
     from . import db
     from .ai import gemini, roteiro
 
-    chave = str(db.get_setting("gemini_api_key", "") or "").strip()
+    chave = gemini.chave_guardada()
     if not chave:
         raise ValueError("sem chave do Gemini")
     plan = project.plan

@@ -5,6 +5,10 @@ cd /d "%~dp0"
 REM Para trocar o modelo de transcricao, tire o REM da linha abaixo:
 REM set EDITOR_WHISPER_MODEL=turbo
 
+REM A chave do Gemini colada na aba IA fica guardada para sempre no banco
+REM local. Se preferir nao ter chave em disco, use a variavel abaixo:
+REM set EDITOR_GEMINI_KEY=sua-chave-aqui
+
 if not exist ".venv\Scripts\python.exe" (
     echo.
     echo  O editor ainda nao foi instalado nesta pasta.

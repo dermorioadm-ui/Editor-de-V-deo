@@ -38,9 +38,28 @@ TENTATIVAS = 4
 ESPERA_MAX = 60.0
 CACHE_MODELOS = 3600.0
 
-# preferência quando o usuário não escolheu — a lista real manda
-PREFERIDOS = ("gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash",
-              "gemini-2.0-flash")
+# preferência quando o usuário não escolheu — a lista real manda.
+# gemini-3.5-flash primeiro por pedido explícito do usuário: é o modelo que
+# ele quer decidindo os cortes. O resto é escada de queda para o dia em que a
+# Google renomear tudo de novo.
+PREFERIDOS = ("gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite",
+              "gemini-2.5-flash", "gemini-2.0-flash")
+
+
+def chave_guardada() -> str:
+    """A chave, de onde quer que ela venha — e ela FICA guardada.
+
+    Ordem: o banco local (colada uma vez na aba IA; o banco mora em
+    Vídeos/Editor de Vídeo, fora da pasta do programa, então sobrevive a
+    reinstalação e atualização) e, por cima dele, a variável de ambiente
+    EDITOR_GEMINI_KEY para quem prefere não ter chave em disco nenhum.
+    """
+    import os
+
+    from .. import db
+
+    return (os.environ.get("EDITOR_GEMINI_KEY", "").strip()
+            or str(db.get_setting("gemini_api_key", "") or "").strip())
 
 _modelos: dict[str, Any] = {"quando": 0.0, "lista": []}
 

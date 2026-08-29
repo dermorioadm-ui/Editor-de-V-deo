@@ -1624,9 +1624,12 @@ CHAVE_IA = "gemini_api_key"
 
 
 def _chave_ia() -> str:
-    chave = str(db.get_setting(CHAVE_IA, "") or "").strip()
+    from .ai.gemini import chave_guardada
+
+    chave = chave_guardada()
     if not chave:
-        raise HTTPException(400, "sem chave do Gemini. Cole a sua em Ajustes > IA.")
+        raise HTTPException(400, "sem chave do Gemini. Cole a sua na aba IA — "
+                                 "uma vez só; ela fica guardada.")
     return chave
 
 
@@ -1639,11 +1642,16 @@ def api_ia_config() -> dict:
     iniciar-rede.bat existe justamente para revisar do celular, e aí qualquer
     um na rede local alcança as rotas.
     """
-    chave = str(db.get_setting(CHAVE_IA, "") or "")
+    from .ai.gemini import chave_guardada
+
+    chave = chave_guardada()
     return {
-        "tem_chave": bool(chave.strip()),
+        "tem_chave": bool(chave),
         "final": chave[-4:] if len(chave) > 8 else "",
         "modelo": db.get_setting("gemini_model", "") or "",
+        # a IA decidindo os cortes no EDITAR — ligada por padrão quando há
+        # chave; o usuário desliga aqui se quiser voltar à regra do programa
+        "cortes": bool(db.get_setting("ai_cortes", True)),
     }
 
 
@@ -1654,6 +1662,8 @@ def api_ia_config_set(payload: dict = Body(...)) -> dict:
         db.set_setting(CHAVE_IA, chave)
     if "modelo" in payload:
         db.set_setting("gemini_model", str(payload.get("modelo") or "").strip())
+    if "cortes" in payload:
+        db.set_setting("ai_cortes", bool(payload["cortes"]))
     return api_ia_config()
 
 

@@ -902,7 +902,29 @@ $env:EDITOR_PORT="8080"
 
 Opcional. Desligada por padrão. Sem ela o editor faz tudo o que fazia.
 
-### Para que serve
+### A IA decide os cortes — automática
+
+Com a chave colada, **a IA entra no EDITAR sozinha**: assim que a transcrição
+sai, ela lê a fala inteira — com as palmas e assobios marcados no lugar onde
+aconteceram — e decide **quais trechos saem**: tentativa refeita (fica a última
+versão), falso começo, contagem de gravação, muleta solta. A resposta volta em
+**faixas de palavras**, nunca em tempos: quem encosta a borda no vale de
+energia continua sendo o programa, então a regra "corte não come palavra" fica
+onde sempre esteve.
+
+Cada decisão vira um item em **"Saiu sozinho"**, com o texto riscado, o motivo
+que a IA deu e o botão de **voltar**. Resposta ruim é barrada: faixa que não
+existe é recusada, e uma resposta que quisesse remover mais de 85% do vídeo é
+descartada inteira. Sem internet, sem chave ou com cota estourada, a regra
+determinística decide sozinha — a análise nunca trava por causa da IA.
+
+O modelo preferido é o **gemini-3.5-flash** (a lista real da sua chave manda;
+se ele não existir, o app cai para o flash mais próximo). A chave é colada
+**uma vez** e fica guardada no banco local — fora da pasta do programa, então
+sobrevive a atualização e reinstalação. Quem preferir não ter chave em disco
+usa a variável de ambiente `EDITOR_GEMINI_KEY` no `iniciar.bat`.
+
+### O botão "Ler o roteiro" (opcional, além dos cortes)
 
 A IA **opina**, o programa **executa**. Ela lê o texto do que você falou,
 bloco a bloco, e responde três coisas:
