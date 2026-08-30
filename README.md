@@ -337,12 +337,28 @@ Agora o instalador **confere o espaço antes de começar** e, se faltar, manda
 você rodar o **`limpar.bat`** — que acha as cópias antigas, mostra o tamanho
 de cada uma e apaga só depois de você confirmar.
 
-O `limpar.bat` tem duas travas: ele só considera uma pasta se ela **for
-mesmo uma cópia deste editor** (tem `requirements.txt` e a pasta `editor/`),
-então o ambiente de qualquer outro projeto Python seu fica intocado; e nunca
-apaga o ambiente compartilhado, que é o que faz o programa rodar. **Seus
-projetos e vídeos não moram ali** — ficam em `Vídeos\Editor de Vídeo` — e a
-sua chave do Gemini também não é tocada.
+**Apagar a pasta não limpa tudo.** Sobra peso em cinco lugares, e o
+`limpar.bat` acha os cinco, mostra o tamanho de cada um e pergunta **um por
+um**:
+
+| | |
+|---|---|
+| `.venv` de cada cópia antiga | ~3 GB cada — esse some com a pasta |
+| ambiente compartilhado órfão | ~3 GB |
+| cache do pip | 1 a 5 GB |
+| projetos de teste | varia |
+| **modelos de transcrição sobrando** | **até 10 GB** |
+
+O último costuma ser o maior e é o menos óbvio. O app usa **um** modelo —
+`large-v3` se houver placa de vídeo, `turbo` se for processador — mas cada
+instalação antiga pode ter baixado um diferente. Num caso real apareceram
+9,36 GB acumulados. O modelo **em uso** nunca é oferecido para apagar, e
+modelos de qualquer **outra** ferramenta de IA sua também não.
+
+As travas: uma pasta só entra na lista se **provar ser cópia deste editor**
+(tem `requirements.txt` e `editor/__init__.py`), então o ambiente de outro
+projeto Python seu fica intocado. **Seus vídeos originais nunca saíram da
+pasta onde você gravou**, e a sua chave do Gemini não é tocada.
 
 **macOS:** duplo clique em **`iniciar.command`**.
 

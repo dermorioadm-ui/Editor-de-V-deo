@@ -7,10 +7,14 @@ a pasta so resolve o primeiro:
   2. ambiente compartilhado orfao ~3 GB       (fica em AppData\\Local)
   3. cache do pip                 1 a 5 GB    (fica em AppData\\Local\\pip)
   4. projetos de teste            varia       (ficam em Videos\\Editor de Video)
+  5. modelos de transcricao       ate 10 GB   (ficam em .cache\\huggingface)
 
-Nada e apagado sem confirmacao, e cada grupo e confirmado separado. O modelo
-de transcricao (~1,5 GB em .cache\\huggingface) NAO entra na lista: apagar
-obriga a baixar tudo de novo no proximo EDITAR.
+O grupo 5 foi o que apareceu maior na maquina do usuario: 9,36 GB. O app usa
+UM modelo — large-v3 na GPU, turbo na CPU. Todo o resto sao modelos que
+alguma instalacao antiga baixou e ninguem mais abre. O modelo EM USO nunca e
+oferecido para apagar; os outros sim, com o tamanho de cada um na tela.
+
+Nada e apagado sem confirmacao, e cada grupo e confirmado separado.
 """
 from __future__ import annotations
 
@@ -82,6 +86,36 @@ def venvs_antigos(aqui: Path, compartilhado: Path) -> list[Path]:
             vistos.add(real)
             achados.append(v)
     return achados
+
+
+# O app usa UM modelo por vez (editor/transcribe.py: resolve_model).
+# Guardar os dois cobre as duas maquinas; o resto e sobra.
+MODELOS_EM_USO = ("large-v3", "turbo")
+# so mexemos em modelo de TRANSCRICAO: se o usuario usa outra ferramenta de
+# IA que guarda modelo no mesmo cache, ela nao e da nossa conta
+MODELOS_NOSSOS = ("whisper",)
+
+
+def modelos_de_transcricao(casa: Path) -> list[tuple[Path, str, int, bool]]:
+    """Os modelos baixados, com tamanho e se o app ainda usa cada um."""
+    hub = casa / ".cache" / "huggingface" / "hub"
+    if not hub.is_dir():
+        return []
+    saida = []
+    for d in sorted(hub.iterdir()):
+        if not d.is_dir() or not d.name.startswith("models--"):
+            continue
+        nome = d.name.removeprefix("models--").replace("--", "/")
+        baixo = nome.lower()
+        if not any(m in baixo for m in MODELOS_NOSSOS):
+            continue                       # modelo de outra ferramenta: passa
+        # "distil" e "en" sao variantes que o app NUNCA carrega: sem esta
+        # linha, um distil-whisper-large-v3 seria marcado "em uso" só por
+        # conter "large-v3" no nome, e ficaria ocupando disco para sempre.
+        variante = any(x in baixo for x in ("distil", "-en", ".en"))
+        em_uso = (not variante) and any(m in baixo for m in MODELOS_EM_USO)
+        saida.append((d, nome, tamanho(d), em_uso))
+    return saida
 
 
 def confirmar(pergunta: str) -> bool:
@@ -182,17 +216,36 @@ def main() -> int:
         if confirmar("Apagar TODOS os projetos do editor?"):
             liberado += apagar([("projetos", dados / "projects", t)])
 
+    # ------------------------------------------- 5) modelos de transcricao
+    modelos = modelos_de_transcricao(casa)
+    if modelos:
+        sobrando = [m for m in modelos if not m[3]]
+        usados = [m for m in modelos if m[3]]
+        total = sum(m[2] for m in modelos)
+        print(f"\n  [5] MODELOS DE TRANSCRICAO — {medida(total)} no total")
+        print("      O app usa UM: large-v3 se voce tiver placa de video,")
+        print("      turbo se for processador. Os outros foram baixados por")
+        print("      alguma instalacao antiga e ninguem mais abre.\n")
+        for _d, nome, t, em_uso in modelos:
+            marca = "  <- EM USO, fica" if em_uso else ""
+            print(f"    {medida(t):>9}   {nome}{marca}")
+        if not sobrando:
+            print("\n      Nenhum sobrando: so o que o app usa esta baixado.")
+        else:
+            print(f"\n    {medida(sum(m[2] for m in sobrando)):>9}   "
+                  f"total que da para liberar\n")
+            print("      Se um dia voce precisar de um deles de novo, ele baixa")
+            print("      sozinho — leva alguns minutos e so na primeira vez.\n")
+            if confirmar("Apagar os modelos que o app nao usa?"):
+                liberado += apagar([(nome, d, t) for d, nome, t, _u in sobrando])
+    else:
+        print("\n  [5] Nenhum modelo de transcricao baixado ainda.")
+
     print(f"\n  ============================================")
     print(f"   Liberado: {medida(liberado)}")
     print(f"  ============================================")
     if liberado:
         print("\n  Agora rode o instalar.bat.")
-    # o modelo de transcricao fica, e vale dizer por que
-    hf = casa / ".cache" / "huggingface"
-    if hf.is_dir():
-        print(f"\n  Obs.: o modelo de transcricao ({medida(tamanho(hf))}) NAO foi")
-        print("        tocado de proposito. Apagar obriga a baixar tudo de novo")
-        print("        no proximo EDITAR.")
     return 0
 
 
