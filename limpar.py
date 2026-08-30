@@ -7,7 +7,8 @@ a pasta so resolve o primeiro:
   2. ambiente compartilhado orfao ~3 GB       (fica em AppData\\Local)
   3. cache do pip                 1 a 5 GB    (fica em AppData\\Local\\pip)
   4. projetos de teste            varia       (ficam em Videos\\Editor de Video)
-  5. modelos de transcricao       ate 10 GB   (ficam em .cache\\huggingface)
+  5. modelos de transcricao       ate 10 GB   (.cache\\huggingface\\hub)
+  6. cache de download do xet     ate 8 GB    (.cache\\huggingface\\xet)
 
 O grupo 5 foi o que apareceu maior na maquina do usuario: 9,36 GB. O app usa
 UM modelo — large-v3 na GPU, turbo na CPU. Todo o resto sao modelos que
@@ -94,6 +95,18 @@ MODELOS_EM_USO = ("large-v3", "turbo")
 # so mexemos em modelo de TRANSCRICAO: se o usuario usa outra ferramenta de
 # IA que guarda modelo no mesmo cache, ela nao e da nossa conta
 MODELOS_NOSSOS = ("whisper",)
+
+# Pastas do cache do HuggingFace que sao PURO cache de download: apagar nao
+# perde nada, no maximo faz baixar de novo. O "xet" e o novo backend de
+# transferencia (vem junto do hf-xet, dependencia do faster-whisper) e guarda
+# os pedacos brutos dos arquivos ALEM do modelo montado — ou seja, o mesmo
+# dado duas vezes. Foi o que explicou 7,5 GB que nao apareciam na conta dos
+# modelos na maquina do usuario.
+CACHE_PURO = {
+    "xet": "pedacos de download (o mesmo dado que ja esta no modelo)",
+    ".locks": "arquivos de trava de download",
+    "tmp": "restos de download interrompido",
+}
 
 
 def modelos_de_transcricao(casa: Path) -> list[tuple[Path, str, int, bool]]:
@@ -240,6 +253,47 @@ def main() -> int:
                 liberado += apagar([(nome, d, t) for d, nome, t, _u in sobrando])
     else:
         print("\n  [5] Nenhum modelo de transcricao baixado ainda.")
+
+    # ------------------------------- 6) sobras do cache de download
+    hf = casa / ".cache" / "huggingface"
+    if hf.is_dir():
+        contados = sum(m[2] for m in modelos)
+        total_hf = tamanho(hf)
+        sobra = total_hf - contados
+        seguros, outros = [], []
+        for d in sorted(hf.iterdir()):
+            if not d.is_dir():
+                continue
+            if d.name == "hub":
+                # dentro do hub, o que nao e models-- e sobra
+                for sub in sorted(d.iterdir()):
+                    if sub.is_dir() and not sub.name.startswith("models--"):
+                        t = tamanho(sub)
+                        alvo = seguros if sub.name in CACHE_PURO else outros
+                        alvo.append((f"hub/{sub.name}", sub, t))
+                continue
+            t = tamanho(d)
+            alvo = seguros if d.name in CACHE_PURO else outros
+            alvo.append((d.name, d, t))
+
+        if sobra > 200 * 1024 ** 2 or seguros:
+            print(f"\n  [6] SOBRAS DO CACHE DE DOWNLOAD — {medida(sobra)}")
+            print("      Isto NAO sao modelos: e o material bruto que o")
+            print("      download usou e nunca mais precisa. O mesmo dado ja")
+            print("      esta guardado dentro do modelo.\n")
+            for rot, _c, t in seguros:
+                nome = rot.split("/")[-1]
+                print(f"    {medida(t):>9}   {rot}  ({CACHE_PURO.get(nome, '')})")
+            for rot, _c, t in outros:
+                print(f"    {medida(t):>9}   {rot}  (nao mexo: nao sei o que e)")
+            uteis = [x for x in seguros if x[2] > 1024 ** 2]
+            if uteis:
+                print(f"\n    {medida(sum(x[2] for x in uteis)):>9}   "
+                      f"total que da para liberar\n")
+                if confirmar("Apagar as sobras de download?"):
+                    liberado += apagar(uteis)
+            else:
+                print("\n      Nada relevante para apagar aqui.")
 
     print(f"\n  ============================================")
     print(f"   Liberado: {medida(liberado)}")

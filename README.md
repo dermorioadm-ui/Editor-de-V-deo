@@ -348,8 +348,14 @@ um**:
 | cache do pip | 1 a 5 GB |
 | projetos de teste | varia |
 | **modelos de transcrição sobrando** | **até 10 GB** |
+| **cache bruto de download (`xet`)** | **até 8 GB** |
 
-O último costuma ser o maior e é o menos óbvio. O app usa **um** modelo —
+Os dois últimos costumam ser os maiores e são os menos óbvios.
+
+O **cache do `xet`** é o que mais engana: ele guarda os *pedaços brutos* do
+download **além** do modelo montado — o mesmo dado, duas vezes. Numa medição
+real, a pasta inteira somava 9,36 GB enquanto os modelos explicavam só
+1,78 GB; os ~7,5 GB restantes eram isso. O app usa **um** modelo —
 `large-v3` se houver placa de vídeo, `turbo` se for processador — mas cada
 instalação antiga pode ter baixado um diferente. Num caso real apareceram
 9,36 GB acumulados. O modelo **em uso** nunca é oferecido para apagar, e

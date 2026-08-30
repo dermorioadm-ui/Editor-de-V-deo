@@ -14,6 +14,7 @@ echo    2. um ambiente compartilhado que ficou orfao
 echo    3. o cache do pip                          (1 a 5 GB)
 echo    4. os projetos de teste que voce ja editou
 echo    5. modelos de transcricao que nenhuma versao usa mais (ate 10 GB)
+echo    6. o cache bruto de download, que guarda o mesmo dado de novo
 echo.
 echo  Cada grupo e confirmado SEPARADO. Nada e apagado sem voce dizer
 echo  sim, e voce ve o tamanho antes de decidir.
