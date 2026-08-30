@@ -474,11 +474,35 @@ de acústica, microfone ruim nem calibração:
 
 | você diz | o que acontece |
 |---|---|
-| **"corta"** (ou "apaga", "errei") | a tentativa em andamento sai sozinha; refaça em seguida |
-| **"ok"** (ou "boa", "fechou") | tudo até ali está aprovado; o corte cola na fala |
+| **"corta"** (ou "apaga", "errei", "refaz", "descarta") | a tentativa em andamento sai sozinha; refaça em seguida |
+| **"próximo"** (ou "seguinte") | trava: **nada antes daqui é tocado**, nem pela IA |
 
 A palavra tem que ser dita **sozinha**, com uma pequena pausa antes e depois —
-"corta" dentro de uma frase é conteúdo e fica. As palavras de comando **nunca
+"corta" dentro de uma frase é conteúdo e fica.
+
+**Por que "próximo" e não "ok".** Foi medido, e o resultado inverteu a escolha
+original. O detector procura a palavra dita SOZINHA, entre pausas — e é
+exatamente esse o jeito natural de falar "ok", "boa" e "fechou". Numa amostra
+de 60 linhas de copy de anúncio:
+
+| palavra | no meio da frase | **dita sozinha** | |
+|---|---|---|---|
+| ok | 0 | **1** — *"Ok, mas e se eu já declarei?"* | arriscado |
+| boa | 1 | **1** — *"Boa, agora você já sabe."* | arriscado |
+| fechou | 0 | **1** — *"Fechou? Então clica agora."* | arriscado |
+| **próximo** | 2 | **0 — nunca** | bom |
+| **corta** | 1 | **0 — nunca** | bom |
+
+A contagem crua engana ("próximo" aparece MAIS na copy que "ok"), mas no meio
+da frase o isolamento protege. O que derruba um comando é ele ser **marcador
+de discurso** — as palavras que a gente diz soltas. Comando tem que ser
+palavra de **conteúdo**.
+
+**O que cada um serve.** "Corta" marca a EXCEÇÃO: você errou. "Próximo" é
+outra coisa — é uma **trava**: o trecho antes dele fica intocável, nem a IA
+que corta copy mexe. Use depois de uma frase que você não quer que ninguém
+encoste. Não é obrigatório em toda frase boa: acertar é o padrão, só o que
+foge do padrão precisa de marca. As palavras de comando **nunca
 aparecem no vídeo nem na legenda**: são instrução, não fala. E a IA que decide
 os cortes vê `[CORTA]` e `[OK]` escritos na transcrição, no lugar exato.
 

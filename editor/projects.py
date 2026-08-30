@@ -335,7 +335,7 @@ def analyze(project: Project, ctx) -> dict:
         except Exception as exc:  # noqa: BLE001
             ctx.progress(0.93, f"não deu para achar o rosto: {exc}")
 
-    # COMANDOS FALADOS — "corta" apaga a tentativa, "ok" aprova. Ideia do
+    # COMANDOS FALADOS — "corta" apaga a tentativa, "próximo" aprova. Ideia do
     # usuário, e a mais robusta das três formas de marcar: o Whisper já
     # transcreveu a palavra com o tempo exato, então não existe falso positivo
     # de acústica. Cada comando vira um marcador SINTÉTICO do tipo certo e
@@ -352,7 +352,7 @@ def analyze(project: Project, ctx) -> dict:
     if comandos:
         n_corta = sum(1 for c in comandos if c.tipo == "corta" and c.enabled)
         n_ok = len([c for c in comandos if c.enabled]) - n_corta
-        ctx.progress(0.935, f'{n_corta}x "corta" e {n_ok}x "ok" ditos — '
+        ctx.progress(0.935, f'{n_corta}x "corta" e {n_ok}x "próximo" ditos — '
                             f"as palavras de comando saem do vídeo")
 
     ctx.stage("assobio", "procurando assobios")

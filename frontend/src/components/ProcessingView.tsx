@@ -147,9 +147,10 @@ export default function ProcessingView() {
 
         <p className="text-[11px] text-slate-600 mt-8 leading-relaxed">
           Na próxima gravação: diga <b className="text-slate-400">"corta"</b> quando
-          errar (a tentativa sai sozinha) e <b className="text-slate-400">"ok"</b>{' '}
-          quando acertar (o corte cola na fala). As palavras de comando não
-          aparecem no vídeo.
+          errar — a tentativa sai sozinha. E{' '}
+          <b className="text-slate-400">"próximo"</b> depois de uma frase que
+          você quer <b>intocável</b>: nem a IA mexe no que vem antes dela. As
+          palavras de comando não aparecem no vídeo.
         </p>
       </div>
     </div>

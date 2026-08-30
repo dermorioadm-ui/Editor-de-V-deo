@@ -296,6 +296,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_comando_nao_e_marcador_de_discurso()
     testar_achados_da_revisao()
     testar_corte_de_copy()
     testar_controles_antes_de_gerar()
@@ -1758,10 +1759,10 @@ def testar_comandos_falados() -> None:
         w(5, 3.9, 4.2, "o"), w(6, 4.25, 4.8, "preço"),
         w(7, 4.85, 5.2, "corta"),          # no meio da frase -> conteúdo
         w(8, 5.25, 5.7, "a"), w(9, 5.75, 6.2, "dúvida"),
-        w(10, 7.2, 7.5, "Ok"),             # isolado -> comando
-        w(11, 8.6, 8.9, "ok"),
-        w(12, 8.95, 9.4, "então"),         # "ok então" emendado -> conteúdo
-        w(13, 9.45, 9.9, "vamos"),
+        w(10, 7.2, 7.7, "Próximo."),       # isolado -> comando
+        w(11, 8.6, 9.1, "próximo"),
+        w(12, 9.15, 9.6, "passo"),         # "próximo passo" emendado -> conteúdo
+        w(13, 9.65, 10.1, "vamos"),
     ]
     achados = detectar(palavras)
     tipos = [(c.tipo, c.word_ids) for c in achados]
@@ -1784,9 +1785,10 @@ def testar_comandos_falados() -> None:
         palavras,
         claps=[{"time": 2.75, "enabled": True, "reason": 'você disse "Corta."'},
                {"time": 12.0, "enabled": True, "reason": "estouro seco"}],
-        whistles=[{"time": 7.35, "enabled": True, "reason": 'você disse "Ok"'}])
-    check("[CORTA]" in pedido and "[OK]" in pedido and "[PALMA]" in pedido,
-          "a IA vê [CORTA], [OK] e [PALMA] cada um com seu nome")
+        whistles=[{"time": 7.45, "enabled": True,
+                   "reason": 'você disse "Próximo."'}])
+    check("[CORTA]" in pedido and "[APROVADO]" in pedido and "[PALMA]" in pedido,
+          "a IA vê [CORTA], [APROVADO] e [PALMA] cada um com seu nome")
 
 
 def testar_achados_da_revisao() -> None:
@@ -1812,12 +1814,12 @@ def testar_achados_da_revisao() -> None:
     check(r2 == [("corta", [1]), ("corta", [3])],
           f'dois "corta" com conteúdo no meio ficam separados ({r2})')
 
-    # 3) "corta ok" emendado vira OS DOIS comandos — antes se anulavam
+    # 3) "corta próximo" emendado vira OS DOIS comandos — antes se anulavam
     caso3 = [w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta"),
-             w(2, 2.0, 2.3, "ok"), w(3, 4.0, 4.5, "refeita")]
+             w(2, 2.0, 2.5, "próximo"), w(3, 4.0, 4.5, "refeita")]
     r3 = [(c.tipo, c.word_ids) for c in detectar(caso3)]
     check(r3 == [("corta", [1]), ("ok", [2])],
-          f'"corta ok" emendado descarta E aprova ({r3})')
+          f'"corta próximo" emendado descarta E aprova ({r3})')
 
     # 4) desligar o comando devolve a palavra: ids respeitam enabled
     achado = detectar([w(0, 0.0, 0.5, "frase"), w(1, 1.5, 1.8, "corta")])
@@ -1980,6 +1982,59 @@ def testar_controles_antes_de_gerar() -> None:
     check(variacoes[1] < variacoes[2],
           f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
           f"{variacoes[2]:.3f})")
+
+
+def testar_comando_nao_e_marcador_de_discurso() -> None:
+    """O comando tem que ser palavra de CONTEÚDO, nunca de preenchimento.
+
+    Medido numa amostra de 60 linhas de copy de anúncio. A contagem crua
+    engana: "próximo" aparece 3x na copy e "ok" só 2x, o que faria parecer
+    que "ok" é mais seguro. Mas o detector procura a palavra dita SOZINHA,
+    entre pausas — e é exatamente assim que se diz "ok", "boa" e "fechou":
+
+        ok       "Ok, mas e se eu já declarei?"        sozinha 1x
+        boa      "Boa, agora você já sabe."            sozinha 1x
+        fechou   "Fechou? Então clica agora."          sozinha 1x
+        próximo  "o próximo passo é simples"           sozinha 0x
+        corta    "isso corta pela metade"              sozinha 0x
+
+    Marcador de discurso vive solto; palavra de conteúdo vive dentro da
+    frase, onde a regra do isolamento a protege. Este teste trava o critério.
+    """
+    from editor.audio.comandos import CORTA, OK, detectar
+
+    # nenhum marcador de discurso pode estar no vocabulário
+    proibidas = {"ok", "okay", "oquei", "boa", "beleza", "valeu", "isso",
+                 "fechou", "certo", "ta", "tá", "pronto", "bom", "entao"}
+    invasoras = (CORTA | OK) & proibidas
+    check(not invasoras,
+          f"nenhum marcador de discurso virou comando ({sorted(invasoras)})")
+
+    def w(i, a, b, t):
+        return {"id": i, "start": a, "end": b, "text": t}
+
+    # as frases de copy onde a palavra aparece SOLTA não podem virar comando
+    for frase in ("Ok", "Boa", "Fechou", "Beleza", "Valeu", "Certo"):
+        ws = [w(0, 0.0, 0.5, "declarei"), w(1, 1.5, 2.0, frase + "."),
+              w(2, 3.0, 3.5, "mas")]
+        check(detectar(ws) == [],
+              f'"{frase}" dito sozinho na copy NÃO vira comando')
+
+    # e a palavra de comando dentro de uma frase continua sendo conteúdo
+    for frase, meio in (("próximo", "o próximo passo"),
+                        ("corta", "isso corta pela metade")):
+        ps = meio.split()
+        ws = [w(i, i * 0.45, i * 0.45 + 0.40, p) for i, p in enumerate(ps)]
+        check(detectar(ws) == [],
+              f'"{meio}" continua sendo copy, não comando')
+
+    # dito sozinho, aí sim
+    for palavra, tipo in (("Próximo.", "ok"), ("Corta.", "corta")):
+        ws = [w(0, 0.0, 0.5, "frase"), w(1, 1.5, 2.1, palavra),
+              w(2, 3.2, 3.7, "outra")]
+        got = [(c.tipo, c.texto) for c in detectar(ws)]
+        check(got == [(tipo, palavra)],
+              f'"{palavra}" sozinho é comando de {tipo} ({got})')
 
 
 def testar_presets_atualizam() -> None:

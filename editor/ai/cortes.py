@@ -50,11 +50,12 @@ que a própria pessoa fez durante a gravação:
 - [CORTA] = a pessoa DISSE "corta" (ou "apaga", "errei"): a tentativa em \
 andamento deve ser descartada, e ela refaz em seguida. A própria palavra de \
 comando já é removida pelo programa.
-- [OK] = a pessoa DISSE "ok" (ou "boa", "fechou"): tudo o que veio antes está \
-APROVADO. Nunca remova nada que termina num [OK].
+- [APROVADO] = a pessoa DISSE "próximo" (ou "seguinte"): tudo o que veio \
+antes está APROVADO POR ELA. É uma trava, não uma sugestão: nunca remova \
+nada que termina num [APROVADO], nem por refeitura nem por julgamento de copy.
 - [PALMA] = mesma coisa que [CORTA], marcada com uma palma. A pessoa \
 normalmente conta "1, 2, 3" depois e refaz a frase — a contagem sai junto.
-- [ASSOBIO] = mesma coisa que [OK], marcada com assobio.
+- [ASSOBIO] = mesma coisa que [APROVADO], marcada com assobio.
 - [PAUSA Xs] = silêncio longo. O silêncio já é cortado pelo programa; você \
 não precisa se ocupar dele.
 
@@ -86,7 +87,7 @@ NUNCA remova, em nenhuma das duas categorias:
 - número, preço, prazo, garantia, prova ou nome de produto;
 - os primeiros 8 segundos (o gancho é o que segura a pessoa);
 - a chamada para ação;
-- um trecho que termina em [OK] ou [ASSOBIO];
+- um trecho que termina em [APROVADO] ou [ASSOBIO];
 - pedaço do MEIO de uma frase que vai ficar.
 
 Sobre o tipo "copy", duas regras que valem mais que sua vontade de melhorar:
@@ -137,7 +138,8 @@ def montar_pedido(words: list[dict], claps: list[dict],
     for a in whistles:
         if a.get("enabled", True):
             dito = "disse" in str(a.get("reason", ""))
-            eventos.append((float(a["time"]), "[OK]" if dito else "[ASSOBIO]"))
+            eventos.append((float(a["time"]),
+                            "[APROVADO]" if dito else "[ASSOBIO]"))
     eventos.sort()
 
     linhas: list[str] = []

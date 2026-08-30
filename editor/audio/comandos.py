@@ -1,4 +1,4 @@
-"""Comandos FALADOS: "corta" apaga a tentativa, "ok" aprova.
+"""Comandos FALADOS: "corta" apaga a tentativa, "próximo" aprova.
 
 Ideia do próprio usuário, e é a mais robusta das três formas de marcar:
 
@@ -23,11 +23,24 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import asdict, dataclass
 
-# Vocabulário curto de propósito: cada palavra a mais é uma chance a mais de
-# um falso positivo. "corta" e "ok" foram o pedido; os sinônimos são os que
-# saem naturalmente no set de gravação.
-CORTA = {"corta", "apaga", "descarta", "errei"}
-OK = {"ok", "okay", "oquei", "boa", "fechou"}
+# COMANDO É PALAVRA DE CONTEÚDO, NUNCA MARCADOR DE DISCURSO.
+#
+# Foi medido, e o resultado inverteu a escolha original. O detector procura a
+# palavra dita SOZINHA, entre pausas — e é justamente esse o jeito natural de
+# falar "ok", "boa", "fechou". Numa amostra de 60 linhas de copy de anúncio:
+#
+#   palavra   no meio da frase   DITA SOZINHA
+#   ok               0            1   "Ok, mas e se eu já declarei?"
+#   boa              1            1   "Boa, agora você já sabe."
+#   fechou           0            1   "Fechou? Então clica agora."
+#   próximo          2            0   nunca
+#   corta            1            0   nunca
+#
+# Palavra de conteúdo aparece no MEIO da frase, e ali o isolamento a protege.
+# Marcador de discurso aparece SOLTO — que é o padrão do comando. Por isso
+# "ok" saiu e "próximo" entrou, e por isso nenhum "valeu"/"beleza" entra.
+CORTA = {"corta", "apaga", "descarta", "errei", "refaz"}
+OK = {"proximo", "seguinte"}
 
 PAUSA_MIN = 0.35         # silêncio exigido dos dois lados do comando
 MAX_DUR = 1.2            # "corta" dito arrastado ainda cabe; frase não
