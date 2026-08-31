@@ -297,6 +297,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_relatorio_da_ia_nao_e_incognita()
     testar_formatos_derivados()
     testar_ia_decide_ritmo_e_camera()
     testar_comando_nao_e_marcador_de_discurso()
@@ -2059,6 +2060,69 @@ def testar_controles_antes_de_gerar() -> None:
     check(variacoes[1] < variacoes[2],
           f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
           f"{variacoes[2]:.3f})")
+
+
+def testar_relatorio_da_ia_nao_e_incognita() -> None:
+    """Depois de rodar, tem que dar para SABER o que a IA fez — e o que não fez.
+
+    Era a maior queixa, e justa: tudo isto já era calculado dentro de
+    `aplicar()` e jogado fora. Sem relatório, "a IA cortou" e "a IA não rodou"
+    são visualmente a mesma coisa, e o usuário fica olhando para palavras que
+    deveriam ter saído sem saber se alguém sequer tentou.
+    """
+    import numpy as np
+
+    from editor.ai import cortes as C
+    from editor.audio.envelope import compute_envelope
+    from tests.synth import build
+
+    spans, t = [], 0.6
+    for _ in range(40):
+        spans.append((round(t, 3), round(t + 0.30, 3)))
+        t += 0.35
+    dur = round(t + 0.6, 2)
+    env = compute_envelope(build(spans, dur, claps=[], noise=0.0011), 16000)
+    words = [{"i": i, "start": a, "end": b, "text": f"p{i}", "prob": 0.95}
+             for i, (a, b) in enumerate(spans)]
+
+    resposta = {
+        "leitura": "vende um método de corte automático",
+        "remover": [
+            {"de": 20, "ate": 23, "tipo": "refeito", "motivo": "tentativa refeita"},
+            {"de": 30, "ate": 33, "tipo": "copy", "motivo": "redundância"},
+            {"de": 2, "ate": 4, "tipo": "copy", "motivo": "preâmbulo"},
+        ],
+        "secoes": [{"de": 0, "ate": 19, "secao": "gancho"},
+                   {"de": 20, "ate": 39, "secao": "cta"}],
+        "camera": [{"de": 30, "ate": 39, "enfase": "fechado"}],
+    }
+    saida = C.aplicar(words, resposta, env=env, duracao=dur)
+    r = saida.get("resumo") or {}
+
+    check(bool(r), "a saída da IA traz um RESUMO do que ela fez")
+    check(r.get("palavras") == len(words),
+          f"quantas palavras ela leu ({r.get('palavras')})")
+    check(r.get("refeito", 0) >= 1,
+          f"quantos trechos saíram por refeitura ({r.get('refeito')})")
+    check(r.get("propostos") == 3,
+          f"quantos ela PROPÔS, não só quantos passaram ({r.get('propostos')})")
+    check(r.get("secoes") == 2 and r.get("camera") == 1,
+          f"quantas etapas de ritmo e marcações de câmera "
+          f"({r.get('secoes')} / {r.get('camera')})")
+    check(r.get("fechado") == 1, "e quantas dessas fecham o enquadramento")
+    check(saida.get("leitura", "").startswith("vende"),
+          "e a leitura que ela fez do vídeo, em uma frase")
+
+    # o corte de copy dentro do gancho tem que ser RECUSADO com motivo legível
+    recusas = saida.get("recusados") or []
+    check(any("gancho" in str(x.get("motivo", "")) for x in recusas),
+          f"corte de copy dentro do gancho é recusado, com motivo "
+          f"({[x.get('motivo', '')[:40] for x in recusas]})")
+    check(all(x.get("o_que") and x.get("motivo") for x in recusas),
+          "toda recusa diz O QUE foi recusado e POR QUÊ — é o que explica "
+          "palavra que sobrou no vídeo")
+    check(r.get("recusados") == len(recusas),
+          "e o resumo conta as recusas junto")
 
 
 def testar_formatos_derivados() -> None:

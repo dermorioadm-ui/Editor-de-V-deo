@@ -552,6 +552,7 @@ def auto_edit(project: Project, ctx) -> dict:
         project, ctx, words,
         [c for c in project.analysis.get("claps", []) if c.get("enabled")],
         [a for a in project.analysis.get("whistles", []) if a.get("enabled", True)])
+    vindos_da_ia: list[dict] = []
     if relatorio_ia and relatorio_ia.get("ok"):
         def _cobre(a: dict, b: dict) -> float:
             inter = min(float(a["end"]), float(b["end"])) \
@@ -572,12 +573,38 @@ def auto_edit(project: Project, ctx) -> dict:
                     - min(float(old["start"]), float(t["start"]))
                 if inter > 0 and inter / max(uni, 1e-9) >= 0.5:
                     t["restored"] = True
-        takes = sorted([t for t in takes if t.get("source") != "ia"] + vindos_da_ia,
+        # fora TODOS os takes da IA da rodada anterior, não só os de refeitura:
+        # o filtro só pegava "ia" e deixava "ia_copy" para trás, então um corte
+        # de copy decidido uma vez ficava para sempre — refazer a edição com
+        # outro modelo, ou com a IA desligada, continuava com ele no vídeo.
+        takes = sorted([t for t in takes
+                        if not str(t.get("source") or "").startswith("ia")]
+                       + vindos_da_ia,
                        key=lambda t: float(t["start"]))
         project.analysis["takes"] = takes
-    project.analysis["ai_cortes"] = (
-        {k: v for k, v in relatorio_ia.items() if k != "takes"}
-        if relatorio_ia else None)
+    # O RELATÓRIO DA IA fica gravado na análise e é o que o editor mostra.
+    # Antes daqui só saía o campo "erro" quando faltava chave; o resto — qual
+    # modelo rodou, o que ele leu do vídeo, quantos trechos tirou, quantos
+    # foram RECUSADOS e por quê, quantas etapas de ritmo e marcações de câmera
+    # — era calculado e jogado fora. Sem isso não há como saber se a IA botou
+    # a mão no vídeo, e não saber é o mesmo que ela não ter botado.
+    if relatorio_ia:
+        guardado = {k: v for k, v in relatorio_ia.items() if k != "takes"}
+        guardado["rodou"] = bool(relatorio_ia.get("ok"))
+        guardado["aplicados"] = len(vindos_da_ia) if relatorio_ia.get("ok") else 0
+    else:
+        guardado = {"rodou": False, "erro": "desligada", "pulada": True}
+    if not (relatorio_ia and relatorio_ia.get("ok")):
+        # a IA não decidiu nada nesta rodada: o que ela decidiu na anterior não
+        # pode continuar valendo em silêncio
+        fora_da_ia = [t for t in takes
+                      if str(t.get("source") or "").startswith("ia")]
+        if fora_da_ia:
+            takes = [t for t in takes
+                     if not str(t.get("source") or "").startswith("ia")]
+            project.analysis["takes"] = takes
+            guardado["descartados_da_rodada_anterior"] = len(fora_da_ia)
+    project.analysis["ai_cortes"] = guardado
 
     # remoções feitas à mão (pelo texto) sobrevivem à reedição automática
     manual_removed = set(project.analysis.get("manual_removed_word_ids", []))

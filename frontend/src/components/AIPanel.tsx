@@ -27,6 +27,12 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
   const [comparacao, setComparacao] = useState<any>(null)
 
   useEffect(() => {
+    // O relatório da rodada AUTOMÁTICA (a do clique único) começa aqui. Antes
+    // esta lista só enchia quando o usuário pedia um plano à mão — então os
+    // cortes que a IA pediu e o programa RECUSOU no processamento automático
+    // nunca apareciam para ninguém.
+    const auto = project?.analysis?.ai_cortes
+    if (auto?.rodou) setRelatorio(auto)
     api.aiConfig().then((c) => {
       setCfg(c)
       setModelo(c.modelo || '')
@@ -34,7 +40,7 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
         api.aiModelos().then((r) => setModelos(r.modelos ?? [])).catch(() => {})
       }
     })
-  }, [])
+  }, [project?.id])
 
   // o job da IA termina e a sugestão aparece — sem aplicar nada
   useEffect(() => {
@@ -79,9 +85,12 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
             humanos podem ler.</b> Só no plano pago (faturamento ligado na conta
             Google) ela garante que não usa. A escolha é sua — mas tem que
             estar escrita.</li>
-          <li>A IA só roda quando você aperta o botão, e nunca aplica nada
-            sozinha: você vê a sugestão e decide. Sem chave, o editor funciona
-            exatamente igual.</li>
+          <li><b>A IA roda SOZINHA, no clique único</b>, assim que você solta o
+            vídeo — é ela quem decide os cortes, as etapas de ritmo e o jogo de
+            câmera do arquivo que você baixa. O que ela decidiu está na faixa
+            azul no topo do editor e na lista aqui embaixo, trecho a trecho,
+            cada um com o motivo e o botão de voltar. Sem chave, o corte é só
+            a regra do programa — e o editor avisa em vermelho.</li>
         </ul>
       </section>
 
@@ -329,7 +338,16 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
 
       {relatorio?.recusados?.length > 0 && (
         <section className="card">
-          <h3 className="card-title">O que eu não deixei passar</h3>
+          <h3 className="card-title">
+            O que a IA pediu e eu NÃO deixei passar
+            <span className="ml-1 text-[11px] font-normal text-slate-500">
+              ({relatorio.recusados.length})
+            </span>
+          </h3>
+          <p className="text-[11px] text-slate-500 mb-1.5">
+            Se sobrou palavra que você queria fora, é bem provável que ela
+            esteja nesta lista — com o motivo de eu ter segurado.
+          </p>
           <ul className="text-[12px] text-slate-400 space-y-1 list-disc pl-5">
             {relatorio.recusados.map((r: any, i: number) => (
               <li key={i}><b className="text-slate-300">{r.o_que}</b>: {r.motivo}</li>

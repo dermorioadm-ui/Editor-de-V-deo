@@ -426,11 +426,29 @@ def aplicar(words: list[dict], resposta: dict, env=None,
     # NARRATIVA, a IA substitui exatamente o pedaço fraco — o classificador
     # por palavra-chave, que confundia "clica no link" com garantia — e todo
     # o resto do caminho continua o mesmo, com as travas no lugar.
+    secoes = _faixas_de_tempo(resposta.get("secoes"), n, words,
+                              "secao", SECOES_VALIDAS)
+    camera = _faixas_de_tempo(resposta.get("camera"), n, words,
+                              "enfase", ("fechado", "aberto"))
     return {"takes": takes, "recusados": recusadas,
-            "secoes": _faixas_de_tempo(resposta.get("secoes"), n, words,
-                                       "secao", SECOES_VALIDAS),
-            "camera": _faixas_de_tempo(resposta.get("camera"), n, words,
-                                       "enfase", ("fechado", "aberto")),
+            "secoes": secoes, "camera": camera,
+            # O RELATÓRIO. Sem ele o usuário não tem como saber se a IA botou
+            # a mão no vídeo — e não saber é o mesmo que ela não ter botado.
+            # Tudo isto já existia calculado e morria dentro da função.
+            "resumo": {
+                "palavras": n,
+                "refeito": sum(1 for t in takes if t["source"] == "ia"),
+                "copy": sum(1 for t in takes if t["source"] == "ia_copy"),
+                "palavras_fora": sum(f["ate"] - f["de"] + 1 for f in faixas),
+                "propostos": len(faixas),
+                "recusados": len(recusadas),
+                "secoes": len(secoes),
+                "camera": len(camera),
+                "fechado": sum(1 for c in camera if c.get("enfase") == "fechado"),
+                "aberto": sum(1 for c in camera if c.get("enfase") == "aberto"),
+                "teto_copy": MAX_COPY,
+                "gancho_s": round(gancho, 1),
+            },
             "leitura": str(resposta.get("leitura", ""))[:300], "ok": True}
 
 

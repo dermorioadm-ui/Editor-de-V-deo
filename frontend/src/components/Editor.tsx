@@ -398,24 +398,73 @@ export default function Editor() {
         return null
       })() || <>
 
-      {/* O vídeo saiu SEM a IA (faltava a chave na hora): em vez de o usuário
-          descobrir sozinho, a faixa diz e oferece o conserto em um clique —
-          refazer a edição usa a chave nova sem transcrever tudo de novo. */}
-      {analysed && project.analysis?.ai_cortes?.erro === 'sem chave' && (
-        <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
-                        border-amber-900/50 bg-amber-950/25">
-          <span className="text-amber-200 font-medium">
-            Este vídeo foi cortado sem a IA
-          </span>
-          <span className="text-slate-400">
-            faltava a chave do Gemini. Cole na aba IA e refaça a edição —
-            não precisa transcrever de novo.
-          </span>
-          <button className="btn btn-xs ml-auto" onClick={() => setTab('ia')}>
-            colar a chave
-          </button>
-        </div>
-      )}
+      {/* O QUE A IA FEZ NESTE VÍDEO — sempre à vista, nunca escondido numa aba.
+          Era a maior queixa e ela era justa: tudo isto já era calculado e
+          jogado fora, então não havia como saber se a IA tinha botado a mão
+          no vídeo. E não saber é o mesmo que ela não ter botado. */}
+      {analysed && (() => {
+        const ia = project.analysis?.ai_cortes
+        if (!ia || !ia.rodou) {
+          const motivo = ia?.erro === 'sem chave'
+            ? 'faltava a chave do Gemini'
+            : ia?.erro === 'desligada'
+            ? 'a IA está desligada nos ajustes'
+            : ia?.erro ? `a IA falhou: ${ia.erro}` : 'a IA não rodou'
+          return (
+            <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
+                            border-red-900/60 bg-red-950/30">
+              <span className="text-red-200 font-medium">
+                A IA NÃO cortou este vídeo
+              </span>
+              <span className="text-slate-400">
+                {motivo} — o corte que você está vendo é só a regra do programa
+                (silêncio, palma, assobio, comando falado).
+              </span>
+              <button className="btn btn-xs ml-auto"
+                      onClick={() => setTab('ia')}>resolver</button>
+            </div>
+          )
+        }
+        const r = ia.resumo ?? {}
+        return (
+          <div className="px-4 py-2 text-xs border-b border-sky-900/50
+                          bg-sky-950/20">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-sky-200 font-medium">
+                A IA leu e cortou · <span className="font-mono">{ia.modelo}</span>
+              </span>
+              <span className="text-slate-300">
+                <b>{r.refeito ?? 0}</b> trecho(s) refeito(s) e{' '}
+                <b>{r.copy ?? 0}</b> de copy fora
+                {typeof r.palavras_fora === 'number' && typeof r.palavras === 'number'
+                  && r.palavras > 0 &&
+                  ` (${r.palavras_fora} de ${r.palavras} palavras)`}
+                {' · '}<b>{r.secoes ?? 0}</b> etapa(s) de ritmo
+                {' · '}câmera em <b>{r.camera ?? 0}</b>
+                {(r.fechado ?? 0) > 0 && ` (${r.fechado} fechando)`}
+              </span>
+              {(r.recusados ?? 0) > 0 && (
+                <span className="text-amber-300">
+                  {r.recusados} corte(s) que ela pediu eu recusei
+                </span>
+              )}
+              <button className="btn btn-xs ml-auto"
+                      onClick={() => setTab('ia')}>ver o que ela decidiu</button>
+            </div>
+            {ia.leitura && (
+              <p className="text-slate-500 mt-0.5 italic truncate">
+                “{ia.leitura}”
+              </p>
+            )}
+            {ia.modelo_trocado_de && (
+              <p className="text-amber-300 mt-0.5">
+                atenção: o modelo que você fixou ({ia.modelo_trocado_de}) não
+                está mais disponível nessa chave — rodou com {ia.modelo}.
+              </p>
+            )}
+          </div>
+        )
+      })()}
 
       {analysed && view && (() => {
         // O veredito. O usuário reclamou que o editor não entregava pronto:

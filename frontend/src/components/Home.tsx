@@ -197,8 +197,9 @@ export default function Home() {
     try {
       const r = await api.escolher('video', 'Escolher o vídeo para editar')
       if (r.cancelado) return
+      // SÓ carrega o caminho. Quem dispara é o botão GERAR, depois de você
+      // ver a receita. Disparar aqui era o furo que anulava a tela inteira.
       setPath(r.path)
-      await start(r.path)
     } catch (e: any) {
       // 501 = esta máquina não tem como abrir a janela do sistema
       setBrowsing(true)
@@ -220,7 +221,6 @@ export default function Home() {
       setLocating('')
       if (res.path) {
         setPath(res.path)
-        await start(res.path)
       } else {
         toast('info', `Não achei "${file.name}" nas pastas de sempre`,
           `Abrindo a janela do Windows para você apontar. Nada é copiado — ` +
@@ -335,13 +335,29 @@ export default function Home() {
             ${dragging ? 'border-accent bg-accent/5' : 'border-line'}`}
         >
           <div className="text-center">
-            <div className="text-4xl mb-3 opacity-40">⬇</div>
-            <p className="text-base font-medium">Arraste o vídeo para cá</p>
-            <p className="hint mt-1 max-w-lg mx-auto">
-              Ou clique em <b>Escolher no computador</b> e use a janela de sempre.
-              Nos dois casos o arquivo <b>não é copiado nem enviado</b>: o editor
-              lê ele direto de onde já está.
-            </p>
+            {path ? (
+              <>
+                <div className="text-3xl mb-2">🎬</div>
+                <p className="text-base font-medium text-emerald-300">
+                  Vídeo carregado — <b>ainda não comecei</b>
+                </p>
+                <p className="hint mt-1 max-w-xl mx-auto">
+                  Confira a receita aqui embaixo (modelo da IA, filtro,
+                  velocidade, zoom, legenda, formatos) e aperte
+                  <b> GERAR VÍDEO PRONTO</b>. Nada roda até você apertar.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="text-4xl mb-3 opacity-40">⬇</div>
+                <p className="text-base font-medium">Arraste o vídeo para cá</p>
+                <p className="hint mt-1 max-w-lg mx-auto">
+                  Ou clique em <b>Escolher no computador</b> e use a janela de
+                  sempre. Nos dois casos o arquivo <b>não é copiado nem
+                  enviado</b>: o editor lê ele direto de onde já está.
+                </p>
+              </>
+            )}
             {locating && <p className="text-xs text-accent mt-2">{locating}</p>}
             <div className="flex items-center gap-2 justify-center mt-5">
               <input className="field max-w-md font-mono text-xs" value={path}
