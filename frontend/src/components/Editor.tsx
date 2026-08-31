@@ -42,6 +42,10 @@ export default function Editor() {
   // a prévia renderizada nao acompanha edicao ao vivo: marca-se velha e ela
   // se refaz sozinha, enquanto o player cai na copia leve para nao ficar preso
   const [previaVelha, setPreviaVelha] = useState(false)
+  // o arquivo FINAL que o clique único já exportou. Ter isso pronto é a
+  // diferença entre "o editor abriu" e "o vídeo está pronto".
+  const [baixar, setBaixar] = useState<string | null>(null)
+  const [baixarVelho, setBaixarVelho] = useState(false)
   const [previewBusy, setPreviewBusy] = useState(false)
   const playing = useStore((s) => s.playing)
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
@@ -84,6 +88,8 @@ export default function Editor() {
     if (activeJob?.kind !== 'clique-unico' || activeJob.status !== 'ok') return
     const url = activeJob.result?.previa?.download
     if (url) { setPreviewUrl(`${url}?v=${activeJob.id}`); setPreviaVelha(false) }
+    const fim = activeJob.result?.final?.download
+    if (fim) { setBaixar(fim); setBaixarVelho(false) }
   }, [activeJob?.id, activeJob?.status])
 
   // Editou? A prévia renderizada ficou velha. Ela se refaz sozinha, depois de
@@ -112,7 +118,10 @@ export default function Editor() {
   }, [activeJob?.id, activeJob?.status])
 
   // qualquer mudança na linha do tempo envelhece a prévia renderizada
-  const marcarPreviaVelha = useCallback(() => setPreviaVelha(true), [])
+  const marcarPreviaVelha = useCallback(() => {
+    setPreviaVelha(true)
+    setBaixarVelho(true)      // editou: o arquivo exportado ficou velho
+  }, [])
 
   const snapshot = useCallback(() => {
     marcarPreviaVelha()
@@ -387,10 +396,16 @@ export default function Editor() {
                 {zoom > 0 && ` · zoom em ${zoom}`}
                 {fixed > 0 && ` · ${fixed} borda(s) acertadas`}
               </span>
-              <button className="btn btn-primary btn-xs ml-auto"
-                      onClick={() => setTab('exportar')}>
-                exportar →
-              </button>
+              {baixar && !baixarVelho ? (
+                <a className="btn btn-primary btn-xs ml-auto" href={baixar} download>
+                  ↓ baixar o vídeo
+                </a>
+              ) : (
+                <button className="btn btn-primary btn-xs ml-auto"
+                        onClick={() => setTab('exportar')}>
+                  {baixarVelho ? 'reexportar →' : 'exportar →'}
+                </button>
+              )}
             </div>
           )
         }

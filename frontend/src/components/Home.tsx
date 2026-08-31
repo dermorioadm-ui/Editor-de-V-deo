@@ -27,13 +27,43 @@ export default function Home() {
   // refazer a edição depois custa uma volta inteira do pipeline.
   const [velocidade, setVelocidade] = useState(1.0)   // multiplicador global
   const [zoomForca, setZoomForca] = useState(1.0)     // intensidade da escada
+  const [modelos, setModelos] = useState<any[]>([])
+  const [modelo, setModelo] = useState('')
+  const [looks, setLooks] = useState<any[]>([])
+  const [look, setLook] = useState('nenhum')
+  const [musica, setMusica] = useState('')            // caminho do MP3
+  const [musicaVol, setMusicaVol] = useState(-18)
+  // A legenda já sai no tamanho certo do formato sozinha (o preset é medido
+  // numa altura de 1024 e reescalado para a altura real na criação do
+  // projeto: 35 vira 66 num 1080x1920). Este seletor é só o empurrãozinho
+  // para quem quer maior ou menor — em porcentagem do tamanho certo, nunca
+  // um número cru de pixels que muda de significado a cada resolução.
+  const [legenda, setLegenda] = useState(1.0)
+  const [resolucao, setResolucao] = useState('source')
+  const [iaCortes, setIaCortes] = useState(true)
+  const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
+  const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
+
+  const iaLiga = Boolean(ia?.tem_chave) && iaCortes
 
   const refresh = () => api.projects().then(setProjects).catch(() => {})
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
-    api.aiConfig().then(setIa).catch(() => {})
+    api.aiConfig().then((c) => {
+      setIa(c)
+      setModelo(c.modelo || '')
+      setIaCortes(c.cortes !== false)
+      if (c.tem_chave) {
+        api.aiModelos().then((r) => {
+          setModelos(r.modelos ?? [])
+          if (!c.modelo && r.padrao) setModelo(r.padrao)
+        }).catch(() => {})
+      }
+    }).catch(() => {})
+    api.looks().then(setLooks).catch(() => {})
+    api.outputDir().then(setSaida).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
     refresh()
   }, [])
@@ -54,7 +84,7 @@ export default function Home() {
         history: [], future: [], selection: null, selectedClip: null,
       })
       if (andEdit) {
-        const job = await api.oneclick(id, preset)
+        const job = await api.oneclick(id, preset, receita())
         setState({ activeJob: job })
       }
     } catch (e: any) {
@@ -64,18 +94,44 @@ export default function Home() {
     }
   }
 
+  /** TODA a receita num objeto só, mandada JUNTO com o clique único.
+   *
+   *  Antes ela era gravada por /params logo antes de disparar o processamento
+   *  — e o processamento reaplicava o preset por cima, reconstruindo
+   *  velocidade, zoom, legenda e exportação do zero. Os sliders existiam e
+   *  não mudavam nada no arquivo. Mandando junto, o servidor aplica a receita
+   *  DEPOIS do preset e a ordem para de depender de quem gravou primeiro. */
+  function receita() {
+    return {
+      speed: { global_multiplier: velocidade },
+      zoom: { intensity: zoomForca },
+      style: { fontsize_scale: legenda },
+      export: { scale: resolucao },
+      look: look || 'nenhum',
+    }
+  }
+
   async function start(sourcePath: string) {
     if (!sourcePath) return
     setBusy(true)
     try {
       const project = await api.createProject(sourcePath, '', preset)
-      // grava os ajustes ANTES do clique único: eles mudam a velocidade de
-      // cada bloco e a escada de enquadramento, que nascem dentro dele
-      if (velocidade !== 1.0 || zoomForca !== 1.0) {
-        await api.params(project.id, {
-          speed: { global_multiplier: velocidade },
-          zoom: { intensity: zoomForca },
-        }).catch(() => {})
+      // O que NÃO cabe no plano (é global, não do projeto) vai antes:
+      if (modelo && modelo !== ia?.modelo) {
+        await api.setAiConfig({ modelo }).catch(() => {})
+      }
+      if (iaCortes !== (ia?.cortes !== false)) {
+        await api.setAiConfig({ cortes: iaCortes }).catch(() => {})
+      }
+      if (musica) {
+        try {
+          const m = await api.addMedia(project.id, musica, 'audio')
+          await api.setMusic(project.id, {
+            media_id: m?.id ?? m?.media?.id, gain_db: musicaVol,
+            ducking: true, duck_amount: 12, fade_in: 1, fade_out: 2,
+            muted: false, enabled: true, out_start: 0, out_end: 0,
+          })
+        } catch { /* sem trilha o vídeo sai igual */ }
       }
       await openProject(project.id, true)
     } catch (e: any) {
@@ -157,8 +213,9 @@ export default function Home() {
         <header className="mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">Editor de Vídeo</h1>
           <p className="text-sm text-slate-400 mt-1">
-            Joga o vídeo bruto aqui, escolhe o preset, aperta EDITAR.
-            O arquivo não sai da sua máquina.
+            Monta a receita aqui embaixo e aperta uma vez. O vídeo volta
+            cortado, acelerado, com câmera, filtro e legenda — pronto para
+            baixar. O arquivo não sai da sua máquina.
           </p>
         </header>
 
@@ -182,23 +239,33 @@ export default function Home() {
             determinística — e o usuário TEM que saber disso antes de soltar
             o arquivo, não depois. */}
         <div className={`card p-3 mb-3 flex items-center gap-3
-          ${ia?.tem_chave ? 'border-emerald-900/50 bg-emerald-950/15'
+          ${iaLiga ? 'border-emerald-900/50 bg-emerald-950/15'
             : 'border-amber-900/50 bg-amber-950/15'}`}>
           <span className={`text-lg leading-none
-            ${ia?.tem_chave ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {ia?.tem_chave ? '✓' : '!'}
+            ${iaLiga ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {iaLiga ? '✓' : '!'}
           </span>
           {ia?.tem_chave ? (
             <>
               <div className="min-w-0">
                 <p className="text-sm text-slate-200">
-                  A IA vai cortar este vídeo
+                  {iaLiga ? 'A IA vai cortar este vídeo'
+                    : 'A IA está desligada — o corte vai ser só pela regra'}
                 </p>
                 <p className="text-[11px] text-slate-500">
                   chave …{ia.final} · o vídeo não sai da máquina, só o texto
                 </p>
               </div>
-              <button className="btn btn-xs ml-auto"
+              {/* O selo tinha que refletir o interruptor, não só a chave: quem
+                  desligou a IA uma vez lá dentro via "a IA vai cortar" em
+                  verde para sempre. */}
+              <label className="ml-auto flex items-center gap-1.5 text-xs
+                                text-slate-400 cursor-pointer">
+                <input type="checkbox" checked={iaCortes}
+                       onChange={(e) => setIaCortes(e.target.checked)} />
+                a IA decide os cortes
+              </label>
+              <button className="btn btn-xs"
                       onClick={async () => setIa(await api.setAiConfig({ chave: '' }))}>
                 trocar
               </button>
@@ -269,6 +336,102 @@ export default function Home() {
               ))}
             </div>
           </div>
+          {ia?.tem_chave && (
+            <div className="w-52">
+              <label className="label">Modelo da IA</label>
+              <select className="field w-full py-1.5 text-xs font-mono"
+                      value={modelo} onChange={(e) => setModelo(e.target.value)}>
+                {!modelos.length && <option value="">carregando…</option>}
+                {modelos.map((m) => (
+                  <option key={m.id} value={m.id}>{m.id}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-600 leading-tight">
+                quem decide os cortes e lê a copy
+              </p>
+            </div>
+          )}
+
+          <div className="w-40">
+            <label className="label">Filtro</label>
+            <select className="field w-full py-1.5 text-xs"
+                    value={look} onChange={(e) => setLook(e.target.value)}>
+              {looks.map((l: any) => (
+                <option key={l.id} value={l.id}>{l.name ?? l.label ?? l.id}</option>
+              ))}
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              já sai queimado no arquivo
+            </p>
+          </div>
+
+          <div className="w-52">
+            <label className="label flex justify-between">
+              <span>Música de fundo</span>
+              {musica && (
+                <button className="text-[10px] text-slate-500 hover:text-slate-300"
+                        onClick={() => setMusica('')}>tirar</button>
+              )}
+            </label>
+            {musica ? (
+              <>
+                <div className="field w-full py-1.5 text-xs truncate"
+                     title={musica}>{musica.split(/[\\/]/).pop()}</div>
+                <input type="range" min={-30} max={-6} step={1} className="w-full mt-1"
+                       value={musicaVol}
+                       onChange={(e) => setMusicaVol(+e.target.value)} />
+                <p className="text-[10px] text-slate-600 leading-tight">
+                  volume {musicaVol} dB · abaixa sozinha na fala
+                </p>
+              </>
+            ) : (
+              <>
+                <button className="btn w-full py-1.5 text-xs"
+                        onClick={async () => {
+                          try {
+                            const r = await api.escolher('audio', 'Escolher a música')
+                            if (!r.cancelado) setMusica(r.path)
+                          } catch {
+                            toast('warn', 'Use a aba Mídia depois de gerar',
+                              'Esta máquina não abriu a janela do sistema.')
+                          }
+                        }}>
+                  escolher MP3…
+                </button>
+                <p className="text-[10px] text-slate-600 leading-tight">
+                  opcional
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="w-40">
+            <label className="label">Legenda</label>
+            <select className="field w-full py-1.5 text-xs"
+                    value={legenda} onChange={(e) => setLegenda(+e.target.value)}>
+              <option value={0.8}>menor</option>
+              <option value={1}>do formato</option>
+              <option value={1.2}>maior</option>
+              <option value={1.45}>bem maior</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              já sai no tamanho certo do vertical
+            </p>
+          </div>
+
+          <div className="w-40">
+            <label className="label">Resolução</label>
+            <select className="field w-full py-1.5 text-xs"
+                    value={resolucao} onChange={(e) => setResolucao(e.target.value)}>
+              <option value="source">a da gravação</option>
+              <option value="1080">1080 de largura</option>
+              <option value="720">720 de largura</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              uma geração de encode só
+            </p>
+          </div>
+
           <div className="w-44">
             <label className="label flex justify-between">
               <span>Velocidade</span>
@@ -301,15 +464,50 @@ export default function Home() {
             </p>
           </div>
 
-          <button className="btn btn-primary px-6 py-2.5 text-base ml-auto"
+          <button className="btn btn-primary px-7 py-3 text-base ml-auto"
                   disabled={!path || busy || !ffmpegOk}
                   onClick={() => start(path)}>
-            {busy ? 'abrindo…' : 'EDITAR'}
+            {busy ? 'começando…' : 'GERAR VÍDEO PRONTO'}
           </button>
         </div>
         <p className="hint mt-2">
           {presets.find((p) => p.name === preset)?.description}
         </p>
+        {/* Onde o arquivo pronto cai. Ficava só na aba Exportar — que abre
+            DEPOIS de o arquivo já ter sido escrito na pasta antiga. */}
+        {saida && (
+          <p className="hint mt-1">
+            O vídeo pronto vai para <code className="font-mono text-slate-400">
+            {saida.path}</code>{' '}
+            <button className="text-slate-500 hover:text-slate-300 underline"
+                    onClick={() => setTrocandoPasta((v) => !v)}>trocar</button>
+          </p>
+        )}
+        {trocandoPasta && (
+          <div className="flex gap-1.5 mt-2 max-w-xl">
+            <input className="field py-1 text-xs flex-1"
+                   defaultValue={saida?.path ?? ''}
+                   placeholder="cole o caminho da pasta e aperte Enter"
+                   onKeyDown={async (e) => {
+                     if (e.key !== 'Enter') return
+                     try {
+                       const r = await api.setOutputDir(
+                         (e.target as HTMLInputElement).value)
+                       setSaida({ ...saida, path: r.path })
+                       setTrocandoPasta(false)
+                       toast('ok', 'Pasta de saída trocada', r.path)
+                     } catch (err: any) {
+                       toast('error', 'Pasta inválida', String(err.message ?? err))
+                     }
+                   }} />
+            <button className="btn btn-xs"
+                    onClick={async () => {
+                      const r = await api.setOutputDir('')
+                      setSaida({ ...saida, path: r.path })
+                      setTrocandoPasta(false)
+                    }}>voltar ao padrão</button>
+          </div>
+        )}
 
         {projects.length > 0 && (
           <section className="mt-10">

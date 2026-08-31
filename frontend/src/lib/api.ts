@@ -48,8 +48,10 @@ export const api = {
 
   analyze: (id: string) => post<Job>(`/api/projects/${id}/analyze`),
   autoedit: (id: string) => post<Job>(`/api/projects/${id}/autoedit`),
-  oneclick: (id: string, preset?: string) =>
-    post<Job>(`/api/projects/${id}/oneclick`, { preset }),
+  // a receita vai JUNTO: aplicada depois do preset, no servidor, para não
+  // ser apagada por ele (era o que acontecia com velocidade e zoom)
+  oneclick: (id: string, preset?: string, receita?: any) =>
+    post<Job>(`/api/projects/${id}/oneclick`, { preset, receita }),
   exportProject: (id: string, options: any) =>
     post<Job>(`/api/projects/${id}/export`, options),
   preview: (id: string, opts: { scale?: string; crf?: number } = {}) =>
@@ -190,6 +192,7 @@ export const api = {
   // IA — a chave NUNCA volta por aqui, só se ela existe e os quatro últimos
   // caracteres, o bastante para o usuário reconhecer qual chave está lá
   aiConfig: () => req<any>('/api/ai/config'),
+  aiModelos: () => req<any>('/api/ai/modelos'),
   setAiConfig: (payload: any) => post<any>('/api/ai/config', payload),
   testAi: () => post<any>('/api/ai/test'),
   aiPlan: (id: string, anexos = true) =>

@@ -329,6 +329,7 @@ def escape_filter_path(path: str | Path) -> str:
 
 
 def hw_encoders() -> list[str]:
+    """O que este ffmpeg foi COMPILADO com — não o que a máquina consegue usar."""
     try:
         out = run([FFMPEG, "-v", "error", "-hide_banner", "-encoders"])
     except Exception:  # noqa: BLE001
@@ -340,3 +341,34 @@ def hw_encoders() -> list[str]:
             if f" {enc} " in line and enc not in names:
                 names.append(enc)
     return names
+
+
+_HW_TESTADO: list[str] | None = None
+
+
+def hw_encoder_utilizavel() -> str | None:
+    """O encoder de GPU que REALMENTE encoda nesta máquina — ou None.
+
+    A lista de `-encoders` é a lista da compilação: o ffmpeg de qualquer
+    Windows anuncia h264_nvenc mesmo numa máquina sem placa NVIDIA, e aí o
+    encode morre no primeiro trecho. Como o clique único exporta sozinho, um
+    encoder que não existe não deixaria o usuário lento: deixaria sem vídeo.
+    Então aqui a gente ENCODA um quadro de teste e só devolve o que passou.
+    """
+    global _HW_TESTADO
+    if _HW_TESTADO is not None:
+        return _HW_TESTADO[0] if _HW_TESTADO else None
+    bons: list[str] = []
+    for enc in hw_encoders():
+        try:
+            subprocess.run(
+                [FFMPEG, "-v", "error", "-f", "lavfi",
+                 "-i", "color=c=black:s=256x256:d=0.1:r=10",
+                 "-c:v", enc, "-frames:v", "3", "-f", "null", "-"],
+                check=True, capture_output=True, timeout=25,
+            )
+            bons.append(enc)
+        except Exception:  # noqa: BLE001 — anunciado mas inutilizável
+            continue
+    _HW_TESTADO = bons
+    return bons[0] if bons else None

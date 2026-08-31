@@ -17,7 +17,8 @@ const PASSOS: { rotulo: string; stages: string[] }[] = [
   { rotulo: 'Cortando (IA + marcadores)',
     stages: ['ia', 'takes', 'repeticao', 'cortes', 'auditoria'] },
   { rotulo: 'Jogo de câmeras e legendas', stages: ['zoom', 'legendas'] },
-  { rotulo: 'Gerando a prévia', stages: ['proxy'] },
+  { rotulo: 'Gerando a prévia', stages: ['proxy', 'previa'] },
+  { rotulo: 'Exportando o vídeo final', stages: ['exportando'] },
 ]
 
 export default function ProcessingView() {

@@ -268,9 +268,22 @@ def api_media_file(pid: str, mid: str, request: Request):
 
 @app.get("/api/projects/{pid}/download/{name}")
 def api_download(pid: str, name: str, request: Request):
+    """Serve o arquivo exportado — esteja ele onde estiver.
+
+    A exportação final grava na pasta de Vídeos (foi pedido: o usuário não
+    achava o arquivo dentro do AppData) e a prévia grava dentro do projeto.
+    Esta rota só olhava dentro do projeto, então o botão "baixar o vídeo"
+    devolvia 404 justamente para o arquivo que interessa.
+    """
+    from .config import output_dir
+
     project = _project(pid)
-    path = project.dir / "exports" / Path(name).name
-    return _range_response(path, request)
+    seguro = Path(name).name          # sem "..", sem barra: só o nome
+    for base in (project.dir / "exports", output_dir()):
+        alvo = base / seguro
+        if alvo.exists():
+            return _range_response(alvo, request)
+    raise HTTPException(404, f"arquivo não encontrado: {seguro}")
 
 
 @app.get("/api/projects/{pid}/envelope")
@@ -333,11 +346,29 @@ def api_autoedit(pid: str) -> dict:
 
 @app.post("/api/projects/{pid}/oneclick")
 def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
+    """Dispara o clique único — e a RECEITA da primeira tela entra aqui.
+
+    Era aqui que a primeira tela morria: o preset era reaplicado por cima do
+    plano SEMPRE, e `apply_preset_to_plan` reconstrói cut/speed/style/audio/
+    export/zoom do zero. Tudo que a tela tinha acabado de gravar por /params
+    — velocidade, intensidade de zoom, tamanho de legenda, resolução — voltava
+    ao padrão do preset milissegundos antes de o vídeo ser montado. Os sliders
+    existiam e não mudavam nada no arquivo entregue.
+
+    Agora o preset só é reaplicado quando MUDOU, e a receita é aplicada DEPOIS
+    dele, na mesma chamada — a ordem deixa de depender de quem gravou primeiro.
+    """
     project = _project(pid)
-    if payload.get("preset"):
-        svc.apply_preset_to_plan(project.plan, payload["preset"])
+    preset = payload.get("preset")
+    mudou = bool(preset) and preset != project.preset
+    if mudou:
+        svc.apply_preset_to_plan(project.plan, preset)
         svc.escalar_legenda(project.plan, project.info)
-        db.ex("UPDATE projects SET preset=? WHERE id=?", (payload["preset"], pid))
+        db.ex("UPDATE projects SET preset=? WHERE id=?", (preset, pid))
+    receita = payload.get("receita")
+    if isinstance(receita, dict) and receita:
+        aplicar_receita(project, receita)
+    if mudou or receita:
         project.save_plan()
     return _run("clique-unico", pid,
                 lambda ctx: svc.one_click(svc.load(pid), ctx))
@@ -383,27 +414,47 @@ async def ws(socket: WebSocket) -> None:
 
 
 # --------------------------------------------------------------- parâmetros
-@app.post("/api/projects/{pid}/params")
-def api_params(pid: str, payload: dict = Body(...)) -> dict:
-    project = _project(pid)
+PARAMS_MAP = {"cut": (CutParams, "cut"), "speed": (SpeedParams, "speed"),
+              "style": (SubtitleStyle, "style"), "audio": (AudioParams, "audio"),
+              "export": (ExportParams, "export"), "zoom": (ZoomParams, "zoom")}
+
+
+def aplicar_receita(project, payload: dict) -> None:
+    """Escreve a receita no plano (sem salvar) — campo a campo, sem apagar o resto."""
     plan = project.plan
-    mapping = {"cut": (CutParams, "cut"), "speed": (SpeedParams, "speed"),
-               "style": (SubtitleStyle, "style"), "audio": (AudioParams, "audio"),
-               "export": (ExportParams, "export"), "zoom": (ZoomParams, "zoom")}
-    for key, (cls, attr) in mapping.items():
+    for key, (cls, attr) in PARAMS_MAP.items():
         if key in payload and isinstance(payload[key], dict):
             current = getattr(plan, attr).__dict__.copy()
             current.update({k: v for k, v in payload[key].items() if k in current})
             if "levels" in current:
                 current["levels"] = tuple(float(x) for x in current["levels"])
             setattr(plan, attr, cls(**current))
+    if "look" in payload:
+        from .render.looks import BY_ID
+
+        if str(payload["look"]) in BY_ID:
+            plan.look = str(payload["look"])
+    # tamanho de legenda RELATIVO ao que o formato pede. O tamanho certo já é
+    # calculado sozinho na criação do projeto (o preset é medido numa altura
+    # de 1024 e reescalado para a altura real); isto aqui é só "um pouco maior"
+    # ou "um pouco menor", e recalcula do zero para não acumular.
+    escala = (payload.get("style") or {}).get("fontsize_scale")
+    if escala is not None:
+        plan.style.fontsize = svc.fontsize_do_formato(plan, project.info, float(escala))
     if "zoom" in payload and isinstance(payload["zoom"], dict):
         # mudou o jogo de zoom: redistribui pelos blocos na hora
         svc.recalcular_zoom(project)
+
+
+@app.post("/api/projects/{pid}/params")
+def api_params(pid: str, payload: dict = Body(...)) -> dict:
+    project = _project(pid)
+    aplicar_receita(project, payload)
     if payload.get("rebuild_subtitles"):
         svc.rebuild_subtitles(project)
     project.save_plan()
-    return {"plan": plan.to_dict(), "timeline": svc.timeline_summary(project)}
+    return {"plan": project.plan.to_dict(),
+            "timeline": svc.timeline_summary(project)}
 
 
 @app.post("/api/projects/{pid}/preset")
@@ -1691,6 +1742,29 @@ def api_ia_config_set(payload: dict = Body(...)) -> dict:
     if "cortes" in payload:
         db.set_setting("ai_cortes", bool(payload["cortes"]))
     return api_ia_config()
+
+
+@app.get("/api/ai/modelos")
+def api_ia_modelos() -> dict:
+    """Os modelos que ESTA chave alcança, para a primeira tela escolher.
+
+    A escolha do modelo estava dentro do editor — que só abre DEPOIS do
+    processamento, que é justamente quem usa o modelo. Resultado: ele nunca
+    era escolhido e o app caía sempre no primeiro da lista de preferência.
+    O mesmo erro da chave, repetido. Agora a lista vem para a tela inicial.
+    """
+    from .ai import gemini as gem
+
+    try:
+        lista = gem.listar_modelos(_chave_ia())
+    except gem.ErroDaIA as exc:
+        raise HTTPException(400, str(exc)) from exc
+    escolhido = db.get_setting("gemini_model", "") or ""
+    # os que valem a pena aparecer primeiro, na ordem de preferência do app
+    ordem = {m: i for i, m in enumerate(gem.PREFERIDOS)}
+    lista.sort(key=lambda m: (ordem.get(m["id"], 99), m["id"]))
+    return {"modelos": lista, "escolhido": escolhido,
+            "padrao": gem.escolher_modelo(_chave_ia(), escolhido)["id"]}
 
 
 @app.post("/api/ai/test")

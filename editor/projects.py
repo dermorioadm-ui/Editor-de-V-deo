@@ -1,6 +1,7 @@
 """Serviço de projeto: análise, plano, legendas, exportação e validação."""
 from __future__ import annotations
 
+import copy
 import shutil
 import time
 import uuid
@@ -26,7 +27,7 @@ from .edit.zoom import assign_zoom, auditar as zoom_auditar, cenas as zoom_cenas
 from .video_analysis import face_center
 from .edit.repeats import removed_word_ids as repeats_removed_ids
 from .edit.timeline import Timeline
-from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoders, probe,
+from .ffmpeg_utils import (MediaInfo, extract_wav, hw_encoder_utilizavel, probe,
                            read_wav_mono)
 from .models import EditPlan, Subtitle
 from .render.export import export_project
@@ -219,6 +220,24 @@ def escalar_legenda(plan: EditPlan, info) -> None:
     st.margin_r = max(0, int(round(st.margin_r * k)))
     st.outline = round(st.outline * k, 2)
     st.shadow = round(st.shadow * k, 2)
+
+
+def fontsize_do_formato(plan: EditPlan, info, fator: float = 1.0) -> int:
+    """O tamanho de legenda certo para ESTE vídeo, vezes o empurrão do usuário.
+
+    Recalculado sempre a partir do tamanho base do preset — nunca do valor
+    que já está no plano. Assim gerar duas vezes com "maior" não vira
+    "gigante": a conta é sempre base x altura/1024 x fator.
+    """
+    dados = presets_mod.get_preset(plan.preset) or {}
+    base = float((dados.get("style") or {}).get("fontsize", SubtitleStyle().fontsize))
+    altura = 0
+    try:
+        altura = int(info.display_size[1])
+    except Exception:  # noqa: BLE001
+        altura = 0
+    k = (altura / ALTURA_DE_REFERENCIA) if altura >= 200 else 1.0
+    return max(8, int(round(base * k * max(0.4, float(fator)))))
 
 
 def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
@@ -719,9 +738,14 @@ def previa_da_edicao(project: Project, ctx) -> dict:
     ctx.stage("previa", "montando a prévia que toca liso")
     return export(project, ctx, {
         "filename": "previa-edicao.mp4", "restart": True,
+        # dentro do projeto, NÃO na pasta de Vídeos: a prévia é um arquivo de
+        # trabalho de 240p e não pode ficar ao lado do vídeo final com cara
+        # de ser ele.
+        "output_dir": str(project.dir / "exports"),
         "export_override": {"scale": PREVIA_ESCALA, "crf": PREVIA_CRF,
                             "preset": "ultrafast", "codec": "h264",
                             "audio_bitrate": "96k"},
+        "overwrite": True,
     })
 
 
@@ -733,23 +757,42 @@ def one_click(project: Project, ctx) -> dict:
     decidido e a prévia leve gerada. Editar é retoque, não trabalho.
     """
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.62, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.62, 0.74, lambda c: auto_edit(project, c))
+    a = _scoped(ctx, 0.0, 0.42, lambda c: analyze(project, c))
+    b = _scoped(ctx, 0.42, 0.52, lambda c: auto_edit(project, c))
     # a cópia leve da FONTE serve para arrastar a agulha e raspar a timeline
     try:
-        p = _scoped(ctx, 0.74, 0.82, lambda c: build_proxy_job(project, c))
+        p = _scoped(ctx, 0.52, 0.58, lambda c: build_proxy_job(project, c))
     except Exception as exc:  # noqa: BLE001 — sem proxy ainda dá para editar
-        ctx.progress(0.82, f"cópia leve falhou ({exc}); usando a fonte")
+        ctx.progress(0.58, f"cópia leve falhou ({exc}); usando a fonte")
         p = {"ok": False}
-    # e a EDIÇÃO renderizada é o que ele assiste: linear, sem pulo, com zoom
-    # e legenda queimados — igual ao arquivo final
+    # a EDIÇÃO renderizada é o que ele assiste: linear, sem pulo, com zoom
+    # e legenda queimados
     try:
-        v = _scoped(ctx, 0.82, 1.0, lambda c: previa_da_edicao(project, c))
+        v = _scoped(ctx, 0.58, 0.68, lambda c: previa_da_edicao(project, c))
     except Exception as exc:  # noqa: BLE001
-        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
+        ctx.progress(0.68, f"prévia da edição falhou ({exc})")
         v = {"ok": False}
+    # E O ARQUIVO FINAL. Esta é a diferença entre "o editor abriu" e "o vídeo
+    # está pronto". O pedido nunca foi um editor: foi receber o MP4 feito, e
+    # abrir o painel só quando alguma coisa saiu torta. Sem esta etapa, quem
+    # solta o arquivo e espera ainda precisa achar a aba Exportar e apertar
+    # outro botão — e aí o clique nunca foi único.
+    try:
+        # hw_encoder="auto": o passo final é o mais caro do pipeline inteiro
+        # (medido: 0,9x tempo real na CPU a 1080x1920, mais ~2 s fixos por
+        # bloco). O painel manual já pedia a GPU; o caminho automático — o
+        # único que todo mundo usa — era justamente o que ignorava a placa.
+        # Sem encoder de hardware que passe no teste, cai em libx264 e
+        # o vídeo sai do mesmo jeito.
+        f = _scoped(ctx, 0.68, 1.0,
+                    lambda c: export(project, c, {"restart": True,
+                                                  "hw_encoder": "auto"}))
+    except Exception as exc:  # noqa: BLE001 — o plano fica; ele reexporta
+        ctx.progress(1.0, f"a exportação falhou ({exc}); o corte está pronto, "
+                          f"dá para exportar pelo painel")
+        f = {"ok": False, "erro": str(exc)}
     project.set_status("pronto")
-    return {"analysis": a, "edit": b, "proxy": p, "previa": v}
+    return {"analysis": a, "edit": b, "proxy": p, "previa": v, "final": f}
 
 
 class _ScopedCtx:
@@ -875,7 +918,13 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
     options = options or {}
     plan = project.plan
     if options.get("export_override"):
-        # só no plano EM MEMÓRIA: o plan_json do banco nunca vê estes valores
+        # NUM PLANO À PARTE. Escrever em project.plan.export "só na memória"
+        # parecia inofensivo porque o banco nunca via — mas dentro do clique
+        # único a prévia de 240p roda LOGO ANTES da exportação final, no mesmo
+        # objeto de projeto. O final herdava escala 240p, CRF 32 e áudio de
+        # 96k: o usuário baixava a prévia achando que era o vídeo. Medido:
+        # 240x426 a 0,22 Mbps no lugar de 1080x1920.
+        plan = copy.copy(plan)          # raso de propósito: os blocos são os mesmos
         plan.export = ExportParams(**{**plan.export.__dict__,
                                       **options["export_override"]})
     if not plan.active_clips:
@@ -899,7 +948,8 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
         shutil.rmtree(work, ignore_errors=True)
     hw = options.get("hw_encoder") or None
     if hw == "auto":
-        hw = (hw_encoders() or [None])[0]
+        # testado de verdade, não só anunciado pelo ffmpeg
+        hw = hw_encoder_utilizavel()
 
     def cues_builder(tl: Timeline) -> list[dict]:
         rebuild_subtitles(project, tl)
@@ -925,8 +975,13 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
 
 
 def validate(project: Project, ctx, output: str | None = None) -> dict:
-    exports = sorted((project.dir / "exports").glob("*.mp4"),
-                     key=lambda p: -p.stat().st_mtime)
+    # a exportação final mora na pasta de Vídeos e a prévia dentro do projeto:
+    # olhar só num dos dois lugares fazia a conferência dizer "nada exportado"
+    # logo depois de exportar.
+    candidatos = list((project.dir / "exports").glob("*.mp4"))
+    candidatos += [p for p in output_dir().glob("*.mp4")
+                   if p.stem.startswith(_nome_de_arquivo(project.name))]
+    exports = sorted(candidatos, key=lambda p: -p.stat().st_mtime)
     target = Path(output) if output else (exports[0] if exports else None)
     if target is None or not target.exists():
         raise RuntimeError("nenhum arquivo exportado para validar")
