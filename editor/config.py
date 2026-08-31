@@ -236,6 +236,12 @@ class ExportParams:
     audio_rate: int = 48000
     burn_subtitles: bool = True
     scale: str = "source"            # nunca reduzir por padrão
+    # formato do QUADRO. "fonte" = a proporção da gravação (o normal). Os
+    # derivados saem do MESMO corte, com recorte concêntrico no rosto e a
+    # legenda reescalada para o quadro novo.
+    aspect: str = "fonte"            # fonte | 1:1 | 16:9 | 9:16
+    # os formatos EXTRAS que a exportação automática gera junto do principal
+    extras: tuple[str, ...] = ()
     chunk_blocks: int = 12           # exportação em blocos retomável
 
 

@@ -80,7 +80,7 @@ def main() -> int:
     RECEITA = {"speed": {"global_multiplier": 1.1},
                "zoom": {"intensity": 1.4},
                "style": {"fontsize_scale": 1.2},
-               "export": {"scale": "720"},
+               "export": {"scale": "720", "extras": ["1:1", "16:9"]},
                "look": filtro}
     print(f"   receita: velocidade +10%, zoom 1.4, legenda 1.2x, 720 de largura, "
           f"filtro '{filtro}'")
@@ -195,6 +195,33 @@ def main() -> int:
     subs = final.get("subtitles") or []
     check(len(subs) > 0, "as legendas foram queimadas na exportação",
           f"{len(subs)} legendas")
+
+    print("7b) os três formatos do MESMO corte")
+    formatos = {f.get("aspecto"): f for f in (final.get("formatos") or [])}
+    check(set(formatos) == {"fonte", "1:1", "16:9"},
+          "saíram os três formatos pedidos na primeira tela",
+          str(sorted(formatos)))
+    # a receita pediu "720 de largura" olhando o vertical: isso é uma REDUÇÃO
+    # de 2/3, não uma largura fixa — cada formato encolhe na mesma proporção
+    esperado = {"fonte": None, "1:1": (1.0, 720), "16:9": (16 / 9, 852)}
+    for nome, dados in formatos.items():
+        arq = Path(dados.get("output", ""))
+        if not arq.exists():
+            check(False, f"o arquivo do formato {nome} existe")
+            continue
+        pf = probe(arq)
+        prop = pf.width / pf.height
+        alvo = esperado[nome]
+        if alvo is None:
+            continue
+        check(abs(prop - alvo[0]) < 0.02,
+              f"o {nome} tem a proporção certa",
+              f"{pf.width}x{pf.height} = {prop:.3f}")
+        check(pf.width == alvo[1], f"e sai em {alvo[1]} de largura",
+              f"{pf.width}")
+        check(abs(pf.duration - f.duration) < 0.15,
+              f"e é o MESMO corte do principal ({pf.duration:.2f} s)")
+        check(arq.name != saida.name, f"em arquivo próprio ({arq.name})")
 
     print("8) o retoque se entrega sozinho — e barato (cache por trecho)")
     # muda UMA legenda: o arquivo final tem que se refazer reencodando só os

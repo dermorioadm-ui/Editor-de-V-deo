@@ -464,6 +464,14 @@ def aplicar_receita(project, payload: dict) -> None:
     # calculado sozinho na criação do projeto (o preset é medido numa altura
     # de 1024 e reescalado para a altura real); isto aqui é só "um pouco maior"
     # ou "um pouco menor", e recalcula do zero para não acumular.
+    # formatos extras: só os que existem, e o principal nunca entra na lista
+    if isinstance(payload.get("export"), dict) and "extras" in payload["export"]:
+        from .render.renderer import PROPORCOES
+
+        pedidos = payload["export"].get("extras") or []
+        plan.export.extras = tuple(
+            dict.fromkeys(a for a in pedidos
+                          if a in PROPORCOES and a != "fonte"))
     escala = (payload.get("style") or {}).get("fontsize_scale")
     if escala is not None:
         plan.style.fontsize = svc.fontsize_do_formato(plan, project.info, float(escala))

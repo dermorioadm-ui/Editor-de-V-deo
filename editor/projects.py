@@ -808,11 +808,34 @@ def exportar_final(project: Project, ctx) -> dict:
     retoque: sem sobrescrever, a pasta de Vídeos viraria "vsl_editado (7).mp4"
     e ninguém saberia qual é o bom.
     """
-    return export(project, ctx, {
+    principal = export(project, ctx, {
         "restart": False,       # o cache por trecho é o que faz o retoque ser barato
         "overwrite": True,
         "hw_encoder": "auto",
     })
+    # E OS FORMATOS EXTRAS, do MESMO corte. Cada um é uma geração de encode
+    # A PARTIR DA FONTE, não do arquivo pronto: derivar o 16:9 do 9:16 já
+    # comprimido seria esticar 1,78x em cima de artefato de compressão. O
+    # recorte é concêntrico no mesmo rosto e a legenda é reescalada para o
+    # quadro novo, então os três saem com a legenda no mesmo lugar relativo.
+    extras = [e for e in (project.plan.export.extras or ()) if e and e != "fonte"]
+    saidas = [{"aspecto": "fonte", **principal}]
+    base = _nome_de_arquivo(project.name)
+    for i, aspecto in enumerate(extras):
+        rotulo = aspecto.replace(":", "x")
+        try:
+            r = _scoped(ctx, 0.0, 1.0, lambda c, a=aspecto, rot=rotulo: export(
+                project, c, {
+                    "restart": False, "overwrite": True, "hw_encoder": "auto",
+                    "filename": f"{base} {rot}.mp4",
+                    "export_override": {"aspect": a},
+                }))
+            saidas.append({"aspecto": aspecto, **r})
+        except Exception as exc:  # noqa: BLE001 — o principal já saiu
+            ctx.progress(1.0, f"o formato {aspecto} falhou ({exc}); "
+                              f"o principal está pronto")
+    principal["formatos"] = saidas
+    return principal
 
 
 class _ScopedCtx:

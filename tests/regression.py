@@ -296,6 +296,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_formatos_derivados()
     testar_ia_decide_ritmo_e_camera()
     testar_comando_nao_e_marcador_de_discurso()
     testar_achados_da_revisao()
@@ -1983,6 +1984,72 @@ def testar_controles_antes_de_gerar() -> None:
     check(variacoes[1] < variacoes[2],
           f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
           f"{variacoes[2]:.3f})")
+
+
+def testar_formatos_derivados() -> None:
+    """1:1 e 16:9 saem do MESMO take vertical, sem esticar e sem distorcer."""
+    from editor.config import ExportParams, SubtitleStyle
+    from editor.edit.zoom import recorte, zoom_chain
+    from editor.ffmpeg_utils import MediaInfo
+    from editor.render.renderer import regua_da_legenda, target_size
+
+    fonte = MediaInfo(path="x.mp4", width=1080, height=1920, fps=30.0,
+                      duration=10.0)
+    st = SubtitleStyle(fontsize=66, margin_v=413, outline=7.5)
+
+    tamanhos = {a: target_size(fonte, ExportParams(aspect=a))
+                for a in ("fonte", "1:1", "16:9")}
+    check(tamanhos["fonte"] == (1080, 1920), "o principal continua o da fonte")
+    check(tamanhos["1:1"] == (1080, 1080),
+          f"o quadrado sai 1080x1080 — a maior janela que cabe, ZERO esticada "
+          f"({tamanhos['1:1']})")
+    check(tamanhos["16:9"] == (1280, 720),
+          f"o horizontal sai 720p e não 1080p: a janela real é 1080x608, e "
+          f"1080p seria esticar 1,78x ({tamanhos['16:9']})")
+
+    # o recorte usa TODOS os pixels que existem e é centrado no rosto
+    for a, (tw, th) in tamanhos.items():
+        if a == "fonte":
+            continue
+        x, y, w, h = recorte(1.0, 1080, 1920, 0.50, 0.44, tw / th)
+        check(abs((w / h) - (tw / th)) < 0.01,
+              f"a janela do {a} já sai na proporção do formato ({w}x{h})")
+        check(w == 1080, f"e usa a largura inteira da fonte no {a} ({w})")
+        centro = (y + h / 2) / 1920
+        check(abs(centro - 0.44) < 0.02 or y == 0 or y + h == 1920,
+              f"com o rosto no centro do {a} (centro em {centro:.2f})")
+        # esticada real
+        estica = tw / w
+        check(estica <= 1.20,
+              f"e o {a} nunca estica mais que 20% ({estica:.2f}x)")
+
+    # a legenda acompanha o quadro novo, e desce para o rodapé
+    for a, (tw, th) in tamanhos.items():
+        pw, ph, st2 = regua_da_legenda(fonte, ExportParams(aspect=a), st)
+        if a == "fonte":
+            check((pw, ph) == (1080, 1920) and st2 is st,
+                  "no formato da fonte a régua da legenda não muda")
+            continue
+        check((pw, ph) == (tw, th), f"o PlayRes do {a} é o do quadro derivado")
+        check(abs(st2.fontsize / th - st.fontsize / 1920) < 0.003,
+              f"a legenda do {a} ocupa a mesma fração da altura "
+              f"({st2.fontsize / th:.1%} contra {st.fontsize / 1920:.1%})")
+        check(st2.margin_v / th <= 0.121,
+              f"e desce para o rodapé no {a} ({st2.margin_v / th:.0%} do quadro), "
+              f"senão sobe para cima do rosto no recorte fechado")
+
+    # e o "scale" é uma REDUÇÃO, não uma largura fixa
+    r = {a: target_size(fonte, ExportParams(aspect=a, scale="720"))
+         for a in ("fonte", "1:1", "16:9")}
+    check(r["fonte"] == (720, 1280) and r["1:1"] == (720, 720)
+          and r["16:9"] == (852, 480),
+          f"pedir 720 encolhe os três na mesma proporção ({r})")
+
+    # sem mudança de proporção, nada de recorte novo
+    check(zoom_chain(1.0, 1080, 1920, 1080, 1920, 0.5, 0.44) == "",
+          "no formato da fonte, zoom 1,00 continua sem filtro nenhum")
+    check("crop" in zoom_chain(1.0, 1080, 1920, 1080, 1080, 0.5, 0.44),
+          "mas o formato derivado recorta mesmo com zoom 1,00")
 
 
 def testar_ia_decide_ritmo_e_camera() -> None:

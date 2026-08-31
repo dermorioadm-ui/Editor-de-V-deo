@@ -41,6 +41,9 @@ export default function Home() {
   const [legenda, setLegenda] = useState(1.0)
   const [resolucao, setResolucao] = useState('source')
   const [iaCortes, setIaCortes] = useState(true)
+  // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
+  // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
+  const [extras, setExtras] = useState<string[]>([])
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -106,7 +109,7 @@ export default function Home() {
       speed: { global_multiplier: velocidade },
       zoom: { intensity: zoomForca },
       style: { fontsize_scale: legenda },
-      export: { scale: resolucao },
+      export: { scale: resolucao, extras },
       look: look || 'nenhum',
     }
   }
@@ -416,6 +419,25 @@ export default function Home() {
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">
               já sai no tamanho certo do vertical
+            </p>
+          </div>
+
+          <div className="w-44">
+            <label className="label">Formatos extras</label>
+            <div className="space-y-0.5 pt-0.5">
+              {[['1:1', 'quadrado (feed)'], ['16:9', 'horizontal (YouTube)']]
+                .map(([id, nome]) => (
+                <label key={id} className="flex items-center gap-1.5 text-xs
+                                           text-slate-300 cursor-pointer">
+                  <input type="checkbox" checked={extras.includes(id)}
+                         onChange={(e) => setExtras((v) => e.target.checked
+                           ? [...v, id] : v.filter((x) => x !== id))} />
+                  {nome}
+                </label>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              além do vertical, recortados no rosto
             </p>
           </div>
 

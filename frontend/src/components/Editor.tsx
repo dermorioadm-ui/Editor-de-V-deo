@@ -48,6 +48,8 @@ export default function Editor() {
   const [baixarVelho, setBaixarVelho] = useState(false)
   // o job que está gerando o MP4 final POR BAIXO — o editor já está de pé
   const [exportando, setExportando] = useState<any>(null)
+  const [outrosFormatos, setOutrosFormatos] =
+    useState<{ aspecto: string; url: string }[]>([])
   const edicoes = useRef(0)            // quantos retoques houve
   const edicoesNoExport = useRef(-1)   // quantos havia quando a exportação começou
   const [previewBusy, setPreviewBusy] = useState(false)
@@ -108,6 +110,11 @@ export default function Editor() {
     setExportando(['fila', 'rodando'].includes(ultimo.status) ? ultimo : null)
     if (ultimo.status === 'ok' && ultimo.result?.download) {
       setBaixar(`${ultimo.result.download}?v=${ultimo.id}`)
+      // os formatos extras (quadrado, horizontal) do MESMO corte
+      setOutrosFormatos((ultimo.result.formatos ?? [])
+        .filter((f: any) => f.aspecto && f.aspecto !== 'fonte' && f.download)
+        .map((f: any) => ({ aspecto: f.aspecto,
+                            url: `${f.download}?v=${ultimo.id}` })))
       // se o usuário editou DURANTE a exportação, o arquivo que acabou de
       // sair já nasceu velho — e o debounce dispara outra. Contador local, não
       // relógio: o do servidor é outra máquina.
@@ -445,9 +452,16 @@ export default function Editor() {
                   gerando o arquivo final… {Math.round((exportando.progress ?? 0) * 100)}%
                 </span>
               ) : baixar && !baixarVelho ? (
-                <a className="btn btn-primary btn-xs ml-auto" href={baixar} download>
-                  ↓ baixar o vídeo
-                </a>
+                <span className="ml-auto flex items-center gap-2">
+                  <a className="btn btn-primary btn-xs" href={baixar} download>
+                    ↓ baixar o vídeo
+                  </a>
+                  {outrosFormatos.map((f) => (
+                    <a key={f.aspecto} className="btn btn-xs" href={f.url} download>
+                      {f.aspecto}
+                    </a>
+                  ))}
+                </span>
               ) : baixarVelho ? (
                 <span className="ml-auto text-slate-500">
                   refazendo o arquivo com o seu retoque…

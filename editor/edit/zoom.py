@@ -394,11 +394,25 @@ def ancora_alcancavel(centro_x: float, centro_y: float,
 
 
 def recorte(zoom: float, largura: int, altura: int,
-            centro_x: float, centro_y: float) -> tuple[int, int, int, int]:
-    """Recorte CONCÊNTRICO no rosto. Devolve (x, y, w, h), todos pares."""
+            centro_x: float, centro_y: float,
+            proporcao: float = 0.0) -> tuple[int, int, int, int]:
+    """Recorte CONCÊNTRICO no rosto. Devolve (x, y, w, h), todos pares.
+
+    ``proporcao`` (largura/altura) muda o FORMATO da janela — é o que permite
+    tirar um 1:1 ou um 16:9 do mesmo take vertical. Zero mantém a proporção
+    da fonte. A janela é sempre a MAIOR que cabe na fonte com aquela
+    proporção, e só então dividida pelo zoom: assim o formato derivado usa
+    todos os pixels que existem antes de qualquer reescala.
+    """
     z = max(1.0, float(zoom))
-    w = par(largura / z)
-    h = par(altura / z)
+    base_w, base_h = float(largura), float(altura)
+    if proporcao and proporcao > 0:
+        if proporcao > base_w / max(base_h, 1e-9):
+            base_h = base_w / proporcao          # mais largo que a fonte: sobra altura
+        else:
+            base_w = base_h * proporcao          # mais alto: sobra largura
+    w = par(base_w / z)
+    h = par(base_h / z)
     x = par(clamp(centro_x * largura - w / 2, 0, largura - w))
     y = par(clamp(centro_y * altura - h / 2, 0, altura - h))
     return x, y, w, h
@@ -411,10 +425,19 @@ def zoom_chain(zoom: float, largura_fonte: int, altura_fonte: int,
     """crop concêntrico -> scale de volta -> unsharp leve.
 
     O unsharp compensa a suavização da reescala. Acima de 0,6 fica artificial.
+
+    Quando a saída tem OUTRA PROPORÇÃO que a fonte (o 1:1 e o 16:9 tirados do
+    mesmo take vertical), o recorte já sai no formato da saída — senão o
+    ``scale`` esticaria a imagem para caber. É por isso que este caminho vale
+    mesmo com zoom 1,00: não há zoom, mas há reenquadramento.
     """
-    if zoom is None or abs(float(zoom) - 1.0) <= 1e-3:
+    prop_fonte = largura_fonte / max(altura_fonte, 1e-9)
+    prop_saida = largura_saida / max(altura_saida, 1e-9)
+    reenquadra = abs(prop_fonte - prop_saida) > 0.01
+    if (zoom is None or abs(float(zoom) - 1.0) <= 1e-3) and not reenquadra:
         return ""
-    x, y, w, h = recorte(zoom, largura_fonte, altura_fonte, centro_x, centro_y)
+    x, y, w, h = recorte(zoom, largura_fonte, altura_fonte, centro_x, centro_y,
+                         prop_saida if reenquadra else 0.0)
     if w <= 0 or h <= 0:
         return ""
     partes = [f"crop=w={w}:h={h}:x={x}:y={y}",

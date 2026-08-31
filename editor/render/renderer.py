@@ -132,20 +132,106 @@ def encoder_args(export: ExportParams, info: MediaInfo,
     return args
 
 
+# Formatos derivados do MESMO take vertical. O tamanho de cada um não é
+# escolhido pela tabela dos players: é escolhido pelo que a fonte entrega.
+#
+# De um 1080x1920, a maior janela quadrada é 1080x1080 — cabe inteira, zero
+# esticada. A maior janela 16:9 é 1080x608, e aí a escolha importa: mandar
+# para 1920x1080 é esticar 1,78x (fica mole e o anúncio parece amador);
+# 1280x720 estica 1,18x, que é a mesma tolerância que o teto de zoom já usa.
+# Por isso o 16:9 sai em 720p, e não em 1080p.
+PROPORCOES = {
+    "fonte": 0.0,
+    "1:1": 1.0,
+    "16:9": 16 / 9,
+    "9:16": 9 / 16,
+}
+ALTURA_DERIVADA = {"1:1": 1080, "16:9": 720, "9:16": 1920}
+
+
+def aspecto_do_export(export: ExportParams) -> str:
+    a = str(getattr(export, "aspect", "fonte") or "fonte")
+    return a if a in PROPORCOES else "fonte"
+
+
+def _reducao(main: MediaInfo, export: ExportParams) -> float:
+    """Quanto a escolha de "Resolução" encolhe o vídeo. 1,0 = nada."""
+    w, _h = main.display_size
+    scale = str(getattr(export, "scale", "source") or "source")
+    if scale in ("", "source", "original") or w <= 0:
+        return 1.0
+    try:
+        alvo = int(scale)
+    except ValueError:
+        return 1.0
+    if alvo <= 0 or alvo >= w:
+        return 1.0
+    return alvo / w
+
+
 def target_size(main: MediaInfo, export: ExportParams) -> tuple[int, int]:
     """Resolução de saída. Padrão: a da fonte — nunca reduzir sem pedido."""
     w, h = main.display_size
-    scale = str(getattr(export, "scale", "source") or "source")
-    if scale in ("", "source", "original"):
-        return w, h
-    try:
-        target_w = int(scale)
-    except ValueError:
-        return w, h
-    if target_w <= 0 or target_w >= w:
-        return w, h
-    new_h = int(round(h * target_w / w))
-    return target_w - (target_w % 2), new_h - (new_h % 2)
+    aspecto = aspecto_do_export(export)
+    prop_fonte = w / max(h, 1e-9)
+    derivado = aspecto != "fonte" and abs(PROPORCOES[aspecto] - prop_fonte) > 0.01
+    if derivado:
+        alvo_h = ALTURA_DERIVADA.get(aspecto, h)
+        alvo_w = int(round(alvo_h * PROPORCOES[aspecto]))
+        w, h = alvo_w, alvo_h
+    # "Resolução" é uma REDUÇÃO, não uma largura fixa. Tratá-la como largura
+    # dava 720x404 no 16:9 quando o usuário pediu "720 de largura" olhando o
+    # vertical — um tamanho que nenhum player espera. Como redução, 720 num
+    # vertical de 1080 vira 0,667, e o 16:9 sai 854x480: a mesma economia,
+    # numa geometria que existe.
+    k = _reducao(main, export)
+    if k < 1.0:
+        w, h = int(round(w * k)), int(round(h * k))
+    return w - (w % 2), h - (h % 2)
+
+
+def regua_da_legenda(main: MediaInfo, export: ExportParams,
+                     style) -> tuple[int, int, object]:
+    """PlayRes e estilo da legenda para ESTE formato de saída.
+
+    No formato da fonte o ASS é escrito na resolução da FONTE, sempre: o
+    fontsize, o contorno e as margens do estilo são pixels absolutos
+    calibrados para ela, e PlayRes na resolução do render fazia a mesma
+    legenda ocupar 47% da largura no export 1080, 71% no 720 e 100% no 480.
+
+    Num formato DERIVADO a régua muda junto com o quadro. Uma margem de 220 px
+    medida num quadro de 1920 de altura é 11% da tela; a mesma margem num 16:9
+    de 720 seria 31% — a legenda subiria para o meio do rosto. Então o estilo
+    é reescalado pela razão das alturas, exatamente como na criação do
+    projeto, e o PlayRes passa a ser o do quadro derivado.
+    """
+    from dataclasses import replace
+
+    w, h = main.display_size
+    tw, th = target_size(main, export)
+    prop_fonte = w / max(h, 1e-9)
+    prop_saida = tw / max(th, 1e-9)
+    if abs(prop_fonte - prop_saida) <= 0.01:
+        return w, h, style
+    k = th / max(h, 1)
+    # A MARGEM não é só proporção. No vertical ela é alta de propósito: 21% do
+    # quadro tira a legenda de cima da barra do Instagram. Mantida na
+    # proporção, num 16:9 de 720 ela vira 155 px e a legenda sobe para o
+    # queixo — o recorte horizontal já é só a cabeça, não sobra o espaço que
+    # existia embaixo do corpo. No formato derivado a legenda desce para o
+    # rodapé: no máximo 12% do quadro, que é onde legenda de YouTube e de
+    # feed mora.
+    margem = min(style.margin_v * k, th * 0.12)
+    novo = replace(
+        style,
+        fontsize=max(8, int(round(style.fontsize * k))),
+        margin_v=max(0, int(round(margem))),
+        margin_l=max(0, int(round(style.margin_l * k))),
+        margin_r=max(0, int(round(style.margin_r * k))),
+        outline=round(style.outline * k, 2),
+        shadow=round(style.shadow * k, 2),
+    )
+    return tw, th, novo
 
 
 def _hash(payload: dict) -> str:
@@ -257,7 +343,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # export 1080, 71% no 720 e 100% no 480 — de ponta a ponta da tela. Com
     # PlayRes fixo, o libass escala tudo junto e dá 47,5% nas três. (Medido
     # com o filtro ass do próprio ffmpeg, texto "ISSO MUDA TUDO".)
-    play_w, play_h = main.display_size
+    play_w, play_h, style_saida = regua_da_legenda(main, plan.export, plan.style)
     fps = main.fps or 30.0
     inputs: list[str] = []
     pre: list[str] = []
@@ -367,7 +453,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     if plan.export.burn_subtitles and cues:
         window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
-        ass_mod.write_ass(ass_path, cues, plan.style, play_w, play_h,
+        ass_mod.write_ass(ass_path, cues, style_saida, play_w, play_h,
                           time_offset=-seg.t_start,
                           window=(seg.t_start - 0.5, window_end))
         tail.append(F.subtitle_chain(ass_path))
@@ -437,6 +523,7 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "t_start": round(seg.t_start, 3) if positional else None,
         "nominal": round(seg.nominal, 4),
         "style": plan.style.__dict__ if seg_cues else None,
+        "aspect": aspecto_do_export(plan.export),
         "export": plan.export.__dict__,
         "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
         "hw": hw, "size": target_size(main, plan.export),

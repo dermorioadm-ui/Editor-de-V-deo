@@ -57,8 +57,14 @@ def export_project(
     report(0.0, "planejando trechos")
     segs = plan_segments(plan, timeline, sources, main)
     media_paths = {k: v["path"] for k, v in sources.items()}
+    # Cada FORMATO tem o seu próprio cache de trechos. Sem isso, exportar o
+    # 1:1 sobrescreveria as entradas do 9:16 no manifesto e o retoque seguinte
+    # reencodaria os três formatos inteiros — o cache por hash só paga se cada
+    # geometria guardar a sua.
+    aspecto = str(getattr(plan.export, "aspect", "fonte") or "fonte")
+    sub = "segments" if aspecto == "fonte" else f"segments-{aspecto.replace(':', 'x')}"
     segs = render_video_segments(
-        segs, plan, main, cues, work / "segments", media_paths, hw,
+        segs, plan, main, cues, work / sub, media_paths, hw,
         on_progress=lambda f, m: report(f, m, 0.02, 0.62), cancel=cancel)
 
     # 3) concat SEM reencodar
