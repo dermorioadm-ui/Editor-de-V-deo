@@ -9,7 +9,10 @@ import { setState, useStore } from '../state/store'
  *  ONDE o processo está, não uma interface vazia cheia de botões que ainda
  *  não fazem nada. Editar começa quando há o que editar. */
 
-// os ~14 estágios internos, agrupados em 5 passos que uma pessoa entende
+// os ~14 estágios internos, agrupados em 5 passos que uma pessoa entende.
+// A EXPORTAÇÃO não está aqui de propósito: ela roda por baixo depois que o
+// editor abre, porque é o passo mais caro de todos e segurar esta tela até
+// ela acabar é ficar minutos olhando barra com o vídeo já montado.
 const PASSOS: { rotulo: string; stages: string[] }[] = [
   { rotulo: 'Ouvindo o áudio', stages: ['audio', 'envelope', 'palmas'] },
   { rotulo: 'Transcrevendo o que você falou',
@@ -17,8 +20,7 @@ const PASSOS: { rotulo: string; stages: string[] }[] = [
   { rotulo: 'Cortando (IA + marcadores)',
     stages: ['ia', 'takes', 'repeticao', 'cortes', 'auditoria'] },
   { rotulo: 'Jogo de câmeras e legendas', stages: ['zoom', 'legendas'] },
-  { rotulo: 'Gerando a prévia', stages: ['proxy', 'previa'] },
-  { rotulo: 'Exportando o vídeo final', stages: ['exportando'] },
+  { rotulo: 'Montando o vídeo pronto', stages: ['proxy', 'previa'] },
 ]
 
 export default function ProcessingView() {

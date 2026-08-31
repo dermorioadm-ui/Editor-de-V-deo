@@ -370,8 +370,22 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
         aplicar_receita(project, receita)
     if mudou or receita:
         project.save_plan()
-    return _run("clique-unico", pid,
-                lambda ctx: svc.one_click(svc.load(pid), ctx))
+
+    def pipeline(ctx) -> dict:
+        res = svc.one_click(svc.load(pid), ctx)
+        # e o MP4 final continua sendo gerado — por baixo, sem segurar a tela.
+        # O botão de baixar no editor acende sozinho quando este job termina.
+        try:
+            job = get_queue().submit(
+                "exportacao", pid,
+                lambda c: svc.exportar_final(svc.load(pid), c))
+            res["final_job"] = job.id
+        except Exception as exc:  # noqa: BLE001 — o corte está pronto de todo jeito
+            res["final_job"] = None
+            res["final_erro"] = str(exc)
+        return res
+
+    return _run("clique-unico", pid, pipeline)
 
 
 @app.post("/api/projects/{pid}/export")
@@ -379,6 +393,18 @@ def api_export(pid: str, payload: dict = Body(default={})) -> dict:
     _project(pid)
     return _run("exportacao", pid,
                 lambda ctx: svc.export(svc.load(pid), ctx, payload))
+
+
+@app.post("/api/projects/{pid}/export-final")
+def api_export_final(pid: str) -> dict:
+    """Refaz o arquivo final por baixo — é o que roda quando você para de mexer.
+
+    Sempre no mesmo arquivo e reaproveitando o cache por trecho: só o que o
+    retoque tocou é reencodado.
+    """
+    _project(pid)
+    return _run("exportacao", pid,
+                lambda ctx: svc.exportar_final(svc.load(pid), ctx))
 
 
 @app.post("/api/projects/{pid}/validate")

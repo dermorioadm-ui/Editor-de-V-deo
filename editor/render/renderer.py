@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -383,12 +386,79 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     return args, inputs
 
 
+def workers_de_encode() -> int:
+    """Quantos ffmpeg rodar ao mesmo tempo.
+
+    O custo que domina a exportação não é o encode: é o CUSTO FIXO por trecho
+    (abrir o processo, buscar no arquivo, iniciar o x264, subir as threads).
+    Medido: um passe único de 20 s custa 18 s; os MESMOS 20 s partidos em 20
+    trechos custam 51 s. São ~2 s por trecho que a CPU passa quase parada — e
+    um corte de silêncio produz um trecho por frase, então numa VSL de 3 min
+    esse custo fixo sozinho passa de 5 minutos.
+
+    Rodar vários em paralelo cobre o custo fixo de um com o encode do outro.
+    Metade dos núcleos (teto de 4) porque cada ffmpeg já usa várias threads:
+    passar disso só troca throughput por troca de contexto.
+    """
+    try:
+        n = os.cpu_count() or 2
+    except Exception:  # noqa: BLE001
+        n = 2
+    return max(1, min(4, n // 2))
+
+
+def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
+                     cues: list[dict], hw: str | None) -> tuple[str, list, list, list]:
+    """A identidade do trecho: se ela não muda, o arquivo encodado vale."""
+    # As janelas são as MESMAS do render (t_start): legendas e estilo só entram
+    # quando são queimadas, e a posição só quando algo posicional toca o trecho
+    # — sem isso, editar uma legenda com burn desligado (ou qualquer edição
+    # noutro ponto) invalidava trechos que não mudaram um pixel.
+    seg_cues = [(round(c["start"], 3), round(c["end"], 3), c["text"])
+                for c in cues
+                if c["end"] > seg.t_start - 0.5
+                and c["start"] < seg.t_start + seg.nominal + 1.0] \
+        if plan.export.burn_subtitles else []
+    seg_blurs = [b.to_dict() for b in plan.blurs
+                 if b.enabled and b.out_end > seg.t_start
+                 and b.out_start < seg.t_start + seg.nominal]
+    seg_overlays = [o.to_dict() for o in plan.overlays
+                    if o.enabled and o.out_end > seg.t_start
+                    and o.out_start < seg.t_start + seg.nominal]
+    positional = bool(seg_cues or seg_blurs or seg_overlays)
+    key = _hash({
+        "src": seg.source_path, "start": round(seg.src_start, 4),
+        "dur": round(seg.src_duration, 4), "speed": seg.speed,
+        "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
+        "zoom": round(seg.zoom, 4),
+        "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
+        "unsharp": plan.zoom.unsharp,
+        "look": plan.look, "look_vignette": plan.look_vignette,
+        "t_start": round(seg.t_start, 3) if positional else None,
+        "nominal": round(seg.nominal, 4),
+        "style": plan.style.__dict__ if seg_cues else None,
+        "export": plan.export.__dict__,
+        "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
+        "hw": hw, "size": target_size(main, plan.export),
+    })
+    return key, seg_cues, seg_blurs, seg_overlays
+
+
 def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
                           main: MediaInfo, cues: list[dict], work: Path,
                           media_paths: dict, hw: str | None,
                           on_progress: Callable | None = None,
                           cancel: Callable | None = None) -> list[VideoSegment]:
-    """Encoda cada trecho UMA vez. Retomável: trecho com hash igual é reusado."""
+    """Encoda cada trecho UMA vez, vários ao mesmo tempo.
+
+    Retomável: trecho com hash igual é reusado, então reexportar depois de um
+    retoque só reencoda o que o retoque tocou.
+
+    A ORDEM não é negociável para o resultado — o `concat -c copy` depende de
+    `cursor` acumular as durações MEDIDAS na sequência certa. Por isso o
+    paralelismo fica só no encode: a acumulação continua sendo uma passada
+    sequencial depois que todos os arquivos existem.
+    """
     work.mkdir(parents=True, exist_ok=True)
     ass_dir = work / "ass"
     ass_dir.mkdir(exist_ok=True)
@@ -401,74 +471,73 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
             manifest = {}
 
     total_out = sum(s.out_theoretical for s in segs) or 1.0
-    done_out = 0.0
-    cursor = 0.0
+
+    # 1) quem já está pronto e quem precisa encodar (barato, sequencial)
+    pendentes: list[tuple[VideoSegment, str, Path]] = []
     for seg in segs:
-        seg.out_start = cursor
-        # A chave usa as MESMAS janelas do render (t_start): legendas e estilo
-        # só entram quando são queimadas, e a posição só quando algo posicional
-        # toca o trecho — sem isso, editar uma legenda com burn desligado (ou
-        # qualquer edição noutro ponto) invalidava trechos que não mudaram um
-        # pixel.
-        seg_cues = [(round(c["start"], 3), round(c["end"], 3), c["text"])
-                    for c in cues
-                    if c["end"] > seg.t_start - 0.5
-                    and c["start"] < seg.t_start + seg.nominal + 1.0] \
-            if plan.export.burn_subtitles else []
-        seg_blurs = [b.to_dict() for b in plan.blurs
-                     if b.enabled and b.out_end > seg.t_start
-                     and b.out_start < seg.t_start + seg.nominal]
-        seg_overlays = [o.to_dict() for o in plan.overlays
-                        if o.enabled and o.out_end > seg.t_start
-                        and o.out_start < seg.t_start + seg.nominal]
-        positional = bool(seg_cues or seg_blurs or seg_overlays)
-        key = _hash({
-            "src": seg.source_path, "start": round(seg.src_start, 4),
-            "dur": round(seg.src_duration, 4), "speed": seg.speed,
-            "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
-            "zoom": round(seg.zoom, 4),
-            "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
-            "unsharp": plan.zoom.unsharp,
-            "look": plan.look, "look_vignette": plan.look_vignette,
-            "t_start": round(seg.t_start, 3) if positional else None,
-            "nominal": round(seg.nominal, 4),
-            "style": plan.style.__dict__ if seg_cues else None,
-            "export": plan.export.__dict__,
-            "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
-            "hw": hw, "size": target_size(main, plan.export),
-        })
-        dest = work / f"seg_{seg.index:04d}_{key}.mp4"
+        key, _c, _b, _o = _chave_do_trecho(seg, plan, main, cues, hw)
         cached = manifest.get(str(seg.index))
-        if (cached and cached.get("key") == key and Path(cached["file"]).exists()):
+        if cached and cached.get("key") == key and Path(cached["file"]).exists():
             seg.file = cached["file"]
             seg.measured = float(cached["measured"])
-        else:
+            continue
+        pendentes.append((seg, key, work / f"seg_{seg.index:04d}_{key}.mp4"))
+
+    # 2) encoda os que faltam, vários ao mesmo tempo
+    if pendentes:
+        feito_out = sum(s.out_theoretical for s in segs
+                        if not any(s is p[0] for p in pendentes))
+        trava = threading.Lock()
+        estado = {"out": feito_out, "n": 0}
+
+        def encoda(item: tuple[VideoSegment, str, Path]) -> None:
+            seg, key, dest = item
             if cancel and cancel():
                 raise KeyboardInterrupt("exportação cancelada")
             args, _ = _build_video_command(seg, plan, main, cues, ass_dir,
                                            media_paths, hw)
             for old in work.glob(f"seg_{seg.index:04d}_*.mp4"):
                 old.unlink(missing_ok=True)
-            base = done_out
-
-            def prog(frac: float, _base=base, _seg=seg):
-                if on_progress:
-                    on_progress(
-                        min(0.999, (_base + frac * _seg.out_theoretical) / total_out),
-                        f"encodando trecho {_seg.index + 1}/{len(segs)}")
-
-            run_with_progress([*args, str(dest)], seg.out_theoretical, prog, cancel)
+            run_with_progress([*args, str(dest)], seg.out_theoretical, None, cancel)
             seg.file = str(dest)
             seg.measured = probe(dest).duration
-            manifest[str(seg.index)] = {"key": key, "file": seg.file,
-                                        "measured": seg.measured}
-            manifest_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-        done_out += seg.out_theoretical
+            # o manifesto é compartilhado: uma escrita de cada vez
+            with trava:
+                manifest[str(seg.index)] = {"key": key, "file": seg.file,
+                                            "measured": seg.measured}
+                manifest_path.write_text(json.dumps(manifest, indent=1),
+                                         encoding="utf-8")
+                estado["out"] += seg.out_theoretical
+                estado["n"] += 1
+                if on_progress:
+                    on_progress(min(0.999, estado["out"] / total_out),
+                                f"encodando trecho {estado['n']}/{len(pendentes)}")
+
+        n_workers = min(workers_de_encode(), len(pendentes))
+        if n_workers <= 1:
+            for item in pendentes:
+                encoda(item)
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futuros = [pool.submit(encoda, item) for item in pendentes]
+                erro: BaseException | None = None
+                for fut in futuros:
+                    try:
+                        fut.result()
+                    except BaseException as exc:  # noqa: BLE001
+                        # o primeiro erro manda; os outros já foram cancelados
+                        # ou vão terminar sozinhos e não têm o que dizer
+                        erro = erro or exc
+                if erro is not None:
+                    raise erro
+
+    # 3) a linha do tempo, em ordem, com as durações que saíram de verdade
+    cursor = 0.0
+    for seg in segs:
+        seg.out_start = cursor
         cursor += seg.measured
-        if on_progress:
-            on_progress(min(0.999, done_out / total_out),
-                        f"trecho {seg.index + 1}/{len(segs)} pronto "
-                        f"({seg.measured:.3f} s)")
+    if on_progress:
+        on_progress(0.999, f"{len(segs)} trecho(s) prontos")
     return segs
 
 

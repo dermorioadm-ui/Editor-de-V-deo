@@ -123,8 +123,26 @@ def main() -> int:
           "o job do clique único terminou bem",
           f"{getattr(job, 'status', '?')} {str(getattr(job, 'error', ''))[:70]}")
     res = (job.result if job else None) or {}
-    for etapa in ("analysis", "edit", "proxy", "previa", "final"):
+    for etapa in ("analysis", "edit", "proxy", "previa"):
         check(etapa in res, f"a etapa '{etapa}' rodou dentro do clique único")
+    check("final" not in res,
+          "a exportação NÃO segura a tela de carregamento (roda por baixo)")
+    check(bool(res.get("final_job")),
+          "e o job do arquivo final foi disparado sozinho", str(res.get("final_job")))
+
+    print("3b) o MP4 final chega por baixo, sem ninguém apertar nada")
+    fim_id = res.get("final_job")
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < limite:
+        j = fila.get(fim_id)
+        if j and j.status in ("ok", "erro", "cancelado"):
+            break
+        time.sleep(0.5)
+    jf = fila.get(fim_id)
+    check(jf is not None and jf.status == "ok",
+          "a exportação de fundo terminou bem",
+          f"{getattr(jf, 'status', '?')} {str(getattr(jf, 'error', ''))[:70]}")
+    res["final"] = (jf.result if jf else None) or {}
 
     print("4) o que o usuário recebe no fim")
     final = res.get("final") or {}
@@ -177,6 +195,34 @@ def main() -> int:
     subs = final.get("subtitles") or []
     check(len(subs) > 0, "as legendas foram queimadas na exportação",
           f"{len(subs)} legendas")
+
+    print("8) o retoque se entrega sozinho — e barato (cache por trecho)")
+    # muda UMA legenda: o arquivo final tem que se refazer reencodando só os
+    # trechos que essa legenda toca, não os 16.
+    subs_plan = project.plan.subtitles
+    if subs_plan:
+        r = client.put(f"/api/projects/{project.id}/subtitles/{subs_plan[0].id}",
+                        json={"text": "TEXTO TROCADO NO RETOQUE"})
+        check(r.status_code == 200, "o retoque na legenda foi aceito",
+              f"HTTP {r.status_code}")
+    t0 = time.monotonic()
+    r2 = client.post(f"/api/projects/{project.id}/export-final")
+    jid2 = r2.json()["id"]
+    while time.monotonic() - t0 < limite:
+        j = fila.get(jid2)
+        if j and j.status in ("ok", "erro", "cancelado"):
+            break
+        time.sleep(0.25)
+    j2 = fila.get(jid2)
+    gasto = time.monotonic() - t0
+    check(j2 is not None and j2.status == "ok",
+          "a reexportação automática terminou bem",
+          f"{getattr(j2, 'status', '?')} {str(getattr(j2, 'error', ''))[:70]}")
+    novo_arq = Path((j2.result or {}).get("output", "")) if j2 else Path("")
+    check(novo_arq.name == saida.name,
+          "e escreveu NO MESMO arquivo (sem empilhar cópias na pasta)",
+          novo_arq.name)
+    print(f"   levou {gasto:.1f} s reaproveitando os trechos que não mudaram")
 
     print()
     if FALHAS:

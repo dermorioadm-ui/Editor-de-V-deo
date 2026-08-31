@@ -46,6 +46,10 @@ export default function Editor() {
   // diferença entre "o editor abriu" e "o vídeo está pronto".
   const [baixar, setBaixar] = useState<string | null>(null)
   const [baixarVelho, setBaixarVelho] = useState(false)
+  // o job que está gerando o MP4 final POR BAIXO — o editor já está de pé
+  const [exportando, setExportando] = useState<any>(null)
+  const edicoes = useRef(0)            // quantos retoques houve
+  const edicoesNoExport = useRef(-1)   // quantos havia quando a exportação começou
   const [previewBusy, setPreviewBusy] = useState(false)
   const playing = useStore((s) => s.playing)
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
@@ -88,9 +92,28 @@ export default function Editor() {
     if (activeJob?.kind !== 'clique-unico' || activeJob.status !== 'ok') return
     const url = activeJob.result?.previa?.download
     if (url) { setPreviewUrl(`${url}?v=${activeJob.id}`); setPreviaVelha(false) }
-    const fim = activeJob.result?.final?.download
-    if (fim) { setBaixar(fim); setBaixarVelho(false) }
   }, [activeJob?.id, activeJob?.status])
+
+  // O MP4 FINAL é gerado por baixo, depois que esta tela já abriu. Este efeito
+  // é o que faz o botão "baixar o vídeo" acender sozinho quando ele fica
+  // pronto — e voltar a dizer "gerando…" a cada retoque.
+  const jobs = useStore((s) => s.jobs)
+  useEffect(() => {
+    if (!project) return
+    const meus = Object.values(jobs ?? {}).filter((j: any) =>
+      j.kind === 'exportacao' && j.project_id === project.id)
+    if (!meus.length) return
+    const ultimo: any = meus.reduce((a: any, b: any) =>
+      (b.created_at ?? 0) >= (a.created_at ?? 0) ? b : a)
+    setExportando(['fila', 'rodando'].includes(ultimo.status) ? ultimo : null)
+    if (ultimo.status === 'ok' && ultimo.result?.download) {
+      setBaixar(`${ultimo.result.download}?v=${ultimo.id}`)
+      // se o usuário editou DURANTE a exportação, o arquivo que acabou de
+      // sair já nasceu velho — e o debounce dispara outra. Contador local, não
+      // relógio: o do servidor é outra máquina.
+      setBaixarVelho(edicoes.current !== edicoesNoExport.current)
+    }
+  }, [jobs, project?.id])
 
   // Editou? A prévia renderizada ficou velha. Ela se refaz sozinha, depois de
   // uns segundos parado — refazer a cada clique seria uma fila de renders.
@@ -119,9 +142,25 @@ export default function Editor() {
 
   // qualquer mudança na linha do tempo envelhece a prévia renderizada
   const marcarPreviaVelha = useCallback(() => {
+    edicoes.current += 1
     setPreviaVelha(true)
     setBaixarVelho(true)      // editou: o arquivo exportado ficou velho
   }, [])
+
+  // O RETOQUE TAMBÉM SE ENTREGA SOZINHO. Uns segundos parado e o arquivo
+  // final se refaz por baixo. É barato porque o render guarda cada trecho por
+  // hash de conteúdo: só o que o retoque tocou é reencodado — o resto é
+  // reaproveitado do disco.
+  useEffect(() => {
+    if (!project || !baixarVelho || exportando) return
+    const t = window.setTimeout(async () => {
+      try {
+        edicoesNoExport.current = edicoes.current
+        await api.exportFinal(project.id)
+      } catch { /* a fila responde no próximo retoque */ }
+    }, 6000)
+    return () => window.clearTimeout(t)
+  }, [baixarVelho, exportando, project?.id])
 
   const snapshot = useCallback(() => {
     marcarPreviaVelha()
@@ -396,14 +435,27 @@ export default function Editor() {
                 {zoom > 0 && ` · zoom em ${zoom}`}
                 {fixed > 0 && ` · ${fixed} borda(s) acertadas`}
               </span>
-              {baixar && !baixarVelho ? (
+              {/* O arquivo se entrega sozinho: gera por baixo quando o editor
+                  abre e se refaz sozinho quando você para de retocar. O
+                  botão só some enquanto está gerando. */}
+              {exportando ? (
+                <span className="ml-auto text-slate-400 flex items-center gap-1.5">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full
+                                   bg-emerald-400 animate-pulse" />
+                  gerando o arquivo final… {Math.round((exportando.progress ?? 0) * 100)}%
+                </span>
+              ) : baixar && !baixarVelho ? (
                 <a className="btn btn-primary btn-xs ml-auto" href={baixar} download>
                   ↓ baixar o vídeo
                 </a>
+              ) : baixarVelho ? (
+                <span className="ml-auto text-slate-500">
+                  refazendo o arquivo com o seu retoque…
+                </span>
               ) : (
                 <button className="btn btn-primary btn-xs ml-auto"
                         onClick={() => setTab('exportar')}>
-                  {baixarVelho ? 'reexportar →' : 'exportar →'}
+                  exportar →
                 </button>
               )}
             </div>

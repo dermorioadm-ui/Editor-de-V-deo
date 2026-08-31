@@ -772,27 +772,32 @@ def one_click(project: Project, ctx) -> dict:
     except Exception as exc:  # noqa: BLE001
         ctx.progress(0.68, f"prévia da edição falhou ({exc})")
         v = {"ok": False}
-    # E O ARQUIVO FINAL. Esta é a diferença entre "o editor abriu" e "o vídeo
-    # está pronto". O pedido nunca foi um editor: foi receber o MP4 feito, e
-    # abrir o painel só quando alguma coisa saiu torta. Sem esta etapa, quem
-    # solta o arquivo e espera ainda precisa achar a aba Exportar e apertar
-    # outro botão — e aí o clique nunca foi único.
-    try:
-        # hw_encoder="auto": o passo final é o mais caro do pipeline inteiro
-        # (medido: 0,9x tempo real na CPU a 1080x1920, mais ~2 s fixos por
-        # bloco). O painel manual já pedia a GPU; o caminho automático — o
-        # único que todo mundo usa — era justamente o que ignorava a placa.
-        # Sem encoder de hardware que passe no teste, cai em libx264 e
-        # o vídeo sai do mesmo jeito.
-        f = _scoped(ctx, 0.68, 1.0,
-                    lambda c: export(project, c, {"restart": True,
-                                                  "hw_encoder": "auto"}))
-    except Exception as exc:  # noqa: BLE001 — o plano fica; ele reexporta
-        ctx.progress(1.0, f"a exportação falhou ({exc}); o corte está pronto, "
-                          f"dá para exportar pelo painel")
-        f = {"ok": False, "erro": str(exc)}
+    # O ARQUIVO FINAL não entra aqui — ele é disparado logo em seguida, por
+    # baixo (server.api_oneclick). É a diferença entre esperar e receber: o
+    # encode final é o passo mais caro do pipeline inteiro (medido: 0,9x tempo
+    # real a 1080x1920 MAIS ~2 s fixos por trecho, e um corte de silêncio
+    # produz um trecho por frase), então segurar a tela de carregamento até ele
+    # terminar é minutos olhando barra depois de o vídeo já estar montado.
+    # Assim o editor abre com a prévia — que é a edição renderizada, ao pixel
+    # o que vai baixar — e o botão de baixar acende sozinho quando o MP4 fica
+    # pronto.
     project.set_status("pronto")
-    return {"analysis": a, "edit": b, "proxy": p, "previa": v, "final": f}
+    return {"analysis": a, "edit": b, "proxy": p, "previa": v}
+
+
+def exportar_final(project: Project, ctx) -> dict:
+    """A exportação AUTOMÁTICA — a que roda por baixo e a que se refaz sozinha.
+
+    Sempre no MESMO arquivo. A exportação manual do painel não sobrescreve de
+    propósito (você pediu duas versões, recebe duas), mas esta aqui roda a cada
+    retoque: sem sobrescrever, a pasta de Vídeos viraria "vsl_editado (7).mp4"
+    e ninguém saberia qual é o bom.
+    """
+    return export(project, ctx, {
+        "restart": False,       # o cache por trecho é o que faz o retoque ser barato
+        "overwrite": True,
+        "hw_encoder": "auto",
+    })
 
 
 class _ScopedCtx:

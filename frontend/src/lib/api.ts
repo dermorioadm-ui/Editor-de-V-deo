@@ -215,6 +215,8 @@ export const api = {
   audioAnalysis: (id: string) => req<any>(`/api/projects/${id}/audio/analysis`),
   audioPreview: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/audio/preview`, payload),
+  // a exportação AUTOMÁTICA: mesmo arquivo, sobrescrevendo, com cache
+  exportFinal: (id: string) => post<Job>(`/api/projects/${id}/export-final`, {}),
   safeZone: (id: string) => req<any>(`/api/projects/${id}/safe-zone`),
   bitrateEstimate: (id: string) => req<any>(`/api/projects/${id}/bitrate-estimate`),
 }
