@@ -1760,6 +1760,10 @@ def api_ia_config() -> dict:
         "tem_chave": bool(chave),
         "final": chave[-4:] if len(chave) > 8 else "",
         "modelo": db.get_setting("gemini_model", "") or "",
+        # o modelo está DECIDIDO E ESCRITO? Enquanto isto for falso com chave
+        # presente, o vídeo sairia com o modelo que o programa escolheu
+        # sozinho — e a primeira tela segura o botão de gerar.
+        "modelo_fixado": bool(chave and db.get_setting("gemini_model", "")),
         # a IA decidindo os cortes no EDITAR — ligada por padrão quando há
         # chave; o usuário desliga aqui se quiser voltar à regra do programa
         "cortes": bool(db.get_setting("ai_cortes", True)),
@@ -1768,13 +1772,50 @@ def api_ia_config() -> dict:
 
 @app.post("/api/ai/config")
 def api_ia_config_set(payload: dict = Body(...)) -> dict:
+    """Guarda chave, modelo e liga/desliga — e FIXA o modelo de verdade.
+
+    O modelo tem que ficar decidido ANTES de o vídeo rodar, e escrito. Ele
+    ficava vazio: `gemini_model` nascia "" e `escolher_modelo` resolvia o
+    vazio em silêncio, toda vez, caindo no primeiro da lista de preferência.
+    Ninguém escolheu nada e o vídeo saía com o modelo que o programa achou —
+    exatamente a reclamação de estar "usando o gratuito ainda".
+
+    Agora: modelo pedido que a chave não alcança é RECUSADO (com a lista do
+    que existe), e chave nova sem modelo pedido fixa o padrão na hora. Depois
+    disto, `gemini_model` nunca mais está vazio enquanto houver chave.
+    """
+    from .ai import gemini as gem
+
     if "chave" in payload:
         chave = str(payload.get("chave") or "").strip()
         db.set_setting(CHAVE_IA, chave)
-    if "modelo" in payload:
-        db.set_setting("gemini_model", str(payload.get("modelo") or "").strip())
+        if not chave:
+            # sem chave não há modelo a fixar; deixar o antigo escrito faria a
+            # tela dizer "vai usar X" sem ter com que usar
+            db.set_setting("gemini_model", "")
     if "cortes" in payload:
         db.set_setting("ai_cortes", bool(payload["cortes"]))
+
+    chave = gem.chave_guardada()
+    pedido = str(payload.get("modelo") or "").strip() if "modelo" in payload else ""
+    if chave and (pedido or not db.get_setting("gemini_model", "")):
+        try:
+            escolhido = gem.escolher_modelo(chave, pedido)
+        except gem.ErroDaIA as exc:
+            # Pedido explícito que não deu: o usuário tem que saber. Sem
+            # pedido, a fixação do padrão é oportunista — a chave pode estar
+            # errada, e quem diz isso com todas as letras é /api/ai/test, não
+            # a rota que guarda. Falhar aqui faria colar uma chave ruim voltar
+            # um erro sobre modelos, que não é o problema dele.
+            if pedido:
+                raise HTTPException(400, str(exc)) from exc
+            return api_ia_config()
+        if pedido and escolhido.get("trocado_de"):
+            disponiveis = ", ".join(m["id"] for m in gem.listar_modelos(chave)[:8])
+            raise HTTPException(
+                400, f"esta chave não alcança '{pedido}'. Ela alcança: "
+                     f"{disponiveis}")
+        db.set_setting("gemini_model", escolhido["id"])
     return api_ia_config()
 
 

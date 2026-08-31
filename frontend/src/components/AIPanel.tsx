@@ -17,6 +17,7 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
   const [cfg, setCfg] = useState<any>(null)
   const [chave, setChave] = useState('')
   const [modelo, setModelo] = useState('')
+  const [modelos, setModelos] = useState<any[]>([])
   const [testando, setTestando] = useState(false)
   const [teste, setTeste] = useState<any>(null)
   const [plano, setPlano] = useState<any>(null)
@@ -26,7 +27,13 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
   const [comparacao, setComparacao] = useState<any>(null)
 
   useEffect(() => {
-    api.aiConfig().then((c) => { setCfg(c); setModelo(c.modelo || '') })
+    api.aiConfig().then((c) => {
+      setCfg(c)
+      setModelo(c.modelo || '')
+      if (c.tem_chave) {
+        api.aiModelos().then((r) => setModelos(r.modelos ?? [])).catch(() => {})
+      }
+    })
   }, [])
 
   // o job da IA termina e a sugestão aparece — sem aplicar nada
@@ -100,14 +107,38 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
                    placeholder="cole aqui a chave do Google AI Studio"
                    value={chave} onChange={(e) => setChave(e.target.value)} />
             <button className="btn" disabled={!chave.trim()}
-                    onClick={() => salvar({ chave: chave.trim() })}>guardar</button>
+                    onClick={async () => {
+                      // guardar a chave já traz a lista e o modelo fixado
+                      const c = await salvar({ chave: chave.trim() })
+                      setModelo(c.modelo || '')
+                      api.aiModelos().then((r) => setModelos(r.modelos ?? []))
+                        .catch(() => {})
+                    }}>guardar</button>
           </div>
         )}
+        {/* LISTA, não campo livre. Campo livre com "em branco = o app escolhe"
+            é justamente o estado que não pode existir: o modelo tem que ficar
+            decidido e escrito antes de o vídeo rodar, senão o programa resolve
+            sozinho e o vídeo sai de um modelo que ninguém escolheu. */}
         <div className="flex gap-2 items-center">
-          <input className="input flex-1 font-mono text-xs"
-                 placeholder="modelo (em branco = o app escolhe o disponível)"
-                 value={modelo} onChange={(e) => setModelo(e.target.value)}
-                 onBlur={() => salvar({ modelo })} />
+          <select className="field flex-1 font-mono text-xs py-1.5"
+                  value={modelo} disabled={!cfg.tem_chave}
+                  onChange={async (e) => {
+                    const id = e.target.value
+                    setModelo(id)
+                    try { await salvar({ modelo: id }) }
+                    catch (err: any) {
+                      toast('error', 'Esse modelo não deu',
+                        String(err.message ?? err))
+                      const c = await api.aiConfig()
+                      setCfg(c); setModelo(c.modelo || '')
+                    }
+                  }}>
+            {!modelos.length && <option value={modelo}>{modelo || '…'}</option>}
+            {modelos.map((m: any) => (
+              <option key={m.id} value={m.id}>{m.id}</option>
+            ))}
+          </select>
           <button className="btn btn-xs" disabled={!cfg.tem_chave || testando}
                   onClick={async () => {
                     setTestando(true)

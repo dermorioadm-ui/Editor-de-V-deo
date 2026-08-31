@@ -289,6 +289,7 @@ def main() -> int:
     testar_legenda_na_mesma_regua()
     testar_controle_manual_de_zoom()
     testar_ia_opina_codigo_executa()
+    testar_modelo_da_ia_fica_fixado()
     testar_chave_da_ia_nao_vaza()
     testar_trilha_acompanha_o_corte()
     testar_legenda_da_previa_bate_com_a_exportacao()
@@ -1371,6 +1372,80 @@ def testar_controle_de_corte_pela_rota(client, pid) -> None:
           "dá para desligar o piso adaptativo pela rota")
     client.post(f"/api/projects/{pid}/params",
                 json={"cut": {"aggressiveness": -1.0, "adaptive_floor": True}})
+
+
+def testar_modelo_da_ia_fica_fixado() -> None:
+    """O modelo tem que estar DECIDIDO E ESCRITO antes de o vídeo rodar.
+
+    O furo: `gemini_model` nascia vazio e `escolher_modelo` resolvia o vazio em
+    silêncio a cada chamada, caindo no primeiro da lista de preferência. O
+    usuário nunca escolheu nada, e o vídeo saía do modelo que o programa achou.
+    """
+    from editor import db
+    from editor.ai import gemini as gem
+    from editor.server import CHAVE_IA
+
+    cliente = TestClient(app)
+    falsos = [
+        {"id": "gemini-3.7-flash", "nome": "", "entrada": 1_000_000, "saida": 8192},
+        {"id": "gemini-3.1-pro", "nome": "", "entrada": 1_000_000, "saida": 8192},
+    ]
+    real_listar = gem.listar_modelos
+    real_escolher = gem.escolher_modelo
+    gem.listar_modelos = lambda *a, **k: list(falsos)  # type: ignore[assignment]
+    antes_chave = db.get_setting(CHAVE_IA, "")
+    antes_modelo = db.get_setting("gemini_model", "")
+    try:
+        db.set_setting("gemini_model", "")
+        cfg = cliente.post("/api/ai/config",
+                           json={"chave": "AIzaSyTESTE-DE-FIXACAO-0001"}).json()
+        check(bool(cfg.get("modelo")),
+              f"guardar a chave já FIXA um modelo ({cfg.get('modelo')!r})")
+        check(cfg.get("modelo_fixado") is True,
+              "e a tela sabe que ele está fixado (segura o botão até estar)")
+        check(cfg["modelo"] == gem.PREFERIDOS[0]
+              or cfg["modelo"] in [m["id"] for m in falsos],
+              f"o fixado é um dos que a chave alcança ({cfg['modelo']})")
+
+        # trocar para outro que a chave alcança grava na hora
+        outro = next(m["id"] for m in falsos if m["id"] != cfg["modelo"])
+        cfg2 = cliente.post("/api/ai/config", json={"modelo": outro}).json()
+        check(cfg2["modelo"] == outro,
+              f"trocar o modelo grava na hora, não na hora de gerar ({outro})")
+        check(db.get_setting("gemini_model", "") == outro,
+              "e fica escrito no banco, não só na tela")
+
+        # pedir um que a chave NÃO alcança é recusado, com a lista do que existe
+        r = cliente.post("/api/ai/config", json={"modelo": "gemini-nao-existe"})
+        detalhe = str(r.json().get("detail", ""))
+        check(r.status_code == 400 and "alcança" in detalhe,
+              f"modelo que a chave não alcança é recusado ({detalhe[:70]})")
+        check(db.get_setting("gemini_model", "") == outro,
+              "e a recusa NÃO apaga o que já estava fixado")
+
+        # tirar a chave tira o modelo junto: dizer "vai usar X" sem chave mente
+        cfg3 = cliente.post("/api/ai/config", json={"chave": ""}).json()
+        check(not cfg3["modelo"] and cfg3["modelo_fixado"] is False,
+              "tirar a chave limpa o modelo fixado junto")
+
+        # e a troca em silêncio no meio do processamento acabou
+        gem.escolher_modelo = lambda c, p="": {  # type: ignore[assignment]
+            "id": falsos[0]["id"], "saida": 8192, "trocado_de": p}
+        from editor.ai import cortes as C
+        real_json = gem.gerar_json
+        gem.gerar_json = lambda *a, **k: {"leitura": "", "remover": [],
+                                          "secoes": []}
+        words = [{"i": i, "start": i * 0.5, "end": i * 0.5 + 0.3, "text": "p"}
+                 for i in range(6)]
+        saida = C.decidir("k", "gemini-3.1-pro", words, [], [])
+        gem.gerar_json = real_json
+        check(saida.get("modelo_trocado_de") == "gemini-3.1-pro",
+              "modelo fixado que sumiu vira AVISO, não troca em silêncio")
+    finally:
+        gem.listar_modelos = real_listar  # type: ignore[assignment]
+        gem.escolher_modelo = real_escolher  # type: ignore[assignment]
+        db.set_setting(CHAVE_IA, antes_chave)
+        db.set_setting("gemini_model", antes_modelo)
 
 
 def testar_chave_da_ia_nao_vaza() -> None:

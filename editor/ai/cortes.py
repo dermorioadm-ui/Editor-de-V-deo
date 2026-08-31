@@ -448,4 +448,9 @@ def decidir(chave: str, modelo: str, words: list[dict], claps: list[dict],
     saida = aplicar(words, resposta, env=env,
                     duracao=float(words[-1]["end"]) if words else 0.0)
     saida["modelo"] = escolhido["id"]
+    # o modelo fixado sumiu da conta e outro entrou no lugar: isso não pode
+    # acontecer em silêncio, senão o vídeo sai de um modelo que o usuário não
+    # escolheu e ele descobre pela qualidade
+    if escolhido.get("trocado_de"):
+        saida["modelo_trocado_de"] = escolhido["trocado_de"]
     return saida

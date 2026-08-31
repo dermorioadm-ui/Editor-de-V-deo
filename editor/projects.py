@@ -506,6 +506,11 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     except Exception as exc:  # noqa: BLE001 — a análise sobrevive a tudo
         ctx.progress(0.96, f"IA falhou ({exc}); a regra do programa decide")
         return {"ok": False, "erro": str(exc)}
+    if saida.get("modelo_trocado_de"):
+        ctx.progress(0.965,
+                     f"ATENÇÃO: o modelo fixado ({saida['modelo_trocado_de']}) "
+                     f"não está mais disponível nesta chave; usei "
+                     f"{saida['modelo']}. Escolha outro na tela inicial.")
     if saida.get("ok"):
         ctx.progress(0.97, f"{saida['modelo']}: {len(saida['takes'])} trecho(s) "
                            f"para fora — cada um na lista, com motivo e volta")

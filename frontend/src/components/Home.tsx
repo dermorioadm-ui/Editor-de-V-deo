@@ -49,22 +49,46 @@ export default function Home() {
   const dropRef = useRef<HTMLDivElement>(null)
 
   const iaLiga = Boolean(ia?.tem_chave) && iaCortes
+  // Tem chave mas o modelo ainda não foi escrito no servidor: gerar agora
+  // sairia com o modelo que o programa escolheu sozinho. Segura o botão —
+  // é o instante entre colar a chave e a lista responder, não um estado
+  // em que se fica.
+  const iaPendente = Boolean(ia?.tem_chave) && !ia?.modelo_fixado
 
   const refresh = () => api.projects().then(setProjects).catch(() => {})
 
+  /** Lê a config da IA e, se houver chave, a lista de modelos que ela alcança.
+   *
+   *  O modelo TEM que ficar decidido e escrito antes de o vídeo rodar. O furo
+   *  era aqui: quem colava a chave agora só via a lista carregar na próxima
+   *  vez que abrisse o programa — nesta visita `modelo` continuava vazio, nada
+   *  era gravado, e o servidor resolvia o vazio sozinho caindo no primeiro da
+   *  lista de preferência. O usuário escolhia um modelo e o vídeo saía de
+   *  outro. */
+  async function lerIa() {
+    const c = await api.aiConfig()
+    setIa(c)
+    setModelo(c.modelo || '')
+    setIaCortes(c.cortes !== false)
+    if (!c.tem_chave) { setModelos([]); return c }
+    try {
+      const r = await api.aiModelos()
+      setModelos(r.modelos ?? [])
+      if (!c.modelo && r.padrao) {
+        // ninguém escolheu ainda: FIXA o padrão no servidor agora, não na
+        // hora de gerar — "antes de usar" é aqui
+        const c2 = await api.setAiConfig({ modelo: r.padrao })
+        setIa(c2)
+        setModelo(c2.modelo || r.padrao)
+        return c2
+      }
+    } catch { /* sem rede a lista fica vazia; o modelo escrito continua valendo */ }
+    return c
+  }
+
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
-    api.aiConfig().then((c) => {
-      setIa(c)
-      setModelo(c.modelo || '')
-      setIaCortes(c.cortes !== false)
-      if (c.tem_chave) {
-        api.aiModelos().then((r) => {
-          setModelos(r.modelos ?? [])
-          if (!c.modelo && r.padrao) setModelo(r.padrao)
-        }).catch(() => {})
-      }
-    }).catch(() => {})
+    lerIa().catch(() => {})
     api.looks().then(setLooks).catch(() => {})
     api.outputDir().then(setSaida).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
@@ -119,10 +143,10 @@ export default function Home() {
     setBusy(true)
     try {
       const project = await api.createProject(sourcePath, '', preset)
-      // O que NÃO cabe no plano (é global, não do projeto) vai antes:
-      if (modelo && modelo !== ia?.modelo) {
-        await api.setAiConfig({ modelo }).catch(() => {})
-      }
+      // O modelo NÃO é gravado aqui: ele já foi fixado quando a chave foi
+      // guardada ou quando o seletor mudou. Gravar na hora de gerar era o
+      // furo — se a gravação falhasse, o vídeo saía com outro modelo e
+      // ninguém ficava sabendo.
       if (iaCortes !== (ia?.cortes !== false)) {
         await api.setAiConfig({ cortes: iaCortes }).catch(() => {})
       }
@@ -156,10 +180,12 @@ export default function Home() {
     setSalvandoChave(true)
     try {
       await api.setAiConfig({ chave: k, cortes: true })
-      const r = await api.testAi()
-      setIa(await api.aiConfig())
+      await api.testAi()
+      // a mesma ação que guarda a chave DECIDE o modelo e o escreve
+      const c = await lerIa()
       setChave('')
-      toast('ok', 'Chave guardada e testada', `vai usar ${r.modelo}`)
+      toast('ok', 'Chave guardada, testada e modelo fixado',
+        `vai usar ${c.modelo}`)
     } catch (e: any) {
       await api.setAiConfig({ chave: '' })
       setIa(await api.aiConfig())
@@ -256,7 +282,11 @@ export default function Home() {
                     : 'A IA está desligada — o corte vai ser só pela regra'}
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  chave …{ia.final} · o vídeo não sai da máquina, só o texto
+                  chave …{ia.final} ·{' '}
+                  {ia.modelo_fixado
+                    ? <span className="font-mono text-slate-400">{ia.modelo}</span>
+                    : 'escolhendo o modelo…'}
+                  {' '}· o vídeo não sai da máquina, só o texto
                 </p>
               </div>
               {/* O selo tinha que refletir o interruptor, não só a chave: quem
@@ -343,14 +373,26 @@ export default function Home() {
             <div className="w-52">
               <label className="label">Modelo da IA</label>
               <select className="field w-full py-1.5 text-xs font-mono"
-                      value={modelo} onChange={(e) => setModelo(e.target.value)}>
-                {!modelos.length && <option value="">carregando…</option>}
+                      value={modelo}
+                      onChange={async (e) => {
+                        const id = e.target.value
+                        setModelo(id)
+                        // grava JÁ. Guardar para a hora de gerar era o mesmo
+                        // erro de sempre: escolha que só vale depois não vale.
+                        try { setIa(await api.setAiConfig({ modelo: id })) }
+                        catch (err: any) {
+                          toast('error', 'Esse modelo não deu',
+                            String(err.message ?? err))
+                          await lerIa()
+                        }
+                      }}>
+                {!modelos.length && <option value={modelo}>{modelo || '…'}</option>}
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>{m.id}</option>
                 ))}
               </select>
               <p className="text-[10px] text-slate-600 leading-tight">
-                quem decide os cortes e lê a copy
+                {ia?.modelo_fixado ? `fixado: ${ia.modelo}` : 'ainda não fixado'}
               </p>
             </div>
           )}
@@ -487,9 +529,11 @@ export default function Home() {
           </div>
 
           <button className="btn btn-primary px-7 py-3 text-base ml-auto"
-                  disabled={!path || busy || !ffmpegOk}
+                  disabled={!path || busy || !ffmpegOk || iaPendente}
+                  title={iaPendente ? 'escolhendo o modelo da IA…' : ''}
                   onClick={() => start(path)}>
-            {busy ? 'começando…' : 'GERAR VÍDEO PRONTO'}
+            {busy ? 'começando…'
+              : iaPendente ? 'fixando o modelo…' : 'GERAR VÍDEO PRONTO'}
           </button>
         </div>
         <p className="hint mt-2">
