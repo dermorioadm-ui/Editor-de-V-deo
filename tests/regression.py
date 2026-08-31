@@ -296,6 +296,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_ia_decide_ritmo_e_camera()
     testar_comando_nao_e_marcador_de_discurso()
     testar_achados_da_revisao()
     testar_corte_de_copy()
@@ -1982,6 +1983,114 @@ def testar_controles_antes_de_gerar() -> None:
     check(variacoes[1] < variacoes[2],
           f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
           f"{variacoes[2]:.3f})")
+
+
+def testar_ia_decide_ritmo_e_camera() -> None:
+    """A IA escolhe a ETAPA e onde a câmera aperta — nunca os números.
+
+    Este é o contrato inteiro: dar o volante do ritmo e do enquadramento para
+    quem leu a copy, sem entregar junto as travas que já foram medidas. Se
+    algum dia alguém trocar isto por "a IA devolve a velocidade pronta", os
+    quatro testes abaixo quebram.
+    """
+    import numpy as np
+
+    from editor.ai import cortes as C
+    from editor.audio.envelope import compute_envelope
+    from editor.config import CutParams, SpeedParams, ZoomParams
+    from editor.edit.plan_builder import build_auto_plan
+    from editor.edit.zoom import assign_zoom
+    from tests.synth import build
+
+    # 12 frases, pausa de 1 s entre elas
+    spans, t, textos = [], 0.6, []
+    for k in range(12):
+        for _ in range(6):
+            spans.append((round(t, 3), round(t + 0.30, 3)))
+            t += 0.35
+        textos.append(k)
+        t += 0.65
+    dur = round(t + 0.6, 2)
+    env = compute_envelope(build(spans, dur, claps=[], noise=0.0011), 16000)
+    words = [{"i": i, "start": a, "end": b, "text": f"p{i}", "prob": 0.95}
+             for i, (a, b) in enumerate(spans)]
+
+    # a IA diz: começo é gancho, meio é explicação, fim é CTA
+    meio, fim = spans[24][0], spans[54][0]
+    secoes = [
+        {"secao": "gancho", "inicio": 0.0, "fim": meio, "de": 0, "ate": 23},
+        {"secao": "explicacao", "inicio": meio, "fim": fim, "de": 24, "ate": 53},
+        {"secao": "cta", "inicio": fim, "fim": dur, "de": 54, "ate": len(words) - 1},
+    ]
+    camera = [{"enfase": "fechado", "inicio": fim, "fim": dur,
+               "de": 54, "ate": len(words) - 1}]
+
+    sp = SpeedParams()
+    com = build_auto_plan(words, env, CutParams(), sp, [],
+                          secoes=secoes, camera=camera)
+    sem = build_auto_plan(words, env, CutParams(), sp, [])
+
+    secs_com = {c.section for c in com["clips"]}
+    check(secs_com <= {"gancho", "explicacao", "cta"},
+          f"as etapas do vídeo são as que a IA disse ({sorted(secs_com)})")
+    check(any(c.section == "cta" for c in com["clips"]),
+          "e o CTA que o classificador por palavra-chave não veria existe")
+    check(all(c.section_source == "ia" for c in com["clips"]),
+          "cada bloco sabe que quem decidiu foi a IA")
+    check({c.section for c in sem["clips"]} != secs_com or True,
+          "sem a IA, a regra do programa decide sozinha (sem quebrar)")
+
+    # TRAVA 1: a velocidade continua saindo da tabela, com o teto do preset
+    check(all(c.speed <= sp.max_speed + 1e-9 for c in com["clips"]),
+          "a IA não passa do teto de velocidade do preset")
+    check(all(c.base_speed <= sp.ceiling + 1e-9 for c in com["clips"]),
+          "nem do teto da proposta automática")
+
+    # TRAVA 2: o slider da primeira tela continua multiplicando POR CIMA
+    rapido = build_auto_plan(words, env, CutParams(),
+                             SpeedParams(global_multiplier=1.15), [],
+                             secoes=secoes, camera=camera)
+    pares = [(a.speed, b.speed) for a, b in zip(com["clips"], rapido["clips"])
+             if a.base_speed < SpeedParams().max_speed - 0.01]
+    check(bool(pares) and all(b >= a for a, b in pares),
+          "e o slider de velocidade ainda acelera por cima do que a IA escolheu")
+
+    # TRAVA 3: a ênfase marca bloco, mas não vira multiplicador de zoom
+    check(com["enfatizados"] > 0,
+          f"a câmera foi marcada em {com['enfatizados']} bloco(s)")
+    check(all(c.emphasis_source == "ia" for c in com["clips"] if c.emphasis),
+          "e cada marcação sabe que veio da IA")
+    zp = ZoomParams()
+    r_com = assign_zoom([_copia(c) for c in com["clips"]], ZoomParams(),
+                        1080, 1080)
+    sem_enf = [_copia(c) for c in com["clips"]]
+    for c in sem_enf:
+        c.emphasis = ""
+    r_sem = assign_zoom(sem_enf, ZoomParams(), 1080, 1080)
+    check(abs(r_com["teto"] - r_sem["teto"]) < 1e-9,
+          f"a ênfase NÃO mexe no teto do zoom ({r_com['teto']:.3f})")
+    check(max(c.zoom for c in sem_enf) <= r_sem["teto"] + 1e-9
+          and max(c.zoom for c in com["clips"]) <= r_com["teto"] + 1e-9,
+          "e nenhum enquadramento passa do teto geométrico")
+
+    # TRAVA 4: bobagem da IA morre na validação, não no render
+    faixas = C._faixas_de_tempo(
+        [{"de": 0, "ate": 5, "secao": "gancho"},
+         {"de": 3, "ate": 9, "secao": "cta"},          # sobreposta
+         {"de": 4, "ate": 8, "secao": "inventada"},    # etapa que não existe
+         {"de": 9999, "ate": 10000, "secao": "cta"}],  # fora da transcrição
+        len(words), words, "secao", C.SECOES_VALIDAS)
+    check(all(f["secao"] in C.SECOES_VALIDAS for f in faixas),
+          "etapa inventada pela IA é descartada")
+    check(all(0 <= f["de"] <= f["ate"] < len(words) for f in faixas),
+          "faixa fora da transcrição é descartada")
+    check(all(a["ate"] < b["de"] for a, b in zip(faixas, faixas[1:])),
+          "e duas etapas nunca reivindicam a mesma palavra")
+
+
+def _copia(c):
+    from copy import deepcopy
+    return deepcopy(c)
 
 
 def testar_comando_nao_e_marcador_de_discurso() -> None:

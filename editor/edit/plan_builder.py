@@ -364,11 +364,87 @@ def enforce_min_block(spans: list[Span], params: CutParams) -> tuple[list[Span],
     return out, notes
 
 
+def _secao_da_ia(secoes: list[dict] | None, inicio: float, fim: float) -> str:
+    """A etapa que a IA deu para este trecho, se ela cobriu a maior parte dele.
+
+    A IA lê a copy inteira; o classificador por palavra-chave lê 40 palavras
+    soltas. Quando os dois discordam, quem manda é quem leu — mas só onde a
+    IA realmente falou: um trecho que ela não cobriu continua com a regra.
+    """
+    if not secoes:
+        return ""
+    dur = max(fim - inicio, 1e-6)
+    melhor, cobertura = "", 0.0
+    for f in secoes:
+        inter = min(fim, float(f["fim"])) - max(inicio, float(f["inicio"]))
+        if inter > cobertura:
+            cobertura, melhor = inter, str(f.get("secao", ""))
+    return melhor if cobertura / dur >= 0.5 else ""
+
+
+def _enfase_da_ia(camera: list[dict] | None, inicio: float, fim: float) -> str:
+    """A ênfase de câmera que toca este bloco. Encostar já basta.
+
+    Ênfase não é uma faixa exclusiva como a etapa: ela diz "aqui aperta". Um
+    bloco que cai metade dentro da marcação ainda é parte do momento marcado.
+    """
+    if not camera:
+        return ""
+    for f in camera:
+        if min(fim, float(f["fim"])) - max(inicio, float(f["inicio"])) > 0.05:
+            return str(f.get("enfase", ""))
+    return ""
+
+
+def _partir_nas_secoes(segments: list, secoes: list[dict] | None) -> list:
+    """Reparte os segmentos narrativos nas fronteiras que a IA marcou."""
+    if not secoes or not segments:
+        return segments
+    from ..audio.segments import NarrativeSegment
+
+    cortes = sorted({round(float(f["inicio"]), 3) for f in secoes}
+                    | {round(float(f["fim"]), 3) for f in secoes})
+    saida: list = []
+    for seg in segments:
+        dentro = [t for t in cortes if seg.start + 0.05 < t < seg.end - 0.05]
+        if not dentro:
+            saida.append(seg)
+            continue
+        atual: list = []
+        for w in seg.words:
+            meio = (float(w["start"]) + float(w["end"])) / 2.0
+            if atual and any(float(atual[-1]["end"]) <= t <= meio for t in dentro):
+                saida.append(NarrativeSegment(len(saida), float(atual[0]["start"]),
+                                              float(atual[-1]["end"]), atual))
+                atual = []
+            atual.append(w)
+        if atual:
+            saida.append(NarrativeSegment(len(saida), float(atual[0]["start"]),
+                                          float(atual[-1]["end"]), atual))
+    for i, seg in enumerate(saida):
+        seg.index = i
+    return saida
+
+
 def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
                  cut: CutParams, sp: SpeedParams,
-                 total_duration: float) -> list[Clip]:
-    """Subdivide os spans nas fronteiras narrativas e dá velocidade a cada bloco."""
+                 total_duration: float,
+                 secoes: list[dict] | None = None) -> list[Clip]:
+    """Subdivide os spans nas fronteiras narrativas e dá velocidade a cada bloco.
+
+    ``secoes`` são as etapas narrativas que a IA leu (faixas de tempo). Elas
+    SUBSTITUEM o palpite do classificador por palavra-chave onde existem — e
+    só isso. A velocidade continua saindo de ``suggest_speed``, que respeita
+    o teto do preset, a faixa da etapa e a densidade da fala; o multiplicador
+    da primeira tela continua entrando por cima em ``apply_global``.
+    """
     segments = split_narrative(words, env, cut.narrative_pause)
+    # A FRONTEIRA DA IA TAMBÉM É FRONTEIRA DE RITMO. Sem isto, quem fala sem
+    # pausa longa (que é o normal de quem grava anúncio decorado) vira UM
+    # segmento narrativo só, e as etapas que a IA leu não tinham onde entrar:
+    # nenhuma cobria metade do segmento, e o vídeo inteiro saía com uma
+    # velocidade só. Quem leu a copy decide onde o ritmo muda.
+    segments = _partir_nas_secoes(segments, secoes)
     seg_info = []
     total = max(total_duration, 1e-6)
     for i, seg in enumerate(segments):
@@ -376,7 +452,11 @@ def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
         section, conf = speed_mod.classify(
             seg.text, position, seg.wps, seg.duration, i == len(segments) - 1
         )
+        da_ia = _secao_da_ia(secoes, seg.start, seg.end)
+        if da_ia:
+            section, conf = da_ia, 1.0
         seg_info.append({
+            "fonte": "ia" if da_ia else "",
             "start": seg.start, "end": seg.end, "section": section,
             "confidence": conf,
             "speed": speed_mod.suggest_speed(section, seg.wps, sp),
@@ -389,7 +469,8 @@ def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
                 return info
         best = min(seg_info, key=lambda s: min(abs(s["start"] - t), abs(s["end"] - t)),
                    default=None)
-        return best or {"section": "explicacao", "speed": 1.0, "confidence": 0.0}
+        return best or {"section": "explicacao", "speed": 1.0,
+                        "confidence": 0.0, "fonte": ""}
 
     clips: list[Clip] = []
     for span in spans:
@@ -430,6 +511,7 @@ def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
                 speed=speed_mod.apply_global(info["speed"], sp),
                 base_speed=round(float(info["speed"]), 4),
                 section=info["section"],
+                section_source=info.get("fonte", ""),
                 kind="speech",
                 cut_in=span.cut_in if first else False,
                 cut_out=span.cut_out if last else False,
@@ -438,6 +520,25 @@ def assign_speed(spans: list[Span], words: list[dict], env: Envelope,
                 label="",
             ))
     return clips
+
+
+def marcar_enfase(clips: list[Clip], camera: list[dict] | None) -> int:
+    """Onde a IA disse que a câmera aperta ou solta.
+
+    A ênfase não vira multiplicador de zoom — ela só reordena qual degrau da
+    escada é tentado primeiro (edit/zoom.py). Feita como multiplicador, um
+    único bloco pedindo mais fechamento reduzia a amplitude do vídeo INTEIRO
+    por causa do fator de teto; como preferência entre candidatos que a escada
+    já produziu e já clampou, o conjunto de valores possíveis é o mesmo.
+    """
+    n = 0
+    for c in clips:
+        e = _enfase_da_ia(camera, c.src_start, c.src_end)
+        if e:
+            c.emphasis = e
+            c.emphasis_source = "ia"
+            n += 1
+    return n
 
 
 def removed_regions(spans: list[Span], duration: float,
@@ -522,7 +623,9 @@ def words_removed_by_takes(words: list[dict], takes: list[dict]) -> set[int]:
 def build_auto_plan(words: list[dict], env: Envelope, cut: CutParams,
                     sp: SpeedParams, takes: list[dict],
                     extra_removed: set[int] | None = None,
-                    markers: list[float] | None = None) -> dict:
+                    markers: list[float] | None = None,
+                    secoes: list[dict] | None = None,
+                    camera: list[dict] | None = None) -> dict:
     """Pipeline completo: palavras + envelope -> clipes, removidos, notas.
 
     ``markers`` = instantes de palma e assobio. O buraco que tem um marcador
@@ -547,7 +650,9 @@ def build_auto_plan(words: list[dict], env: Envelope, cut: CutParams,
     notes = refused + notes
     if nota_piso:
         notes.append({"type": "piso_adaptativo", "detail": nota_piso})
-    clips = assign_speed(spans, words, env, cut, sp, env.duration)
+    clips = assign_speed(spans, words, env, cut, sp, env.duration, secoes)
+    enfatizados = marcar_enfase(clips, camera)
     regions = removed_regions(spans, env.duration, takes)
     return {"clips": clips, "removed": regions, "notes": notes,
-            "removed_word_ids": sorted(removed_ids), "spans": spans}
+            "removed_word_ids": sorted(removed_ids), "spans": spans,
+            "enfatizados": enfatizados}

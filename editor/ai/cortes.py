@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import uuid
 
+from ..models import SECTIONS
 from . import gemini
+
+SECOES_VALIDAS = tuple(SECTIONS)
 
 MAX_PALAVRAS = 2600      # ~15 min de fala; acima disso o pedido é truncado
 MAX_REMOCAO = 0.85       # a IA nunca remove mais que isto do vídeo
@@ -101,9 +104,41 @@ Sobre o tipo "copy", duas regras que valem mais que sua vontade de melhorar:
 Na dúvida entre tirar e deixar: DEIXE. Errar deixando custa um clique do
 usuário; errar tirando apaga fala que não volta.
 
-Responda somente o JSON do esquema. Cada faixa: "de" e "ate" são índices de
-palavra INCLUSIVOS, "tipo" é "refeito" ou "copy", e "motivo" tem no máximo
-12 palavras e explica para o usuário, não para você."""
+=== "secoes" — o RITMO do vídeo ===
+Divida o vídeo INTEIRO (as palavras que FICAM) nas etapas abaixo, em ordem,
+sem buraco e sem sobreposição. É esta divisão que decide a velocidade de cada
+trecho e o quanto a câmera fecha — quem escolhe os números é o programa, você
+escolhe o que cada pedaço É:
+
+- gancho       — a abertura que segura a pessoa nos primeiros segundos
+- dor          — o problema, o contexto, o que dói hoje
+- mecanismo    — a virada, o método, "funciona assim"
+- explicacao   — desenvolvimento, detalhe, o miolo (é o padrão)
+- revelacao    — o clímax, o segredo, a sacada
+- prova        — números, casos, resultados, depoimento
+- monetizacao  — quanto se ganha, faturamento, retorno
+- oferta       — preço, parcela, o que está sendo vendido
+- garantia     — risco zero, devolução, prazo de arrependimento
+- cta          — a chamada para agir
+
+Use a etapa que descreve o que o trecho FAZ no anúncio, não o assunto. Um
+número dentro do gancho ainda é gancho. Na dúvida, "explicacao".
+
+=== "camera" — o JOGO DE CÂMERA ===
+Marque só os trechos que merecem um enquadramento diferente do resto:
+
+- "fechado" — a câmera chega mais perto. Para o que a pessoa precisa OUVIR
+  com atenção: o número, o preço, a promessa, a frase que decide a venda.
+- "aberto"  — a câmera abre. Para respiro: transição, contexto, o momento
+  depois de uma informação pesada.
+
+Seja econômico: se tudo é ênfase, nada é. Num vídeo de 2 minutos, algo entre
+3 e 8 marcações. O programa escolhe os valores exatos dentro do que a lente
+e a resolução permitem — você diz onde aperta e onde solta.
+
+Responda somente o JSON do esquema. Em TODAS as listas, "de" e "ate" são
+índices de palavra INCLUSIVOS. Em "remover", "tipo" é "refeito" ou "copy" e
+"motivo" tem no máximo 12 palavras e explica para o usuário, não para você."""
 
 ESQUEMA = {
     "type": "OBJECT",
@@ -121,9 +156,29 @@ ESQUEMA = {
             "required": ["de", "ate", "tipo", "motivo"],
             "propertyOrdering": ["de", "ate", "tipo", "motivo"],
         }},
+        "secoes": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "de": {"type": "INTEGER"},
+                "ate": {"type": "INTEGER"},
+                "secao": {"type": "STRING", "enum": list(SECOES_VALIDAS)},
+            },
+            "required": ["de", "ate", "secao"],
+            "propertyOrdering": ["de", "ate", "secao"],
+        }},
+        "camera": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "de": {"type": "INTEGER"},
+                "ate": {"type": "INTEGER"},
+                "enfase": {"type": "STRING", "enum": ["fechado", "aberto"]},
+            },
+            "required": ["de", "ate", "enfase"],
+            "propertyOrdering": ["de", "ate", "enfase"],
+        }},
     },
-    "required": ["leitura", "remover"],
-    "propertyOrdering": ["leitura", "remover"],
+    "required": ["leitura", "remover", "secoes"],
+    "propertyOrdering": ["leitura", "remover", "secoes", "camera"],
 }
 
 
@@ -215,6 +270,50 @@ def _faixas_validas(resposta: dict, n: int,
              for f in fundidas], recusadas)
 
 
+def _faixas_de_tempo(itens: list, n: int, words: list[dict], campo: str,
+                     validos: tuple[str, ...]) -> list[dict]:
+    """Faixas de PALAVRA -> faixas de TEMPO, validadas e sem sobreposição.
+
+    A IA fala em índice de palavra (inambíguo); o resto do programa raciocina
+    em segundos. A conversão é aqui, uma vez, e é aqui que a bobagem morre:
+    faixa que não existe, rótulo que não está na lista, faixa invertida.
+
+    Sobreposição resolve pela PRIMEIRA: duas etapas reivindicando a mesma
+    palavra é a IA se contradizendo, e escolher a de baixo esconderia o
+    problema no meio do vídeo em vez de na borda.
+    """
+    if not words:
+        return []
+    fora: list[dict] = []
+    for item in (itens or []):
+        try:
+            de, ate = int(item.get("de", -1)), int(item.get("ate", -1))
+        except (TypeError, ValueError):
+            continue
+        rotulo = str(item.get(campo, "")).strip()
+        if rotulo not in validos:
+            continue
+        if de > ate:
+            de, ate = ate, de
+        de, ate = max(0, de), min(n - 1, ate)
+        if de > ate:
+            continue
+        fora.append({"de": de, "ate": ate, campo: rotulo})
+    fora.sort(key=lambda f: (f["de"], f["ate"]))
+    limpas: list[dict] = []
+    for f in fora:
+        if limpas and f["de"] <= limpas[-1]["ate"]:
+            f = {**f, "de": limpas[-1]["ate"] + 1}
+            if f["de"] > f["ate"]:
+                continue
+        limpas.append(f)
+    return [{campo: f[campo],
+             "inicio": round(float(words[f["de"]]["start"]), 3),
+             "fim": round(float(words[f["ate"]]["end"]), 3),
+             "de": f["de"], "ate": f["ate"]}
+            for f in limpas]
+
+
 def _tem_vale(env, t: float) -> float:
     """Existe respiro em volta deste instante? Devolve a duração do maior."""
     if env is None:
@@ -253,12 +352,22 @@ def aplicar(words: list[dict], resposta: dict, env=None,
 
     removidas = sum(f["ate"] - f["de"] + 1 for f in faixas)
     if n and removidas / n > MAX_REMOCAO:
-        return {"takes": [], "recusados": recusadas + [{
-            "o_que": "a resposta inteira",
-            "motivo": (f"a IA quis remover {removidas} de {n} palavras "
-                       f"({removidas / n:.0%}). Isso não é edição, é apagar o "
-                       f"vídeo — fiquei com a regra do programa.")}],
-            "leitura": str(resposta.get("leitura", ""))[:300], "ok": False}
+        # o corte foi recusado ("ok" continua False, e nenhum take entra),
+        # mas o RITMO e a CÂMERA não são o corte: a IA ter exagerado no que
+        # tirar não invalida ela ter lido o vídeo. Quem consome secoes/camera
+        # olha essas chaves, não o "ok".
+        return {"takes": [], "ok": False,
+                "secoes": _faixas_de_tempo(resposta.get("secoes"), n, words,
+                                           "secao", SECOES_VALIDAS),
+                "camera": _faixas_de_tempo(resposta.get("camera"), n, words,
+                                           "enfase", ("fechado", "aberto")),
+                "leitura": str(resposta.get("leitura", ""))[:300],
+                "recusados": recusadas + [{
+                    "o_que": "a resposta inteira",
+                    "motivo": (f"a IA quis remover {removidas} de {n} palavras "
+                               f"({removidas / n:.0%}). Isso não é edição, é "
+                               f"apagar o vídeo — fiquei com a regra do "
+                               f"programa.")}]}
 
     takes: list[dict] = []
     gasto_copy = 0
@@ -307,7 +416,21 @@ def aplicar(words: list[dict], resposta: dict, env=None,
             "source": "ia_copy" if copy else "ia",
             "restored": False,
         })
+    # O RITMO e a CÂMERA voltam em FAIXAS DE TEMPO, não em números.
+    #
+    # A tentação era pedir a velocidade e o zoom prontos ao modelo. Isso
+    # atropelaria tudo que já está medido: o teto de velocidade do preset, o
+    # teto GEOMÉTRICO do zoom (que depende da largura da fonte contra a da
+    # saída), a âncora concêntrica alcançável, o passo mínimo entre cenas
+    # vizinhas e os dois multiplicadores da primeira tela. Devolvendo a ETAPA
+    # NARRATIVA, a IA substitui exatamente o pedaço fraco — o classificador
+    # por palavra-chave, que confundia "clica no link" com garantia — e todo
+    # o resto do caminho continua o mesmo, com as travas no lugar.
     return {"takes": takes, "recusados": recusadas,
+            "secoes": _faixas_de_tempo(resposta.get("secoes"), n, words,
+                                       "secao", SECOES_VALIDAS),
+            "camera": _faixas_de_tempo(resposta.get("camera"), n, words,
+                                       "enfase", ("fechado", "aberto")),
             "leitura": str(resposta.get("leitura", ""))[:300], "ok": True}
 
 

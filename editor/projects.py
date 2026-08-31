@@ -619,9 +619,18 @@ def auto_edit(project: Project, ctx) -> dict:
     marcadores += [float(t["end"]) for t in takes if not t.get("restored")]
 
     ctx.stage("cortes", "propondo cortes com encaixe no vale de energia")
+    # O RITMO e a CÂMERA que a IA leu. Ela não devolve número nenhum: devolve
+    # a ETAPA NARRATIVA de cada trecho e onde a câmera aperta. A velocidade
+    # sai da tabela da etapa (com o teto do preset), o zoom sai da escada (com
+    # o teto geométrico da resolução) e os dois sliders da primeira tela
+    # continuam multiplicando por cima. Sem chave, sem internet ou com
+    # resposta ruim, as listas vêm vazias e a regra do programa decide inteira.
+    secoes_ia = (relatorio_ia or {}).get("secoes") or None
+    camera_ia = (relatorio_ia or {}).get("camera") or None
     result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
                              takes, extra_removed=manual_removed | repetidas,
-                             markers=sorted(marcadores))
+                             markers=sorted(marcadores),
+                             secoes=secoes_ia, camera=camera_ia)
     plan = project.plan
     from .edit.ops import remap_output_items
     fps = project.info.fps if project.info else None
@@ -666,6 +675,12 @@ def auto_edit(project: Project, ctx) -> dict:
     ativas = [r for r in saida if not r.get("restored")]
     if ativas:
         ctx.progress(0.5, f"{len(ativas)} trecho(s) repetido(s) removido(s)")
+    if secoes_ia:
+        ctx.progress(0.52, f"a IA leu o vídeo em {len(secoes_ia)} etapa(s) — "
+                           f"é isso que decide a velocidade de cada trecho")
+    if result.get("enfatizados"):
+        ctx.progress(0.53, f"câmera marcada pela IA em "
+                           f"{result['enfatizados']} bloco(s)")
     ctx.progress(0.55, f"{len(plan.clips)} blocos propostos")
     ctx.stage("auditoria", "auditando as bordas de corte")
     # As bordas que dá para acertar sozinho são acertadas AQUI. O usuário
