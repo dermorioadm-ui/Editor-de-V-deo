@@ -17,14 +17,19 @@ import { timecode } from '../lib/format'
 import { getPlayhead, getState, pushHistory, setPlayhead, setState, toast, useStore }
   from '../state/store'
 
+// Duas famílias, separadas de propósito. As quatro de cima são PÓS-EDIÇÃO:
+// o que você só sabe que quer mudar depois de ver o vídeo. As três de baixo
+// já foram decididas na primeira tela e o clique único já as aplicou — ficam
+// aqui só para conferir ou trocar de ideia, e não disputam atenção com o
+// retoque.
 const TABS = [
-  { id: 'texto', label: 'Texto' },
-  { id: 'legendas', label: 'Legendas' },
-  { id: 'midia', label: 'Mídia' },
-  { id: 'filtro', label: 'Filtro' },
-  { id: 'audio', label: 'Áudio' },
-  { id: 'ia', label: 'IA' },
-  { id: 'exportar', label: 'Exportar' },
+  { id: 'texto', label: 'Texto', grupo: 'retoque' },
+  { id: 'legendas', label: 'Legendas', grupo: 'retoque' },
+  { id: 'midia', label: 'Mídia', grupo: 'retoque' },
+  { id: 'audio', label: 'Áudio', grupo: 'retoque' },
+  { id: 'filtro', label: 'Filtro', grupo: 'decidido' },
+  { id: 'ia', label: 'IA', grupo: 'decidido' },
+  { id: 'exportar', label: 'Exportar', grupo: 'decidido' },
 ] as const
 
 export default function Editor() {
@@ -35,7 +40,10 @@ export default function Editor() {
   const history = useStore((s) => s.history)
   const future = useStore((s) => s.future)
   const activeJob = useStore((s) => s.activeJob)
-  const [tab, setTab] = useState<string | null>(null)
+  // Abre no TEXTO. Para um vídeo de alguém falando, a superfície de retoque
+  // é o que foi dito, não uma régua de 148 blocos: você lê a frase ruim,
+  // seleciona, Delete. A timeline continua embaixo para quem quer precisão.
+  const [tab, setTab] = useState<string | null>('texto')
   const [presets, setPresets] = useState<any[]>([])
   const [safeZone, setSafeZone] = useState<any>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -61,7 +69,12 @@ export default function Editor() {
   const refresh = useCallback(async () => {
     if (!project) return
     const fresh = await api.project(project.id)
-    setPreviewUrl(null)
+    // NÃO derruba a prévia aqui. Derrubar fazia o player cair, a cada
+    // retoque, na reprodução por busca sobre o arquivo original de 2 GB —
+    // o "pesa" que o usuário sentia — e quando a prévia nova chegava o vídeo
+    // remontava e voltava a 0:00. A prévia velha continua tocando (a timeline
+    // e o texto já mostram o corte), a nova entra em ~3 s e o player retoma
+    // exatamente de onde estava.
     const dur = fresh.timeline?.duration ?? 0
     setPlayhead(Math.min(getPlayhead(), Math.max(0, dur - 0.01)))
     setState({
@@ -581,13 +594,29 @@ export default function Editor() {
             é o centro da tela, como em qualquer editor de verdade */}
         <nav className="w-[72px] shrink-0 border-r border-line bg-ink-800
                         flex flex-col py-2 gap-0.5 overflow-y-auto">
-          {TABS.map((t) => (
+          {TABS.filter((t) => t.grupo === 'retoque').map((t) => (
             <button key={t.id}
                     className={`mx-1.5 rounded-md px-1 py-2.5 text-[11px]
                       leading-tight transition-colors cursor-pointer
                       ${tab === t.id
                         ? 'bg-accent/15 text-accent font-medium'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-ink-700'}`}
+                    onClick={() => setTab(tab === t.id ? null : t.id)}>
+              {t.label}
+            </button>
+          ))}
+          <div className="mx-2 my-2 border-t border-line" />
+          <div className="mx-1.5 text-[9px] uppercase tracking-wide text-slate-600
+                          text-center leading-tight mb-1">
+            já decidido na 1ª tela
+          </div>
+          {TABS.filter((t) => t.grupo === 'decidido').map((t) => (
+            <button key={t.id}
+                    className={`mx-1.5 rounded-md px-1 py-2 text-[10px]
+                      leading-tight transition-colors cursor-pointer
+                      ${tab === t.id
+                        ? 'bg-accent/15 text-accent font-medium'
+                        : 'text-slate-500 hover:text-slate-300 hover:bg-ink-700'}`}
                     onClick={() => setTab(tab === t.id ? null : t.id)}>
               {t.label}
             </button>
@@ -623,6 +652,7 @@ export default function Editor() {
                   previewUrl={previaVelha ? null : previewUrl}
                   previaVelha={previaVelha}
                   proxyUrl={proxyUrl}
+                  onDeleteSelection={deleteSelection}
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)

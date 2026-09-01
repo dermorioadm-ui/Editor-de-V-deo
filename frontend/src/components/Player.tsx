@@ -3,7 +3,7 @@ import type { Clip, SubtitleCue } from '../types'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
-import { setPlayhead, setState, usePlayhead, useStore } from '../state/store'
+import { getState, setPlayhead, setState, usePlayhead, useStore } from '../state/store'
 
 interface Props {
   projectId: string
@@ -32,6 +32,9 @@ interface Props {
   // cópia leve da FONTE, para tocar sem engasgo. A linha do tempo é idêntica
   // à do original, então nada no cálculo de tempo muda.
   proxyUrl?: string | null
+  // corta o trecho marcado (início/fim) — quem executa é o Editor, que já
+  // sabe encaixar a borda no vale e nunca comer palavra
+  onDeleteSelection?: () => void
 }
 
 /**
@@ -42,7 +45,7 @@ interface Props {
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
                                 sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
-                                 proxyUrl }: Props) {
+                                 proxyUrl, onDeleteSelection }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -115,6 +118,55 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   }, [previewUrl, proxyUrl, projectId, sourceSize?.[0], sourceSize?.[1]])
 
   const linear = !!previewUrl
+
+  // A POSIÇÃO SOBREVIVE À TROCA DE PRÉVIA. Cada retoque refaz a prévia, e a
+  // prévia nova troca o `src` do <video> — que remonta e volta para 0:00. O
+  // usuário apagava uma frase no minuto 6 e era devolvido ao início do vídeo
+  // a cada edição. Aqui guardamos onde ele estava e se estava tocando, e o
+  // elemento novo retoma dali assim que tiver metadata.
+  const ultimaPosicao = useRef<{ t: number; tocando: boolean }>({ t: 0, tocando: false })
+  useEffect(() => {
+    ultimaPosicao.current = { t: playhead, tocando: playing }
+  }, [playhead, playing])
+  const retomar = useRef<{ t: number; tocando: boolean } | null>(null)
+  useEffect(() => {
+    // a limpeza roda ANTES do remount: é o último instante com o vídeo velho
+    return () => { retomar.current = { ...ultimaPosicao.current } }
+  }, [previewUrl, proxyUrl])
+  const aoCarregarMetadata = useCallback(() => {
+    const el = video.current
+    const r = retomar.current
+    retomar.current = null
+    if (!el || !r || r.t <= 0.05) return
+    const alvo = Math.max(0, Math.min(r.t, (el.duration || duration) - 0.05))
+    if (linear) {
+      el.currentTime = alvo
+    } else {
+      const pos = outputToSource(alvo, blocks)
+      if (pos) el.currentTime = pos.time
+    }
+    setPlayhead(alvo)
+    if (r.tocando) el.play().then(() => setPlaying(true)).catch(() => {})
+  }, [linear, blocks, duration])
+
+  // MARCAR INÍCIO / FIM DE ONDE VOCÊ ESTÁ ASSISTINDO. É o gesto que faltava:
+  // "ouvi uma frase ruim" -> I no começo dela, O no fim, Delete. Sem isso o
+  // retoque exigia parar, achar as palavras no texto ou o bloco na timeline,
+  // selecionar e apagar — quatro ações em duas telas. A marca vai para a
+  // mesma seleção que a timeline usa (eixo da FONTE), então Delete, o botão
+  // "cortar" e a faixa vermelha na timeline enxergam a mesma coisa.
+  const selection = useStore((st) => st.selection)
+  const marcar = useCallback((qual: 'inicio' | 'fim') => {
+    const pos = outputToSource(playhead, blocks)
+    if (!pos) return
+    const t = pos.time
+    const atual = getState().selection
+    if (qual === 'inicio') {
+      setState({ selection: { start: t, end: Math.max(t + 0.05, atual?.end ?? t + 0.05) } })
+    } else {
+      setState({ selection: { start: Math.min(atual?.start ?? t - 0.05, t - 0.05), end: t } })
+    }
+  }, [playhead, blocks])
 
   const seekOutput = useCallback((t: number) => {
     const el = video.current
@@ -279,6 +331,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' ||
           target?.isContentEditable) return
       if (e.code === 'Space') { e.preventDefault(); toggle() }
+      // I = início do trecho, O = fim — o padrão de todo editor de vídeo
+      if (e.key === 'i' || e.key === 'I' || e.key === '[') { e.preventDefault(); marcar('inicio') }
+      if (e.key === 'o' || e.key === 'O' || e.key === ']') { e.preventDefault(); marcar('fim') }
       if (e.code === 'ArrowLeft') seekOutput(playhead - (e.shiftKey ? 1 : 0.1))
       if (e.code === 'ArrowRight') seekOutput(playhead + (e.shiftKey ? 1 : 0.1))
     }
@@ -331,6 +386,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                  style={zoomCss}
                  key={previewUrl ?? proxyUrl ?? 'source'}
                  src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
+                 onLoadedMetadata={aoCarregarMetadata}
                  onPause={() => { if (!stillRef.current) setPlaying(false) }} />
         </div>
         {stillClip && !linear && (
@@ -454,6 +510,23 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         <button className="btn btn-xs w-16" onClick={toggle}>
           {playing ? '❚❚ pausa' : '▶ tocar'}
         </button>
+        {/* o retoque em dois toques: marca onde começa, marca onde termina,
+            corta. Teclas I e O fazem o mesmo sem tirar a mão do teclado. */}
+        <span className="flex items-center gap-1 ml-1">
+          <button className="btn btn-xs" title="marcar o INÍCIO do trecho ruim aqui (I)"
+                  onClick={() => marcar('inicio')}>⟦ início</button>
+          <button className="btn btn-xs" title="marcar o FIM do trecho ruim aqui (O)"
+                  onClick={() => marcar('fim')}>fim ⟧</button>
+          {selection && selection.end - selection.start > 0.04 && (
+            <>
+              <button className="btn btn-xs btn-danger"
+                      title="tira este trecho do vídeo (Delete). A borda encaixa no vale e nunca come palavra."
+                      onClick={() => onDeleteSelection?.()}>✂ cortar</button>
+              <button className="btn btn-xs" title="desmarcar (Esc)"
+                      onClick={() => setState({ selection: null })}>×</button>
+            </>
+          )}
+        </span>
         <span className="font-mono text-slate-400">
           {timecode(playhead, true)} / {timecode(duration)}
         </span>
