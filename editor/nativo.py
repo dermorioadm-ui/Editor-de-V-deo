@@ -36,6 +36,11 @@ FILTROS = {
     "video": ("Vídeo", "*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi;*.mpg;*.mpeg;*.wmv"),
     "audio": ("Áudio", "*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma"),
     "image": ("Imagem", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff"),
+    # material auxiliar: gravação de tela E print, na mesma janela — separar
+    # em duas obrigaria a abrir a janela duas vezes para anexar um vídeo e uma
+    # imagem, que é o caso normal
+    "media": ("Vídeo ou imagem",
+              "*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi;*.png;*.jpg;*.jpeg;*.webp"),
 }
 
 

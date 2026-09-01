@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS media (
     kind TEXT NOT NULL,
     name TEXT,
     info_json TEXT DEFAULT '{}',
+    -- o que É este arquivo e como o usuário quer usá-lo. É isto que a IA lê
+    -- para posicionar: um quadro de 360 px mostra o que a imagem mostra, não
+    -- a intenção de quem gravou.
+    descricao TEXT DEFAULT '',
     created_at REAL
 );
 CREATE TABLE IF NOT EXISTS presets (
@@ -81,10 +85,32 @@ def connect() -> sqlite3.Connection:
         with _init_lock:
             if not _initialized:
                 conn.executescript(SCHEMA)
+                _migrar(conn)
                 conn.commit()
                 _seed(conn)
                 _initialized = True
     return conn
+
+
+def _migrar(conn: sqlite3.Connection) -> None:
+    """Colunas novas em bancos que já existem.
+
+    CREATE TABLE IF NOT EXISTS não acrescenta coluna nenhuma a uma tabela que
+    já está lá: quem já usava o editor ficaria sem o campo e a rota quebraria
+    na primeira escrita.
+    """
+    novas = {
+        "media": [("descricao", "TEXT DEFAULT ''")],
+    }
+    for tabela, colunas in novas.items():
+        try:
+            existentes = {r["name"] for r in
+                          conn.execute(f"PRAGMA table_info({tabela})")}
+        except sqlite3.Error:
+            continue
+        for nome, tipo in colunas:
+            if nome not in existentes:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
 
 
 def _seed(conn: sqlite3.Connection) -> None:

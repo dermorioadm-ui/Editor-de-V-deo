@@ -50,6 +50,13 @@ export default function Home() {
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
   const [extras, setExtras] = useState<string[]>([])
   const [fonteInfo, setFonteInfo] = useState<any>(null)   // o que é o arquivo
+  // MATERIAL AUXILIAR: gravações de tela, prints, imagens. Cada um com uma
+  // linha dizendo o que é e onde deve entrar — é essa linha que a IA lê para
+  // posicionar. Um quadro de 360 px mostra o que a imagem MOSTRA; só você
+  // sabe a intenção.
+  const [auxiliares, setAuxiliares] =
+    useState<{ path: string; descricao: string }[]>([])
+  const [cartoes, setCartoes] = useState(true)
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -178,6 +185,19 @@ export default function Home() {
       // ninguém ficava sabendo.
       if (iaCortes !== (ia?.cortes !== false)) {
         await api.setAiConfig({ cortes: iaCortes }).catch(() => {})
+      }
+      // o material auxiliar sobe ANTES do clique único: é lá dentro que a IA
+      // decide em que trecho cada um entra
+      for (const aux of auxiliares) {
+        try {
+          const ext = aux.path.split('.').pop()?.toLowerCase() ?? ''
+          const kind = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
+            .includes(ext) ? 'image' : 'video'
+          await api.addMedia(project.id, aux.path, kind, aux.descricao)
+        } catch { /* um anexo que não sobe não pode impedir o vídeo */ }
+      }
+      if (cartoes !== (ia?.cartoes !== false)) {
+        await api.setAiConfig({ cartoes }).catch(() => {})
       }
       if (musica) {
         try {
@@ -606,6 +626,69 @@ export default function Home() {
               : iaPendente ? 'fixando o modelo…' : 'GERAR VÍDEO PRONTO'}
           </button>
         </div>
+        {/* MATERIAL AUXILIAR. A IA lê a sua linha de descrição junto com um
+            quadro de cada arquivo e decide em que trecho da SUA fala ele
+            entra. Vídeo cobre a imagem (a sua voz continua por baixo);
+            imagem aparece por cima. */}
+        <div className="card p-3 mt-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div>
+              <div className="text-sm text-slate-200 font-medium">
+                Material auxiliar
+              </div>
+              <p className="text-[11px] text-slate-500">
+                gravações de tela, prints, imagens — a IA põe cada um no
+                trecho em que você fala daquilo
+              </p>
+            </div>
+            <button className="btn btn-xs ml-auto"
+                    onClick={async () => {
+                      try {
+                        const r = await api.escolher('media',
+                          'Escolher material auxiliar')
+                        if (!r.cancelado) {
+                          setAuxiliares((v) => [...v,
+                            { path: r.path, descricao: '' }])
+                        }
+                      } catch {
+                        toast('warn', 'Use a aba Mídia depois de gerar',
+                          'Esta máquina não abriu a janela do sistema.')
+                      }
+                    }}>
+              + anexar arquivo
+            </button>
+            <label className="flex items-center gap-1.5 text-xs text-slate-400
+                              cursor-pointer">
+              <input type="checkbox" checked={cartoes}
+                     onChange={(e) => setCartoes(e.target.checked)} />
+              cartões de tópico
+            </label>
+          </div>
+          {auxiliares.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              {auxiliares.map((aux, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500 font-mono w-40
+                                   truncate" title={aux.path}>
+                    {aux.path.split(/[\\/]/).pop()}
+                  </span>
+                  <input className="field flex-1 py-1 text-xs"
+                         placeholder="o que é e onde entra — ex.: tela de cadastro, quando eu falo do passo 1"
+                         value={aux.descricao}
+                         onChange={(e) => setAuxiliares((v) => v.map((a, k) =>
+                           k === i ? { ...a, descricao: e.target.value } : a))} />
+                  <button className="text-[11px] text-slate-500 hover:text-slate-300"
+                          onClick={() => setAuxiliares((v) =>
+                            v.filter((_, k) => k !== i))}>tirar</button>
+                </div>
+              ))}
+              <p className="text-[10px] text-slate-600">
+                Sem a descrição a IA só vê a imagem e chuta. Uma linha basta.
+              </p>
+            </div>
+          )}
+        </div>
+
         <p className="hint mt-2">
           {presets.find((p) => p.name === preset)?.description}
         </p>

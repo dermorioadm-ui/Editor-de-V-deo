@@ -297,6 +297,7 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_cartao_de_topico()
     testar_legenda_no_padrao_do_formato()
     testar_silencio_nao_vai_para_o_whisper()
     testar_relatorio_da_ia_nao_e_incognita()
@@ -1614,8 +1615,10 @@ def testar_janela_do_sistema() -> None:
     """A janela de escolher arquivo é a DO SISTEMA, não uma imitação em HTML."""
     from editor import nativo
 
-    check(set(nativo.FILTROS) == {"video", "audio", "image"},
-          "os três tipos que o editor aceita têm filtro")
+    check(set(nativo.FILTROS) == {"video", "audio", "image", "media"},
+          "todo tipo que o editor aceita tem filtro, inclusive o 'media' do "
+          "material auxiliar (vídeo e imagem na MESMA janela: separar obriga a "
+          "abrir duas vezes para anexar uma gravação de tela e um print)")
     check("*.mp3" in nativo.FILTROS["audio"][1],
           "o filtro de áudio aceita mp3, que é o que o usuário manda")
 
@@ -2062,6 +2065,72 @@ def testar_controles_antes_de_gerar() -> None:
     check(variacoes[1] < variacoes[2],
           f"e subir a intensidade abre a escada ({variacoes[1]:.3f} -> "
           f"{variacoes[2]:.3f})")
+
+
+def testar_cartao_de_topico() -> None:
+    """O cartão é desenhado pelo PROGRAMA e nunca bate na legenda.
+
+    Modelo de imagem escreve texto mal — troca letra, come acento. Cartão é
+    texto, então quem desenha é o libass, o mesmo que escreve a legenda. E a
+    posição não pode ser um número fixo: com y fixo o painel caía em cima do
+    texto da legenda (conferido queimando um quadro do vídeo), e a faixa de
+    legenda muda de altura conforme o formato e o tamanho escolhido.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from editor.ffmpeg_utils import MediaInfo, probe
+    from editor.models import EditPlan
+    from editor.projects import (apply_preset_to_plan, escalar_legenda,
+                                 posicao_do_cartao)
+    from editor.render import cartao as K
+
+    tmp = Path(tempfile.mkdtemp(prefix="cartao-"))
+    try:
+        r = K.desenhar(tmp / "a.png", 1080, 1920,
+                       titulo="3 passos para começar",
+                       topicos=["1 · Criar a conta", "2 · Escolher o plano",
+                                "3 · Publicar o anúncio"])
+        info = probe(Path(r["path"]))
+        check(info.width == r["width"] and info.height == r["height"],
+              f"o cartão sai no tamanho medido ({r['width']}x{r['height']})")
+        check(r["height"] < 1920 * 0.46,
+              f"e nunca ocupa metade da tela ({r['height']/1920:.0%} da altura)")
+
+        # o mesmo conteúdo dá o mesmo arquivo: refazer a edição não redesenha
+        n1 = K.nome_do_cartao("a", ["b"], "", 1080, 1920)
+        n2 = K.nome_do_cartao("a", ["b"], "", 1080, 1920)
+        n3 = K.nome_do_cartao("a", ["c"], "", 1080, 1920)
+        check(n1 == n2 and n1 != n3,
+              "o nome sai do conteúdo — texto igual reaproveita o PNG")
+
+        # NUNCA em cima da legenda, em nenhum formato
+        for w, h, nome in ((1080, 1920, "vertical"), (1920, 1080, "horizontal"),
+                           (1080, 1080, "quadrado")):
+            plan = EditPlan(preset="VSL")
+            apply_preset_to_plan(plan, "VSL")
+            escalar_legenda(plan, MediaInfo(path="x", width=w, height=h,
+                                            fps=30.0, duration=1.0))
+            pw, ph = K.medir(w, h, 3)
+            y, escala = posicao_do_cartao(plan, w, h, ph)
+            meia = ph * escala / 2 / h
+            base, topo = y + meia, y - meia
+            topo_legenda = (h - plan.style.margin_v
+                            - plan.style.fontsize * 2) / h
+            check(base <= topo_legenda + 1e-6,
+                  f"{nome}: o cartão termina em {base:.3f} e a legenda começa "
+                  f"em {topo_legenda:.3f} — sem encostar (escala {escala:.2f})")
+            check(topo >= 0.45 or escala <= 0.73,
+                  f"{nome}: e só entra na faixa do rosto se já encolheu ao "
+                  f"limite ({topo:.3f}, escala {escala:.2f})")
+
+        # texto do usuário não pode virar comando de ASS
+        r2 = K.desenhar(tmp / "b.png", 1080, 1920,
+                        titulo="{\\pos(0,0)}quebra", topicos=["um", "dois"])
+        check(Path(r2["path"]).exists(),
+              "chave e barra no texto não quebram o cartão")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_legenda_no_padrao_do_formato() -> None:

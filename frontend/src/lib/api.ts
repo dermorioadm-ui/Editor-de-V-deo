@@ -21,6 +21,8 @@ const post = <T>(url: string, body?: unknown) =>
   req<T>(url, { method: 'POST', body: JSON.stringify(body ?? {}) })
 const put = <T>(url: string, body?: unknown) =>
   req<T>(url, { method: 'PUT', body: JSON.stringify(body ?? {}) })
+const patch = <T>(url: string, body?: unknown) =>
+  req<T>(url, { method: 'PATCH', body: JSON.stringify(body ?? {}) })
 const del = <T>(url: string) => req<T>(url, { method: 'DELETE' })
 
 export const api = {
@@ -33,7 +35,8 @@ export const api = {
   // então ele pode abrir o mesmo diálogo de qualquer programa e devolver o
   // caminho. Nada é enviado: o que atravessa é uma string.
   janela: () => req<{ disponivel: boolean }>('/api/janela'),
-  escolher: (kind: 'video' | 'audio' | 'image', titulo?: string, varios = false) =>
+  escolher: (kind: 'video' | 'audio' | 'image' | 'media',
+             titulo?: string, varios = false) =>
     post<{ ok: boolean; cancelado: boolean; path: string; paths: string[] }>(
       '/api/escolher', { kind, titulo, varios }),
 
@@ -161,8 +164,8 @@ export const api = {
     put<any>(`/api/corrections/${id}`, { from, to, enabled }),
   deleteCorrection: (id: number) => del<any>(`/api/corrections/${id}`),
 
-  addMedia: (id: string, path: string, kind: string) =>
-    post<any>(`/api/projects/${id}/media`, { path, kind }),
+  addMedia: (id: string, path: string, kind: string, descricao = '') =>
+    post<any>(`/api/projects/${id}/media`, { path, kind, descricao }),
   addCutaway: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/cutaways`, payload),
   updateCutaway: (id: string, cid: string, payload: any) =>
@@ -220,6 +223,8 @@ export const api = {
   // o que é o arquivo, ANTES de criar o projeto — a primeira tela precisa da
   // proporção para oferecer os formatos extras que fazem sentido
   probe: (path: string) => post<any>('/api/probe', { path }),
+  mediaDescricao: (id: string, mid: string, descricao: string) =>
+    patch<any>(`/api/projects/${id}/media/${mid}`, { descricao }),
   safeZone: (id: string) => req<any>(`/api/projects/${id}/safe-zone`),
   bitrateEstimate: (id: string) => req<any>(`/api/projects/${id}/bitrate-estimate`),
 }

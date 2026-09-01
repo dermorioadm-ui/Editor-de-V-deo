@@ -53,6 +53,30 @@ Depois de fechar, abrir dá alívio e faz o próximo fechamento valer.
 - "normal" no resto. NÃO marque tudo como fechado: se tudo é ponto alto, nada é. \
 Use "fechado" em no máximo um terço dos blocos, e evite dois "fechado" seguidos.
 
+=== CARTÕES ===
+Você também escreve os CARTÕES: um painel de texto que aparece por cima do
+vídeo. Quem desenha é o programa, com a fonte e o traço dele — você escreve as
+palavras e diz em que bloco entra.
+
+Dois tipos, e só dois:
+- "topicos": um título curto e de 2 a 4 linhas. Para quando a pessoa ENUMERA
+  ("são três coisas", "primeiro... segundo..."), lista o que está incluído, ou
+  explica um passo a passo. As linhas saem da FALA dela, encurtadas — nunca
+  invente item que ela não disse.
+- "numero": um número grande com uma legenda curta embaixo. Para quando ela diz
+  um número que importa: preço, quantidade de clientes, porcentagem, prazo.
+  Em "numero" vai só o número ("347", "97", "82%", "30 dias") e em "titulo" o
+  que ele é ("clientes atendidos").
+
+Regras que valem mais que sua vontade de enfeitar:
+- No máximo UM cartão a cada 20 segundos de vídeo, e no máximo 5 no total.
+  Cartão demais vira apresentação de slides e a pessoa some do próprio anúncio.
+- Título de no máximo 6 palavras. Tópico de no máximo 5 palavras. Se não cabe
+  em 5 palavras, não é tópico de cartão, é fala.
+- O cartão entra EM CIMA da fala que ele resume, não antes nem depois.
+- Se o vídeo não enumera nada e não diz número nenhum, devolva a lista vazia.
+  Nenhum cartão é melhor que um cartão genérico.
+
 Responda somente o JSON do esquema."""
 
 
@@ -104,6 +128,21 @@ def _esquema(com_anexos: bool) -> dict:
         }}
         esquema["required"].append("anexos")
         esquema["propertyOrdering"].append("anexos")
+    esquema["properties"]["cartoes"] = {"type": "ARRAY", "items": {
+        "type": "OBJECT",
+        "properties": {
+            "bloco": {"type": "INTEGER", "description": "índice do bloco onde entra"},
+            "tipo": {"type": "STRING", "enum": ["topicos", "numero"]},
+            "titulo": {"type": "STRING"},
+            "topicos": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "numero": {"type": "STRING"},
+            "segundos": {"type": "NUMBER"},
+        },
+        "required": ["bloco", "tipo", "titulo", "segundos"],
+        "propertyOrdering": ["bloco", "tipo", "titulo", "topicos", "numero",
+                             "segundos"],
+    }}
+    esquema["propertyOrdering"].append("cartoes")
     return esquema
 
 
@@ -120,10 +159,18 @@ def montar_pedido(blocos: list[Bloco], midias: list[dict],
             tipo = "vídeo" if m.get("kind") == "video" else "imagem"
             dur = (m.get("info") or {}).get("duration")
             extra = f", {float(dur):.1f}s" if dur else ""
-            linhas.append(f"{n} | {tipo}{extra} | {m.get('name', '')}")
+            # A DESCRIÇÃO é o que decide. O quadro mostra o que a imagem
+            # mostra; só o usuário sabe a intenção — "tela de cadastro, entra
+            # quando eu falo do passo 1". Sem ela o modelo chuta pelo pixel.
+            desc = str(m.get("descricao") or "").strip()
+            linhas.append(f"{n} | {tipo}{extra} | {m.get('name', '')}"
+                          + (f" | O USUÁRIO DIZ: {desc}" if desc else ""))
         linhas += [
             "",
             "Para cada mídia, diga em QUE BLOCO ela entra e por quantos segundos.",
+            "Quando houver 'O USUÁRIO DIZ', OBEDEÇA: é ele quem sabe o que o "
+            "arquivo é e onde quer. O quadro serve para você conferir o "
+            "enquadramento, não para discordar da intenção dele.",
             "Vídeo entra como 'cobertura' (cobre a imagem, a voz continua por "
             "baixo). Imagem entra como 'sobreposicao' (aparece por cima).",
             f"Entre {MIN_ANEXO:.0f} e {MAX_ANEXO:.0f} segundos. Uma mídia só, por "
@@ -250,7 +297,75 @@ def aplicar(plan, resposta: dict, midias: list[dict],
         quantos += 1
 
     return {"leitura": str(resposta.get("leitura", ""))[:300],
-            "aplicados": aplicados, "anexos": anexados, "recusados": recusados}
+            "aplicados": aplicados, "anexos": anexados,
+            "cartoes": _cartoes_pedidos(resposta, plan, porindice, duracao_saida,
+                                        recusados),
+            "recusados": recusados}
+
+
+MAX_CARTOES = 5
+INTERVALO_CARTAO = 20.0       # um a cada 20 s de vídeo, no máximo
+DUR_CARTAO_MIN = 1.8
+DUR_CARTAO_MAX = 5.0
+
+
+def _cartoes_pedidos(resposta: dict, plan, porindice: dict,
+                     duracao_saida: float, recusados: list[dict]) -> list[dict]:
+    """Os cartões que a IA escreveu, validados — ainda sem desenhar.
+
+    Desenhar é do render; aqui só se decide O QUE e QUANDO. As travas são de
+    ritmo, não de estética: cartão demais vira apresentação de slides e a
+    pessoa some do próprio anúncio.
+    """
+    teto = min(MAX_CARTOES, max(1, int(duracao_saida // INTERVALO_CARTAO)))
+    saida: list[dict] = []
+    for item in (resposta.get("cartoes") or []):
+        try:
+            bloco = int(item.get("bloco", -1))
+            segundos = float(item.get("segundos", 3.0))
+        except (TypeError, ValueError):
+            continue
+        titulo = str(item.get("titulo", "")).strip()[:60]
+        tipo = str(item.get("tipo", "")).strip()
+        topicos = [str(t).strip()[:48] for t in (item.get("topicos") or [])
+                   if str(t).strip()][:4]
+        numero = str(item.get("numero", "")).strip()[:12]
+        if porindice.get(bloco) is None:
+            recusados.append({"o_que": f"cartão “{titulo}”",
+                              "motivo": f"bloco {bloco} não existe"})
+            continue
+        if tipo == "numero" and not numero:
+            recusados.append({"o_que": f"cartão “{titulo}”",
+                              "motivo": "cartão de número sem número"})
+            continue
+        if tipo == "topicos" and len(topicos) < 2:
+            recusados.append({"o_que": f"cartão “{titulo}”",
+                              "motivo": "menos de dois tópicos — isso é uma "
+                                        "frase, não uma lista"})
+            continue
+        if len(saida) >= teto:
+            recusados.append({
+                "o_que": f"cartão “{titulo}”",
+                "motivo": f"já são {teto} cartão(ões) neste vídeo (um a cada "
+                          f"{INTERVALO_CARTAO:.0f} s). Mais que isso vira "
+                          f"apresentação de slides."})
+            continue
+        inicio = _inicio_na_saida(plan, bloco)
+        segundos = max(DUR_CARTAO_MIN, min(DUR_CARTAO_MAX, segundos))
+        fim = min(duracao_saida, inicio + segundos)
+        if fim - inicio < DUR_CARTAO_MIN * 0.6:
+            recusados.append({"o_que": f"cartão “{titulo}”",
+                              "motivo": "não sobra vídeo para ele aparecer"})
+            continue
+        # dois cartões em cima um do outro é um piscando por baixo do outro
+        if saida and inicio < saida[-1]["out_end"] + 0.3:
+            recusados.append({"o_que": f"cartão “{titulo}”",
+                              "motivo": "cai em cima do cartão anterior"})
+            continue
+        saida.append({"tipo": "numero" if tipo == "numero" else "topicos",
+                      "titulo": titulo, "topicos": topicos, "numero": numero,
+                      "out_start": round(inicio, 3), "out_end": round(fim, 3)})
+    return saida
 
 
 def _inicio_na_saida(plan, indice: int) -> float:

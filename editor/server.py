@@ -1174,9 +1174,25 @@ def api_add_media(pid: str, payload: dict = Body(...)) -> dict:
     _project(pid)
     try:
         return svc.add_media(pid, payload["path"], payload.get("kind", "video"),
-                             payload.get("name", ""))
+                             payload.get("name", ""),
+                             payload.get("descricao", ""))
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@app.patch("/api/projects/{pid}/media/{mid}")
+def api_media_descricao(pid: str, mid: str, payload: dict = Body(...)) -> dict:
+    """Descreve a mídia: o que ela é e onde você quer que ela entre.
+
+    É este texto que a IA lê para posicionar. Um quadro de 360 px mostra o que
+    a imagem MOSTRA; só a descrição diz a INTENÇÃO — "tela de cadastro, mostra
+    quando eu falo do passo 1".
+    """
+    _project(pid)
+    texto = str(payload.get("descricao", ""))[:400]
+    db.ex("UPDATE media SET descricao=? WHERE id=? AND project_id=?",
+          (texto, mid, pid))
+    return {"ok": True, "descricao": texto}
 
 
 @app.post("/api/projects/{pid}/cutaways")
@@ -1809,6 +1825,8 @@ def api_ia_config() -> dict:
         # a IA decidindo os cortes no EDITAR — ligada por padrão quando há
         # chave; o usuário desliga aqui se quiser voltar à regra do programa
         "cortes": bool(db.get_setting("ai_cortes", True)),
+        # os cartões de tópico que o programa desenha com o texto da IA
+        "cartoes": bool(db.get_setting("ia_cartoes", True)),
     }
 
 
@@ -1837,6 +1855,8 @@ def api_ia_config_set(payload: dict = Body(...)) -> dict:
             db.set_setting("gemini_model", "")
     if "cortes" in payload:
         db.set_setting("ai_cortes", bool(payload["cortes"]))
+    if "cartoes" in payload:
+        db.set_setting("ia_cartoes", bool(payload["cartoes"]))
 
     chave = gem.chave_guardada()
     pedido = str(payload.get("modelo") or "").strip() if "modelo" in payload else ""

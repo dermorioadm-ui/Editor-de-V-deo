@@ -287,13 +287,14 @@ def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
 # -------------------------------------------------------------------- mídia
 def list_media(pid: str) -> list[dict]:
     return [{"id": r["id"], "path": r["path"], "kind": r["kind"],
-             "name": r["name"], "info": db.jloads(r["info_json"], {})}
+             "name": r["name"], "info": db.jloads(r["info_json"], {}),
+             "descricao": (r["descricao"] if "descricao" in r.keys() else "") or ""}
             for r in db.q("SELECT * FROM media WHERE project_id=? ORDER BY created_at",
                           (pid,))]
 
 
 def add_media(pid: str, path: str, kind: str = "video",
-              name: str = "") -> dict:
+              name: str = "", descricao: str = "") -> dict:
     src = Path(path).expanduser()
     if not src.exists():
         raise FileNotFoundError(f"arquivo não encontrado: {src}")
@@ -306,12 +307,13 @@ def add_media(pid: str, path: str, kind: str = "video",
         except Exception:  # noqa: BLE001
             info = {}
     mid = uuid.uuid4().hex[:10]
-    db.ex("INSERT INTO media(id, project_id, path, kind, name, info_json, created_at) "
-          "VALUES (?,?,?,?,?,?,?)",
+    db.ex("INSERT INTO media(id, project_id, path, kind, name, info_json, "
+          "descricao, created_at) VALUES (?,?,?,?,?,?,?,?)",
           (mid, pid, str(src.resolve()), kind, name or src.name,
-           db.jdumps(info), time.time()))
+           db.jdumps(info), str(descricao or "")[:400], time.time()))
     return {"id": mid, "path": str(src.resolve()), "kind": kind,
-            "name": name or src.name, "info": info}
+            "name": name or src.name, "info": info,
+            "descricao": str(descricao or "")[:400]}
 
 
 def sources_for(project: Project) -> dict:
@@ -842,6 +844,41 @@ def previa_da_edicao(project: Project, ctx) -> dict:
     })
 
 
+def enriquecer(project: Project, ctx) -> dict:
+    """Põe as mídias auxiliares e os cartões no lugar certo do vídeo.
+
+    Roda dentro do clique único, DEPOIS do corte — só aí existem blocos com
+    fala para ancorar um anexo. É a única chamada que manda imagem: um quadro
+    de 360 px de cada mídia que VOCÊ anexou, porque sem ver o que a imagem
+    mostra não há como decidir onde ela cabe. O vídeo principal nunca sai.
+
+    Não roda à toa: sem chave, sem mídia anexada e com cartão desligado, não
+    há o que pedir.
+    """
+    from . import db
+    from .ai import gemini
+
+    midias = [m for m in list_media(project.id)
+              if m.get("kind") in ("video", "image")
+              and not str(m.get("id", "")).startswith("k_")]
+    quer_cartao = bool(db.get_setting("ia_cartoes", True))
+    if not midias and not quer_cartao:
+        return {"ok": False, "pulada": True, "motivo": "nada para posicionar"}
+    if not gemini.chave_guardada():
+        return {"ok": False, "pulada": True, "motivo": "sem chave do Gemini"}
+    ctx.stage("anexos", f"posicionando {len(midias)} mídia(s) e escrevendo "
+                        f"os cartões")
+    try:
+        plano = plano_da_ia(project, ctx, com_anexos=bool(midias))
+    except Exception as exc:  # noqa: BLE001 — o vídeo sai sem isso
+        ctx.progress(1.0, f"não deu para posicionar os anexos ({exc})")
+        return {"ok": False, "erro": str(exc)}
+    r = aplicar_plano_da_ia(project, plano.get("plano") or plano, so_anexos=True)
+    ctx.progress(1.0, f"{len(r.get('anexos') or [])} anexo(s) e "
+                      f"{len(r.get('cartoes') or [])} cartão(ões) no lugar")
+    return {"ok": True, **r}
+
+
 def one_click(project: Project, ctx) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
@@ -850,8 +887,16 @@ def one_click(project: Project, ctx) -> dict:
     decidido e a prévia leve gerada. Editar é retoque, não trabalho.
     """
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.55, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.55, 0.65, lambda c: auto_edit(project, c))
+    a = _scoped(ctx, 0.0, 0.52, lambda c: analyze(project, c))
+    b = _scoped(ctx, 0.52, 0.62, lambda c: auto_edit(project, c))
+    # o material auxiliar entra AQUI, depois do corte: só agora existem blocos
+    # com fala para ancorar um anexo, e a duração de saída é a de verdade
+    try:
+        x = _scoped(ctx, 0.62, 0.68,
+                    lambda c: enriquecer(project, c))
+    except Exception as exc:  # noqa: BLE001 — o vídeo sai sem os anexos
+        ctx.progress(0.68, f"anexos não entraram ({exc})")
+        x = {"ok": False, "erro": str(exc)}
     # A CÓPIA LEVE DA FONTE saiu do caminho crítico. Ela existe para arrastar a
     # agulha sobre a fonte, e o player só cai nela enquanto a prévia da edição
     # está sendo refeita — ou seja, só depois do primeiro retoque. Gerá-la aqui
@@ -876,7 +921,7 @@ def one_click(project: Project, ctx) -> dict:
     # o que vai baixar — e o botão de baixar acende sozinho quando o MP4 fica
     # pronto.
     project.set_status("pronto")
-    return {"analysis": a, "edit": b, "proxy": p, "previa": v}
+    return {"analysis": a, "edit": b, "anexos": x, "proxy": p, "previa": v}
 
 
 def exportar_final(project: Project, ctx) -> dict:
@@ -1350,8 +1395,16 @@ def plano_da_ia(project: Project, ctx, com_anexos: bool = True) -> dict:
             "leitura": str(resposta.get("leitura", ""))[:300]}
 
 
-def aplicar_plano_da_ia(project: Project, plano: dict) -> dict:
-    """Aplica a sugestão — e recusa o que não couber, com o motivo escrito."""
+def aplicar_plano_da_ia(project: Project, plano: dict,
+                        so_anexos: bool = False) -> dict:
+    """Aplica a sugestão — e recusa o que não couber, com o motivo escrito.
+
+    ``so_anexos`` deixa etapa e ênfase quietas. No caminho automático quem já
+    decidiu isso foi a leitura palavra a palavra (ai/cortes.py); esta chamada
+    existe só porque ela é a que enxerga os QUADROS das mídias anexadas, e
+    reaplicar as etapas por cima seria uma segunda opinião atropelando a
+    primeira.
+    """
     from .ai import roteiro
     from .models import Cutaway, Overlay
 
@@ -1360,6 +1413,8 @@ def aplicar_plano_da_ia(project: Project, plano: dict) -> dict:
     plan = project.plan
     midias = [m for m in list_media(project.id)
               if m.get("kind") in ("video", "image")]
+    if so_anexos:
+        plano = {k: v for k, v in plano.items() if k != "blocos"}
     relatorio = roteiro.aplicar(plan, plano, midias, duracao_de_saida(project))
 
     for a in relatorio["anexos"]:
@@ -1372,6 +1427,8 @@ def aplicar_plano_da_ia(project: Project, plano: dict) -> dict:
                                          out_start=a["out_start"],
                                          out_end=a["out_end"]))
 
+    relatorio["cartoes"] = desenhar_cartoes(project, relatorio.get("cartoes"))
+
     # a etapa e a ênfase só viram imagem depois disto — e é aqui que TODAS as
     # invariantes do enquadramento são impostas, exatamente como quando quem
     # escolheu a etapa foi a regra de palavras-chave
@@ -1379,6 +1436,99 @@ def aplicar_plano_da_ia(project: Project, plano: dict) -> dict:
     project.save_plan()
     return {"ok": True, **relatorio, "zoom": resumo,
             "timeline": timeline_summary(project)}
+
+
+# Onde o cartão fica no quadro. NÃO é posição fixa: é calculada para o cartão
+# terminar logo ACIMA da faixa de legenda. Com um número fixo o painel batia
+# em cima do texto da legenda — conferido queimando um quadro do vídeo — e a
+# faixa de legenda muda de altura conforme o formato (21,5% do quadro no
+# vertical, 8% no horizontal) e conforme o tamanho que o usuário escolheu.
+CARTAO_RESPIRO = 0.025        # do quadro, entre o cartão e a legenda
+CARTAO_TETO = 0.50            # e ele nunca sobe acima disto: ali está o rosto
+CARTAO_FADE = 0.30
+
+
+ESCALA_MINIMA = 0.72          # abaixo disto o texto do cartão fica pequeno demais
+
+
+def posicao_do_cartao(plan, largura: int, altura: int,
+                      altura_cartao: int) -> tuple[float, float]:
+    """(centro Y, escala) do cartão: entre o rosto e a legenda.
+
+    A faixa livre é estreita num vertical — o rosto termina por volta da
+    metade da altura e a legenda começa a 28% do rodapé. Um cartão de três
+    tópicos não cabe inteiro ali. Então ele ENCOLHE para caber, em vez de subir
+    para cima da boca de quem fala: legenda menor se lê, boca coberta não tem
+    conserto. Abaixo de 72% o texto fica pequeno demais e aí o cartão sobe
+    mesmo — nunca por cima da legenda, que é a regra dura.
+    """
+    st = plan.style
+    topo_da_legenda = altura - (st.margin_v
+                                + st.fontsize * min(2, st.max_lines or 2))
+    base = topo_da_legenda - altura * CARTAO_RESPIRO
+    faixa = base - altura * CARTAO_TETO
+    escala = 1.0
+    if altura_cartao > faixa > 0:
+        escala = max(ESCALA_MINIMA, faixa / altura_cartao)
+    centro = (base - altura_cartao * escala / 2.0) / max(altura, 1)
+    return max(0.0, min(0.92, centro)), round(escala, 4)
+
+
+def desenhar_cartoes(project: Project, pedidos: list[dict] | None) -> list[dict]:
+    """Desenha cada cartão e o põe na linha do tempo como sobreposição.
+
+    O PNG é nomeado pelo CONTEÚDO, então refazer a edição com o mesmo texto
+    reaproveita o arquivo — e o cache de trechos do render não é invalidado à
+    toa. Os cartões da rodada anterior saem antes: quem escreveu foi a IA, e
+    se ela mudou de ideia o painel velho não pode ficar.
+    """
+    from .models import Overlay
+    from .render import cartao as cartao_mod
+
+    dir_cartoes = project.dir / "cartoes"
+    plan = project.plan
+    antigos = {o.media_id for o in plan.overlays if str(o.media_id).startswith("k_")}
+    plan.overlays = [o for o in plan.overlays
+                     if not str(o.media_id).startswith("k_")]
+    for mid in antigos:
+        db.ex("DELETE FROM media WHERE id=? AND project_id=?", (mid, project.id))
+    if not pedidos:
+        return []
+
+    try:
+        lv, av = (int(x) for x in project.info.display_size)
+    except Exception:  # noqa: BLE001
+        return []
+
+    feitos: list[dict] = []
+    for c in pedidos:
+        nome = cartao_mod.nome_do_cartao(c["titulo"], c.get("topicos"),
+                                         c.get("numero", ""), lv, av)
+        destino = dir_cartoes / nome
+        try:
+            if not destino.exists():
+                cartao_mod.desenhar(
+                    destino, lv, av,
+                    titulo=c["titulo"], topicos=c.get("topicos"),
+                    numero=c.get("numero", ""), fonte=plan.style.font)
+            info = probe(destino).to_dict()
+        except Exception as exc:  # noqa: BLE001 — um cartão ruim não derruba o vídeo
+            feitos.append({**c, "erro": str(exc)})
+            continue
+        mid = f"k_{uuid.uuid4().hex[:8]}"
+        db.ex("INSERT INTO media(id, project_id, path, kind, name, info_json, "
+              "descricao, created_at) VALUES (?,?,?,?,?,?,?,?)",
+              (mid, project.id, str(destino), "image",
+               f"cartão: {c['titulo'][:40]}", db.jdumps(info),
+               "cartão escrito pela IA e desenhado pelo programa", time.time()))
+        cy, escala = posicao_do_cartao(plan, lv, av, int(info.get("height") or 0))
+        plan.overlays.append(Overlay(
+            media_id=mid, out_start=c["out_start"], out_end=c["out_end"],
+            x=0.5, y=cy, scale=escala, opacity=1.0,
+            anim_in="fade", anim_out="fade",
+            dur_in=CARTAO_FADE, dur_out=CARTAO_FADE))
+        feitos.append({**c, "media_id": mid, "arquivo": destino.name})
+    return feitos
 
 
 def recalcular_zoom(project: Project) -> dict:
