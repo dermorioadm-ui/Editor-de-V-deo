@@ -548,11 +548,52 @@ def workers_de_encode() -> int:
     Metade dos núcleos (teto de 4) porque cada ffmpeg já usa várias threads:
     passar disso só troca throughput por troca de contexto.
     """
+    return max(1, min(4, nucleos_fisicos() // 2))
+
+
+def nucleos_fisicos() -> int:
+    """Núcleos FÍSICOS, não threads lógicas.
+
+    os.cpu_count() devolve threads: num i7-1165G7 (4 núcleos, 8 threads) ele
+    diz 8, e "metade" virava 4 encodes ao mesmo tempo — o DOBRO do ponto
+    ótimo medido (2 workers venceram 4 numa máquina de 4 núcleos). Quatro
+    x264 num chip de notebook de 28 W é throttle térmico garantido: o print
+    do usuário mostra o processador a 1,69 GHz. Sem psutil de propósito: é
+    uma dependência a mais para instalar no Windows de quem só quer editar.
+    """
+    import platform
+    import re
+    import subprocess
+
     try:
-        n = os.cpu_count() or 2
-    except Exception:  # noqa: BLE001
-        n = 2
-    return max(1, min(4, n // 2))
+        sistema = platform.system()
+        if sistema == "Linux":
+            txt = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+            pares = set(re.findall(
+                r"physical id\s*:\s*(\d+)\s*\n(?:.*\n)*?core id\s*:\s*(\d+)", txt))
+            if pares:
+                return len(pares)
+            m = re.search(r"cpu cores\s*:\s*(\d+)", txt)
+            if m:
+                return int(m.group(1))
+        elif sistema == "Windows":
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Processor | Measure-Object "
+                 "-Property NumberOfCores -Sum).Sum"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            ).stdout.strip()
+            if out.isdigit():
+                return int(out)
+        elif sistema == "Darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.physicalcpu"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+            if out.isdigit():
+                return int(out)
+    except Exception:  # noqa: BLE001 — sem informação, assume SMT 2x
+        pass
+    return max(1, (os.cpu_count() or 2) // 2)
 
 
 def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
