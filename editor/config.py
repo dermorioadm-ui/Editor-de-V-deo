@@ -240,6 +240,15 @@ class ExportParams:
     # derivados saem do MESMO corte, com recorte concêntrico no rosto e a
     # legenda reescalada para o quadro novo.
     aspect: str = "fonte"            # fonte | 1:1 | 16:9 | 9:16
+    # Quadros por segundo da SAÍDA. 0 = os da gravação.
+    #
+    # Medido num 1920x1080 a 60 fps: a exportação inteira custa 2,45x o tempo
+    # real, e o preset do x264 quase não muda isso (medium -> faster economiza
+    # só 10%) — o gargalo é decodificar e filtrar 60 quadros por segundo, não
+    # comprimi-los. Baixar a saída para 30 fps corta 34% do trabalho INTEIRO,
+    # e num vídeo de alguém falando para a câmera não há o que se perca em
+    # 30 fps: é o padrão de anúncio no Facebook, Instagram e YouTube.
+    fps: float = 0.0
     # os formatos EXTRAS que a exportação automática gera junto do principal
     extras: tuple[str, ...] = ()
     chunk_blocks: int = 12           # exportação em blocos retomável

@@ -269,9 +269,39 @@ def subtitle_chain(ass_path: str | Path) -> str:
     return f"ass='{escape_filter_path(ass_path)}'"
 
 
+def curva_de_volume(curva: list[dict] | None, inicio: float) -> str:
+    """Automação de volume da trilha, em dB, relativa ao ganho escolhido.
+
+    O ducking por sidechain já abaixa a música QUANDO ALGUÉM FALA — é reflexo,
+    não intenção. Esta curva é a intenção: música mais presente no gancho e no
+    fechamento, discreta embaixo da parte densa, fora de cena em cima do preço.
+    Quem decide onde é a IA, que leu a copy; a mistura continua sendo do
+    programa.
+
+    Os tempos vêm na linha do tempo de SAÍDA e o filtro roda depois do
+    ``adelay``, então descontamos onde a trilha começa.
+    """
+    faixas = [f for f in (curva or [])
+              if abs(float(f.get("db", 0.0))) > 0.01]
+    if not faixas:
+        return ""
+    partes = []
+    for f in faixas:
+        a = max(0.0, float(f["inicio"]) - inicio)
+        b = max(a, float(f["fim"]) - inicio)
+        db = float(f["db"])
+        ganho = 0.0 if db <= -40 else 10 ** (db / 20.0)
+        partes.append(f"between(t,{a:.3f},{b:.3f})*{ganho:.4f}")
+    fora = "*".join(f"(1-between(t,{max(0.0, float(f['inicio']) - inicio):.3f},"
+                    f"{max(0.0, float(f['fim']) - inicio):.3f}))" for f in faixas)
+    expr = "+".join(partes) + f"+{fora}"
+    return f"volume=volume='{expr}':eval=frame"
+
+
 def music_chain(gain_db: float, ducking: bool, duck_amount: float,
                 fade_in: float, fade_out: float, total: float,
-                out_start: float = 0.0, out_end: float | None = None) -> str:
+                out_start: float = 0.0, out_end: float | None = None,
+                curva: list[dict] | None = None) -> str:
     """Trilha com ducking por sidechain (Parte 9.3).
 
     ``out_start``/``out_end`` posicionam a trilha na linha do tempo — é o que
@@ -293,6 +323,9 @@ def music_chain(gain_db: float, ducking: bool, duck_amount: float,
         # a mixagem quando termina antes do vídeo
         music.append(f"adelay={int(inicio * 1000)}|{int(inicio * 1000)}")
     music.append(f"apad=whole_dur={total:.3f}")
+    automacao = curva_de_volume(curva, inicio)
+    if automacao:
+        music.append(automacao)
     music_chain_str = ",".join(music)
     if ducking:
         ratio = max(2.0, duck_amount / 2.0)

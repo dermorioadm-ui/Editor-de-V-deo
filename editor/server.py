@@ -472,6 +472,11 @@ def aplicar_receita(project, payload: dict) -> None:
         plan.export.extras = tuple(
             dict.fromkeys(a for a in pedidos
                           if a in PROPORCOES and a != "fonte"))
+    if isinstance(payload.get("export"), dict) and "fps" in payload["export"]:
+        try:
+            plan.export.fps = max(0.0, float(payload["export"]["fps"] or 0.0))
+        except (TypeError, ValueError):
+            pass
     escala = (payload.get("style") or {}).get("fontsize_scale")
     if escala is not None:
         plan.style.fontsize = svc.fontsize_do_formato(plan, project.info, float(escala))
@@ -1476,7 +1481,10 @@ def api_preview(pid: str, payload: dict = Body(default={})) -> dict:
     }
     return _run("previa", pid, lambda ctx: svc.export(
         svc.load(pid), ctx,
-        {"filename": "previa480.mp4", "restart": True,
+        # sem restart: apagar a pasta de trabalho aqui levava junto o cache
+        # da exportação final e o retoque seguinte reencodava o vídeo inteiro
+        {"filename": "previa480.mp4", "restart": False, "overwrite": True,
+         "output_dir": str(svc.load(pid).dir / "exports"),
          "export_override": override}))
 
 

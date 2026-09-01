@@ -117,6 +117,77 @@ def chunk_bounds(duration: float, silence: Iterable | None = None,
     return list(zip(bounds[:-1], bounds[1:]))
 
 
+# O SILÊNCIO NÃO PRECISA SER TRANSCRITO. Numa gravação de anúncio o take bruto
+# é metade pausa: ele erra, para, respira, refaz. O corte de silêncio é
+# decidido pelo ENVELOPE, não pela transcrição, então mandar o buraco para o
+# Whisper é pagar caro por nada.
+#
+# Mas NÃO se resolve fatiando em blocos pequenos. O Whisper processa em
+# janelas de 30 s: trinta blocos de 3 s custam trinta janelas, ou seja, PIOR
+# que um bloco corrido. O jeito certo é COMPACTAR — tirar o miolo de cada
+# pausa longa, colar a fala num áudio contínuo e guardar o mapa de tempo para
+# devolver cada palavra ao instante real dela.
+#
+# De cada pausa longa fica um toco de PAUSA_MANTIDA: a fronteira de frase é
+# informação para o modelo, e emendar fala em fala faria ele juntar duas
+# frases numa. O que some é só o vazio no meio.
+PULO_MIN = 0.9           # pausa menor que isto fica inteira
+FOLGA_FALA = 0.25        # respiro preservado em volta da fala
+# 0,6 s e não 0,3: abaixo disso o modelo passa a emendar duas frases numa só,
+# porque a pausa deixa de ler como fim de frase. O que se ganha encurtando
+# mais o toco é pouco; o que se perde é a segmentação.
+PAUSA_MANTIDA = 0.60     # o toco de silêncio que fica na emenda
+
+
+def compactar_fala(samples: "np.ndarray", duration: float,
+                   silence: Iterable | None = None,
+                   sr: int = 16000) -> tuple["np.ndarray", list[tuple[float, float]]]:
+    """Áudio só com a fala + o mapa (início_compacto, início_real).
+
+    Devolve o áudio compactado e uma lista de trechos; para converter um tempo
+    do compacto para o real, ache o trecho e some a diferença.
+    """
+    buracos = [r for r in (silence or [])
+               if (float(r.end) - FOLGA_FALA) - (float(r.start) + FOLGA_FALA)
+               >= PULO_MIN + PAUSA_MANTIDA]
+    if not buracos:
+        return samples, [(0.0, 0.0)]
+    pedacos: list["np.ndarray"] = []
+    mapa: list[tuple[float, float]] = []
+    silencio = np.zeros(int(PAUSA_MANTIDA * sr), dtype=np.float32)
+    cursor = 0.0          # onde estamos no áudio REAL
+    saida = 0.0           # onde estamos no áudio COMPACTO
+    for r in sorted(buracos, key=lambda x: float(x.start)):
+        fim = max(cursor, float(r.start) + FOLGA_FALA)
+        if fim - cursor > 0.02:
+            mapa.append((saida, cursor))
+            trecho = samples[int(cursor * sr):int(fim * sr)]
+            pedacos.append(trecho)
+            saida += len(trecho) / sr
+        pedacos.append(silencio)
+        saida += PAUSA_MANTIDA
+        cursor = max(cursor, float(r.end) - FOLGA_FALA)
+    if duration - cursor > 0.02:
+        mapa.append((saida, cursor))
+        pedacos.append(samples[int(cursor * sr):])
+    if not pedacos or not mapa:
+        # sobrou só silêncio (ou nada mapeável): manda o áudio como está, em
+        # vez de mandar uma colcha de tocos que o mapa não sabe desfazer
+        return samples, [(0.0, 0.0)]
+    return np.concatenate(pedacos), mapa
+
+
+def tempo_real(t: float, mapa: list[tuple[float, float]]) -> float:
+    """Converte um instante do áudio compactado para o instante real."""
+    real = t
+    for inicio_compacto, inicio_real in mapa:
+        if t + 1e-9 >= inicio_compacto:
+            real = inicio_real + (t - inicio_compacto)
+        else:
+            break
+    return real
+
+
 def transcribe(
     audio: np.ndarray | str | Path,
     duration: float,
@@ -149,7 +220,14 @@ def transcribe(
     else:
         samples = np.asarray(audio, dtype=np.float32)
 
-    blocks = chunk_bounds(duration, silence)
+    silencios = list(silence or [])
+    samples, mapa = compactar_fala(samples, duration, silencios)
+    compacta = len(samples) / 16000.0
+    if on_progress and duration > 0 and compacta < duration * 0.97:
+        on_progress(0.02, f"tirei {duration - compacta:.0f} s de silêncio antes "
+                          f"de transcrever: {compacta/60:.1f} min em vez de "
+                          f"{duration/60:.1f} min")
+    blocks = chunk_bounds(compacta, [])
     words: list[dict] = []
     segments: list[dict] = []
 
@@ -187,12 +265,23 @@ def transcribe(
         # bloco, sempre. Um timestamp alucinado além do fim do bloco é erro do
         # modelo, não sinal de tempo absoluto — é clampado, nunca muda o
         # offset (zerar o offset jogaria o bloco inteiro no começo do vídeo).
+        # relativo ao bloco -> absoluto no COMPACTO -> absoluto no vídeo REAL
         for w in local_words:
-            w["start"] = min(max(0.0, w["start"]), chunk_len) + start
-            w["end"] = min(max(0.0, w["end"]), chunk_len + 0.5) + start
+            w["start"] = tempo_real(
+                min(max(0.0, w["start"]), chunk_len) + start, mapa)
+            w["end"] = tempo_real(
+                min(max(0.0, w["end"]), chunk_len + 0.5) + start, mapa)
+            if w["end"] < w["start"]:
+                # a palavra caiu em cima de uma emenda: o fim voltou para antes
+                # do começo porque os dois lados vieram de trechos diferentes
+                w["end"] = w["start"] + 0.08
         for seg_item in local_segments:
-            seg_item["start"] = min(max(0.0, seg_item["start"]), chunk_len) + start
-            seg_item["end"] = min(max(0.0, seg_item["end"]), chunk_len + 0.5) + start
+            seg_item["start"] = tempo_real(
+                min(max(0.0, seg_item["start"]), chunk_len) + start, mapa)
+            seg_item["end"] = tempo_real(
+                min(max(0.0, seg_item["end"]), chunk_len + 0.5) + start, mapa)
+            if seg_item["end"] < seg_item["start"]:
+                seg_item["end"] = seg_item["start"] + 0.1
         words.extend(local_words)
         segments.extend(local_segments)
 

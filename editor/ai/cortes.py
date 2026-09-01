@@ -29,6 +29,10 @@ from . import gemini
 
 SECOES_VALIDAS = tuple(SECTIONS)
 
+# quanto cada nível da trilha vale em dB, RELATIVO ao volume que o usuário
+# escolheu na primeira tela. "fora" é silêncio de verdade, não quase-silêncio.
+NIVEL_MUSICA = {"alto": 3.0, "normal": 0.0, "baixo": -7.0, "fora": -60.0}
+
 MAX_PALAVRAS = 2600      # ~15 min de fala; acima disso o pedido é truncado
 MAX_REMOCAO = 0.85       # a IA nunca remove mais que isto do vídeo
 FOLGA = 0.04             # respiro em volta da palavra, antes do snap
@@ -104,6 +108,26 @@ Sobre o tipo "copy", duas regras que valem mais que sua vontade de melhorar:
 Na dúvida entre tirar e deixar: DEIXE. Errar deixando custa um clique do
 usuário; errar tirando apaga fala que não volta.
 
+=== tipo "vicio" — a muleta que não faz falta ===
+Marcadas na transcrição com [VÍCIO?] estão as palavras que costumam ser
+muleta: "então", "né", "tipo", "assim", "sabe", "na verdade", "ou seja",
+"enfim", "simplesmente". Elas NÃO são todas descartáveis, e é você quem sabe
+a diferença:
+
+- SAI: quando é enchimento e a frase fica igual sem ela. "Então, hoje eu vou
+  te mostrar" -> "Hoje eu vou te mostrar". "Isso é, tipo, muito rápido" ->
+  "Isso é muito rápido". "Você sabe, né, que isso funciona" -> "Você sabe que
+  isso funciona".
+- FICA: quando carrega sentido. "Então" ligando causa e consequência ("juntei
+  tudo, ENTÃO deu certo"). "Na verdade" corrigindo o que veio antes. "Ou seja"
+  abrindo uma explicação que vem em seguida.
+
+Leia a frase SEM a palavra. Se ela continua dizendo a mesma coisa, marque
+tipo "vicio". Se muda o sentido ou fica truncada, deixe.
+
+Uma por vez, nunca em faixa: cada muleta é um "de" e "ate" na mesma palavra
+(ou nas duas palavras de "tipo assim").
+
 === "secoes" — o RITMO do vídeo ===
 Divida o vídeo INTEIRO (as palavras que FICAM) nas etapas abaixo, em ordem,
 sem buraco e sem sobreposição. É esta divisão que decide a velocidade de cada
@@ -136,8 +160,22 @@ Seja econômico: se tudo é ênfase, nada é. Num vídeo de 2 minutos, algo entr
 3 e 8 marcações. O programa escolhe os valores exatos dentro do que a lente
 e a resolução permitem — você diz onde aperta e onde solta.
 
+=== "musica" — onde a trilha sobe e onde ela some ===
+Só preencha se o vídeo tiver trilha. O programa já abaixa a música sozinho
+quando alguém fala (isso é reflexo, não intenção). O que você decide é a
+INTENÇÃO:
+
+- "alto"   — gancho e fechamento: a música empurra.
+- "normal" — o padrão. Não precisa marcar, é o que vale onde você não falar.
+- "baixo"  — embaixo de explicação densa, número, passo a passo: a trilha não
+  pode disputar atenção com a informação.
+- "fora"   — em cima do preço, da garantia e do CTA. Silêncio de trilha faz a
+  frase pesar.
+
+Poucas faixas, largas. Três a cinco num vídeo inteiro.
+
 Responda somente o JSON do esquema. Em TODAS as listas, "de" e "ate" são
-índices de palavra INCLUSIVOS. Em "remover", "tipo" é "refeito" ou "copy" e
+índices de palavra INCLUSIVOS. Em "remover", "tipo" é "refeito", "copy" ou "vicio" e
 "motivo" tem no máximo 12 palavras e explica para o usuário, não para você."""
 
 ESQUEMA = {
@@ -150,7 +188,7 @@ ESQUEMA = {
             "properties": {
                 "de": {"type": "INTEGER"},
                 "ate": {"type": "INTEGER"},
-                "tipo": {"type": "STRING", "enum": ["refeito", "copy"]},
+                "tipo": {"type": "STRING", "enum": ["refeito", "copy", "vicio"]},
                 "motivo": {"type": "STRING"},
             },
             "required": ["de", "ate", "tipo", "motivo"],
@@ -166,6 +204,17 @@ ESQUEMA = {
             "required": ["de", "ate", "secao"],
             "propertyOrdering": ["de", "ate", "secao"],
         }},
+        "musica": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "de": {"type": "INTEGER"},
+                "ate": {"type": "INTEGER"},
+                "nivel": {"type": "STRING",
+                          "enum": ["alto", "normal", "baixo", "fora"]},
+            },
+            "required": ["de", "ate", "nivel"],
+            "propertyOrdering": ["de", "ate", "nivel"],
+        }},
         "camera": {"type": "ARRAY", "items": {
             "type": "OBJECT",
             "properties": {
@@ -178,13 +227,18 @@ ESQUEMA = {
         }},
     },
     "required": ["leitura", "remover", "secoes"],
-    "propertyOrdering": ["leitura", "remover", "secoes", "camera"],
+    "propertyOrdering": ["leitura", "remover", "secoes", "camera", "musica"],
 }
 
 
 def montar_pedido(words: list[dict], claps: list[dict],
-                  whistles: list[dict]) -> str:
-    """A transcrição numerada com os marcadores no lugar onde aconteceram."""
+                  whistles: list[dict], vicios: list[dict] | None = None) -> str:
+    """A transcrição numerada com os marcadores no lugar onde aconteceram.
+
+    ``vicios`` são os candidatos a muleta que o programa já achou por
+    dicionário. Eles vão MARCADOS, não decididos: quem sabe se "então" está
+    ligando duas ideias ou só enchendo linguiça é quem lê a frase.
+    """
     eventos: list[tuple[float, str]] = []
     for c in claps:
         if c.get("enabled", True):
@@ -197,6 +251,8 @@ def montar_pedido(words: list[dict], claps: list[dict],
                             "[APROVADO]" if dito else "[ASSOBIO]"))
     eventos.sort()
 
+    candidatos = {i for v in (vicios or [])
+                  for i in (v.get("word_ids") or [])}
     linhas: list[str] = []
     ev = 0
     fim_anterior: float | None = None
@@ -207,7 +263,9 @@ def montar_pedido(words: list[dict], claps: list[dict],
             ev += 1
         if fim_anterior is not None and inicio - fim_anterior >= 1.0:
             linhas.append(f"    [PAUSA {inicio - fim_anterior:.1f}s]")
-        linhas.append(f"{i} | {inicio:6.1f}s | {str(w.get('text', '')).strip()}")
+        marca = " [VÍCIO?]" if i in candidatos else ""
+        linhas.append(
+            f"{i} | {inicio:6.1f}s | {str(w.get('text', '')).strip()}{marca}")
         fim_anterior = float(w["end"])
     for t, rot in eventos[ev:]:
         linhas.append(f"    {rot} aos {t:.1f}s")
@@ -248,7 +306,8 @@ def _faixas_validas(resposta: dict, n: int,
         except (TypeError, ValueError):
             continue
         motivo = str(item.get("motivo", ""))[:120]
-        tipo = "copy" if str(item.get("tipo", "")).strip() == "copy" else "refeito"
+        t = str(item.get("tipo", "")).strip()
+        tipo = t if t in ("copy", "vicio") else "refeito"
         if de > ate:
             de, ate = ate, de
         if de < 0 or ate >= n:
@@ -376,6 +435,30 @@ def aplicar(words: list[dict], resposta: dict, env=None,
         texto = " ".join(str(w.get("text", "")).strip() for w in bloco)
         t0, t1 = float(bloco[0]["start"]), float(bloco[-1]["end"])
         copy = f.get("tipo") == "copy"
+        vicio = f.get("tipo") == "vicio"
+
+        if vicio:
+            # A MULETA tem a mesma trava acústica do corte de copy — a emenda
+            # precisa de respiro dos dois lados — mas nenhuma das outras. Não
+            # entra no teto de 25% (tirar "então" não é reescrever o roteiro,
+            # é limpar) e não respeita o gancho (é justamente no começo que a
+            # muleta mais atrapalha). Quem julga se a palavra faz falta é a IA;
+            # quem julga se a emenda cola é o envelope.
+            n_palavras = f["ate"] - f["de"] + 1
+            if n_palavras > 3:
+                recusadas.append({
+                    "o_que": texto[:40],
+                    "motivo": "muleta é palavra, não frase — faixa grande "
+                              "demais para tirar como vício"})
+                continue
+            va, vb = _tem_vale(env, t0), _tem_vale(env, t1)
+            if min(va, vb) < VALE_MIN:
+                recusadas.append({
+                    "o_que": texto[:40],
+                    "motivo": f"a muleta está colada na fala ({min(va, vb)*1000:.0f} ms "
+                              f"de respiro; preciso de {VALE_MIN*1000:.0f}). Tirar "
+                              f"daqui picota a frase"})
+                continue
 
         if copy:
             # 1) o gancho não se toca
@@ -412,8 +495,9 @@ def aplicar(words: list[dict], resposta: dict, env=None,
             "clap_time": None,
             "text": texto[:400],
             "reason": f["motivo"] or ("a IA achou que atrapalha" if copy
+                                      else "muleta que não faz falta" if vicio
                                       else "a IA marcou como refeito"),
-            "source": "ia_copy" if copy else "ia",
+            "source": "ia_copy" if copy else "ia_vicio" if vicio else "ia",
             "restored": False,
         })
     # O RITMO e a CÂMERA voltam em FAIXAS DE TEMPO, não em números.
@@ -430,8 +514,13 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                               "secao", SECOES_VALIDAS)
     camera = _faixas_de_tempo(resposta.get("camera"), n, words,
                               "enfase", ("fechado", "aberto"))
+    musica = [{"inicio": f["inicio"], "fim": f["fim"],
+               "nivel": f["nivel"], "db": NIVEL_MUSICA[f["nivel"]]}
+              for f in _faixas_de_tempo(resposta.get("musica"), n, words,
+                                        "nivel", tuple(NIVEL_MUSICA))
+              if NIVEL_MUSICA[f["nivel"]] != 0.0]
     return {"takes": takes, "recusados": recusadas,
-            "secoes": secoes, "camera": camera,
+            "secoes": secoes, "camera": camera, "musica": musica,
             # O RELATÓRIO. Sem ele o usuário não tem como saber se a IA botou
             # a mão no vídeo — e não saber é o mesmo que ela não ter botado.
             # Tudo isto já existia calculado e morria dentro da função.
@@ -439,11 +528,13 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                 "palavras": n,
                 "refeito": sum(1 for t in takes if t["source"] == "ia"),
                 "copy": sum(1 for t in takes if t["source"] == "ia_copy"),
+                "vicio": sum(1 for t in takes if t["source"] == "ia_vicio"),
                 "palavras_fora": sum(f["ate"] - f["de"] + 1 for f in faixas),
                 "propostos": len(faixas),
                 "recusados": len(recusadas),
                 "secoes": len(secoes),
                 "camera": len(camera),
+                "musica": len(musica),
                 "fechado": sum(1 for c in camera if c.get("enfase") == "fechado"),
                 "aberto": sum(1 for c in camera if c.get("enfase") == "aberto"),
                 "teto_copy": MAX_COPY,
@@ -453,14 +544,15 @@ def aplicar(words: list[dict], resposta: dict, env=None,
 
 
 def decidir(chave: str, modelo: str, words: list[dict], claps: list[dict],
-            whistles: list[dict], env=None) -> dict:
+            whistles: list[dict], env=None,
+            vicios: list[dict] | None = None) -> dict:
     """Uma chamada. Transcrição vai, faixas voltam, travas aplicam."""
     if not words:
         raise gemini.ErroDaIA("sem transcrição não há o que decidir")
     escolhido = gemini.escolher_modelo(chave, modelo)
     resposta = gemini.gerar_json(
         chave, escolhido["id"], INSTRUCAO,
-        montar_pedido(words, claps, whistles),
+        montar_pedido(words, claps, whistles, vicios),
         ESQUEMA, temperatura=0.1,
         maximo=min(escolhido.get("saida") or 8192, 8192))
     saida = aplicar(words, resposta, env=env,

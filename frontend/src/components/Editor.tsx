@@ -122,6 +122,17 @@ export default function Editor() {
     }
   }, [jobs, project?.id])
 
+  // A CÓPIA LEVE DA FONTE é feita no PRIMEIRO retoque, não no clique único.
+  // Ela só serve enquanto a prévia da edição está sendo refeita — antes do
+  // primeiro retoque isso nunca acontece, então gerá-la lá atrás era um passe
+  // inteiro sobre a fonte entre o usuário e o vídeo dele.
+  useEffect(() => {
+    if (!previaVelha || !project || proxyUrl) return
+    api.proxyStatus(project.id).then((st) => {
+      if (!st.ok && st.precisa) api.buildProxy(project.id).catch(() => {})
+    }).catch(() => {})
+  }, [previaVelha, project?.id, proxyUrl])
+
   // Editou? A prévia renderizada ficou velha. Ela se refaz sozinha, depois de
   // uns segundos parado — refazer a cada clique seria uma fila de renders.
   useEffect(() => {
@@ -483,6 +494,8 @@ export default function Editor() {
             <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
                             border-emerald-900/50 bg-emerald-950/25">
               <span className="text-emerald-300 font-medium">✓ Pronto para exportar</span>
+              {/* TUDO O QUE FOI APLICADO, numa linha só. Ele pediu para ver
+                  o que o programa fez sem ter que abrir aba por aba. */}
               <span className="text-slate-400">
                 {timecode(view.duration)} de {timecode(view.source_duration)}{' '}
                 ({econ}% mais curto) · {view.blocks.length} blocos ·{' '}
@@ -490,11 +503,30 @@ export default function Editor() {
                 {auto > 0 && ` · ${auto} trecho(s) ruim(ns) fora`}
                 {zoom > 0 && ` · zoom em ${zoom}`}
                 {fixed > 0 && ` · ${fixed} borda(s) acertadas`}
+                {project.plan?.look && project.plan.look !== 'nenhum'
+                  && ` · filtro ${project.plan.look}`}
+                {(project.plan?.speed?.global_multiplier ?? 1) > 1.001
+                  && ` · +${Math.round(
+                    (project.plan.speed.global_multiplier - 1) * 100)}% de ritmo`}
+                {project.plan?.music?.enabled && ` · trilha ${
+                  project.plan.music.curva?.length
+                    ? `com ${project.plan.music.curva.length} mudança(s) de volume`
+                    : 'de fundo'}`}
+                {(project.plan?.export?.fps ?? 0) > 0
+                  && ` · ${project.plan.export.fps} fps`}
+                {project.plan?.export?.extras?.length > 0
+                  && ` · também em ${project.plan.export.extras.join(' e ')}`}
               </span>
               {/* O arquivo se entrega sozinho: gera por baixo quando o editor
                   abre e se refaz sozinho quando você para de retocar. O
                   botão só some enquanto está gerando. */}
-              {exportando ? (
+              {previewBusy ? (
+                <span className="ml-auto text-slate-400 flex items-center gap-1.5">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full
+                                   bg-sky-400 animate-pulse" />
+                  refazendo a prévia com o seu retoque…
+                </span>
+              ) : exportando ? (
                 <span className="ml-auto text-slate-400 flex items-center gap-1.5">
                   <span className="inline-block h-1.5 w-1.5 rounded-full
                                    bg-emerald-400 animate-pulse" />

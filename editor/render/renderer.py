@@ -190,6 +190,18 @@ def target_size(main: MediaInfo, export: ExportParams) -> tuple[int, int]:
     return w - (w % 2), h - (h % 2)
 
 
+def fps_de_saida(main: MediaInfo, export: ExportParams) -> float:
+    """Quadros por segundo da saída — nunca ACIMA dos da gravação.
+
+    Inventar quadro que não foi filmado não melhora nada e custa o dobro.
+    """
+    fonte = float(main.fps or 30.0)
+    pedido = float(getattr(export, "fps", 0.0) or 0.0)
+    if pedido <= 0:
+        return fonte
+    return min(pedido, fonte)
+
+
 def regua_da_legenda(main: MediaInfo, export: ExportParams,
                      style) -> tuple[int, int, object]:
     """PlayRes e estilo da legenda para ESTE formato de saída.
@@ -213,23 +225,25 @@ def regua_da_legenda(main: MediaInfo, export: ExportParams,
     prop_saida = tw / max(th, 1e-9)
     if abs(prop_fonte - prop_saida) <= 0.01:
         return w, h, style
-    k = th / max(h, 1)
-    # A MARGEM não é só proporção. No vertical ela é alta de propósito: 21% do
-    # quadro tira a legenda de cima da barra do Instagram. Mantida na
-    # proporção, num 16:9 de 720 ela vira 155 px e a legenda sobe para o
-    # queixo — o recorte horizontal já é só a cabeça, não sobra o espaço que
-    # existia embaixo do corpo. No formato derivado a legenda desce para o
-    # rodapé: no máximo 12% do quadro, que é onde legenda de YouTube e de
-    # feed mora.
-    margem = min(style.margin_v * k, th * 0.12)
+    # O formato derivado usa O PADRÃO DAQUELE FORMATO, o mesmo que a criação
+    # do projeto usa para o formato da fonte — não uma regra de três da altura.
+    # A escolha do usuário (menor/maior) viaja como PROPORÇÃO: se ele pediu
+    # 1,2x do padrão no vertical, o quadrado e o horizontal também saem 1,2x
+    # do padrão deles.
+    from ..projects import padrao_de_legenda
+
+    f_fonte, _mf, _cf, _chf = padrao_de_legenda(w, h)
+    fator = (style.fontsize / f_fonte) if f_fonte > 0 else 1.0
+    fonte, margem, contorno, chars = padrao_de_legenda(tw, th)
     novo = replace(
         style,
-        fontsize=max(8, int(round(style.fontsize * k))),
+        fontsize=max(8, int(round(fonte * fator))),
         margin_v=max(0, int(round(margem))),
-        margin_l=max(0, int(round(style.margin_l * k))),
-        margin_r=max(0, int(round(style.margin_r * k))),
-        outline=round(style.outline * k, 2),
-        shadow=round(style.shadow * k, 2),
+        margin_l=max(0, int(round(tw * 0.06))),
+        margin_r=max(0, int(round(tw * 0.06))),
+        outline=round(max(1.0, contorno), 2),
+        shadow=round(max(0.0, contorno * 0.25), 2),
+        max_chars_per_line=chars,
     )
     return tw, th, novo
 
@@ -344,7 +358,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # PlayRes fixo, o libass escala tudo junto e dá 47,5% nas três. (Medido
     # com o filtro ass do próprio ffmpeg, texto "ISSO MUDA TUDO".)
     play_w, play_h, style_saida = regua_da_legenda(main, plan.export, plan.style)
-    fps = main.fps or 30.0
+    fps = fps_de_saida(main, plan.export)
     inputs: list[str] = []
     pre: list[str] = []
 
@@ -527,6 +541,7 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "export": plan.export.__dict__,
         "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
         "hw": hw, "size": target_size(main, plan.export),
+        "fps": fps_de_saida(main, plan.export),
     })
     return key, seg_cues, seg_blurs, seg_overlays
 
@@ -756,7 +771,8 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               float(music.get("fade_in", 1.0)),
                               float(music.get("fade_out", 2.0)), duration,
                               float(music.get("out_start", 0.0) or 0.0),
-                              music.get("out_end"))
+                              music.get("out_end"),
+                              music.get("curva"))
         run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
              "-stream_loop", "-1", "-i", str(mpath),
              "-filter_complex", graph, "-map", "[aout]",

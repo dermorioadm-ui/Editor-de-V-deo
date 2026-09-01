@@ -297,6 +297,8 @@ def main() -> int:
     testar_take_nao_atravessa_assobio()
     testar_ia_decide_cortes()
     testar_comandos_falados()
+    testar_legenda_no_padrao_do_formato()
+    testar_silencio_nao_vai_para_o_whisper()
     testar_relatorio_da_ia_nao_e_incognita()
     testar_formatos_derivados()
     testar_ia_decide_ritmo_e_camera()
@@ -2062,6 +2064,123 @@ def testar_controles_antes_de_gerar() -> None:
           f"{variacoes[2]:.3f})")
 
 
+def testar_legenda_no_padrao_do_formato() -> None:
+    """A legenda obedece ao padrão do FORMATO, não a uma regra de três da altura.
+
+    Escalar tudo pela altura funciona no vertical — e ele aprovou o resultado
+    lá. Num vídeo horizontal a mesma conta erra feio: a margem de 21,5%, que
+    existe para escapar da barra do Instagram, joga a legenda para o meio do
+    peito de quem fala.
+    """
+    from editor.ffmpeg_utils import MediaInfo
+    from editor.models import EditPlan
+    from editor.projects import apply_preset_to_plan, escalar_legenda
+
+    alvo = {
+        (1080, 1920): ("vertical", 0.034, 0.215, 24),
+        (1080, 1080): ("quadrado", 0.040, 0.110, 32),
+        (1920, 1080): ("horizontal", 0.046, 0.080, 42),
+    }
+    for (w, h), (nome, ff, fm, chars) in alvo.items():
+        plan = EditPlan(preset="VSL")
+        apply_preset_to_plan(plan, "VSL")
+        escalar_legenda(plan, MediaInfo(path="x", width=w, height=h,
+                                        fps=30.0, duration=1.0))
+        st = plan.style
+        check(abs(st.fontsize / h - ff) < 0.004,
+              f"{nome} {w}x{h}: fonte {st.fontsize} px = {st.fontsize/h:.1%} "
+              f"da altura (padrão {ff:.1%})")
+        check(abs(st.margin_v / h - fm) < 0.01,
+              f"{nome}: legenda a {st.margin_v/h:.0%} do rodapé (padrão {fm:.0%})")
+        check(st.max_chars_per_line == chars,
+              f"{nome}: {st.max_chars_per_line} caracteres por linha")
+        check(st.margin_l == st.margin_r == round(w * 0.06),
+              f"{nome}: nunca encosta na borda lateral ({st.margin_l} px)")
+
+    # o vertical continua sendo o que ele aprovou olhando: 3,4% da altura
+    plan = EditPlan(preset="VSL")
+    apply_preset_to_plan(plan, "VSL")
+    escalar_legenda(plan, MediaInfo(path="x", width=1080, height=1920,
+                                    fps=30.0, duration=1.0))
+    check(63 <= plan.style.fontsize <= 68,
+          f"e o vertical continua no tamanho aprovado ({plan.style.fontsize})")
+
+    # "maior" muda o TAMANHO, nunca a posição
+    grande = EditPlan(preset="VSL")
+    apply_preset_to_plan(grande, "VSL")
+    escalar_legenda(grande, MediaInfo(path="x", width=1920, height=1080,
+                                      fps=30.0, duration=1.0), 1.3)
+    normal = EditPlan(preset="VSL")
+    apply_preset_to_plan(normal, "VSL")
+    escalar_legenda(normal, MediaInfo(path="x", width=1920, height=1080,
+                                      fps=30.0, duration=1.0))
+    check(grande.style.fontsize > normal.style.fontsize
+          and grande.style.margin_v == normal.style.margin_v,
+          f"escolher 'maior' aumenta a fonte ({normal.style.fontsize} -> "
+          f"{grande.style.fontsize}) e NÃO mexe na posição")
+
+
+def testar_silencio_nao_vai_para_o_whisper() -> None:
+    """O buraco entre as tentativas não precisa ser transcrito.
+
+    Numa gravação de anúncio o take bruto é metade pausa. O corte de silêncio
+    é decidido pelo ENVELOPE, não pela transcrição, então mandar o buraco para
+    o modelo é pagar caro por nada.
+
+    O que NÃO se pode fazer é resolver isso fatiando em blocos pequenos: o
+    Whisper processa em janelas de 30 s, então trinta blocos de 3 s custam
+    trinta janelas — pior que um bloco corrido. Por isso a fala é COMPACTADA e
+    o tempo volta pelo mapa.
+    """
+    from editor.audio.envelope import compute_envelope
+    from editor.transcribe import PAUSA_MANTIDA, compactar_fala, tempo_real
+    from tests.synth import build
+
+    spans, t = [], 0.6
+    for frase in range(30):
+        for _ in range(8):
+            spans.append((round(t, 3), round(t + 0.32, 3)))
+            t += 0.38
+        t += 5.0 if frase % 3 == 2 else 2.0
+    dur = round(t + 1.0, 2)
+    audio = build(spans, dur, claps=[], noise=0.0011)
+    env = compute_envelope(audio, 16000)
+    comp, mapa = compactar_fala(audio, dur, env.all_silence_runs(0.5))
+    curto = len(comp) / 16000.0
+
+    check(curto < dur * 0.85,
+          f"o áudio que vai ao Whisper encolhe ({dur:.0f} s -> {curto:.0f} s, "
+          f"{100*(1-curto/dur):.0f}% menos)")
+    check(int(curto // 30) < int(dur // 30),
+          f"e sobram menos janelas de 30 s ({int(dur//30)+1} -> "
+          f"{int(curto//30)+1}) — é isso que o modelo cobra")
+
+    def para_compacto(real: float) -> float:
+        melhor = 0.0
+        for ic, ir in mapa:
+            if real >= ir - 1e-9:
+                melhor = ic + (real - ir)
+        return melhor
+
+    erros = [abs(tempo_real(para_compacto(a), mapa) - a) for a, _ in spans]
+    check(max(erros) < 1e-6,
+          f"e cada palavra volta ao instante REAL sem deriva "
+          f"(maior erro {max(erros)*1000:.4f} ms em {len(spans)} palavras)")
+    check(PAUSA_MANTIDA >= 0.5,
+          f"a emenda guarda um toco de pausa ({PAUSA_MANTIDA:.2f} s): sem ele "
+          f"o modelo junta duas frases numa")
+
+    # take sem pausa longa nenhuma: nada a compactar, e nada pode quebrar
+    corridas = [(round(0.5 + i * 0.38, 3), round(0.5 + i * 0.38 + 0.32, 3))
+                for i in range(40)]
+    d2 = corridas[-1][1] + 0.5
+    a2 = build(corridas, d2, claps=[], noise=0.0011)
+    e2 = compute_envelope(a2, 16000)
+    c2, m2 = compactar_fala(a2, d2, e2.all_silence_runs(0.5))
+    check(len(c2) == len(a2) and tempo_real(1.234, m2) == 1.234,
+          "fala corrida sem pausa longa passa intacta, com o mapa neutro")
+
+
 def testar_relatorio_da_ia_nao_e_incognita() -> None:
     """Depois de rodar, tem que dar para SABER o que a IA fez — e o que não fez.
 
@@ -2169,13 +2288,19 @@ def testar_formatos_derivados() -> None:
             check((pw, ph) == (1080, 1920) and st2 is st,
                   "no formato da fonte a régua da legenda não muda")
             continue
+        from editor.projects import padrao_de_legenda
+
+        f_alvo, m_alvo, _c, chars = padrao_de_legenda(tw, th)
         check((pw, ph) == (tw, th), f"o PlayRes do {a} é o do quadro derivado")
-        check(abs(st2.fontsize / th - st.fontsize / 1920) < 0.003,
-              f"a legenda do {a} ocupa a mesma fração da altura "
-              f"({st2.fontsize / th:.1%} contra {st.fontsize / 1920:.1%})")
-        check(st2.margin_v / th <= 0.121,
-              f"e desce para o rodapé no {a} ({st2.margin_v / th:.0%} do quadro), "
-              f"senão sobe para cima do rosto no recorte fechado")
+        check(abs(st2.fontsize - f_alvo) <= 1.5,
+              f"a legenda do {a} usa o padrão DAQUELE formato, não a fração do "
+              f"vertical ({st2.fontsize} px = {st2.fontsize/th:.1%} da altura)")
+        check(abs(st2.margin_v - m_alvo) <= 1.5,
+              f"e a margem é a do formato ({st2.margin_v/th:.0%} do quadro) — "
+              f"os 21% do vertical existem para escapar da barra do Instagram, "
+              f"num quadro largo eles jogam a legenda para cima do rosto")
+        check(st2.max_chars_per_line == chars,
+              f"e a linha cabe o que o formato comporta ({chars} caracteres)")
 
     # e o "scale" é uma REDUÇÃO, não uma largura fixa
     r = {a: target_size(fonte, ExportParams(aspect=a, scale="720"))

@@ -192,52 +192,80 @@ def delete_project(pid: str) -> None:
     shutil.rmtree(PROJECTS_DIR / pid, ignore_errors=True)
 
 
-# O fontsize do ASS é ABSOLUTO em pixels do vídeo: o mesmo 35 dá 272 px de
-# largura tanto num vídeo de 1080 quanto num de 576 de largura — ou seja, 25%
-# da tela num, 47% no outro. O usuário pediu "fonte 35" olhando um vídeo de
-# 1024 de altura; é essa a régua. Num vídeo de 1920 o mesmo tamanho visual é 66.
-ALTURA_DE_REFERENCIA = 1024
+# O PADRÃO DA LEGENDA DEPENDE DA PROPORÇÃO DO QUADRO, não só da altura.
+#
+# Escalar tudo pela altura era o que havia, e num vídeo VERTICAL funciona: os
+# 35 px do preset, medidos numa altura de referência de 1024, viram 66 num
+# 1080x1920 — 3,4% da altura, que é o tamanho que o usuário aprovou olhando.
+#
+# Num vídeo HORIZONTAL a mesma conta erra feio. A margem de 220 px do preset
+# é 21,5% da altura, e ela existe para escapar da barra do Instagram no
+# vertical; num 16:9 ela joga a legenda para o meio do peito de quem fala.
+# E 3,4% da altura num quadro largo fica pequeno demais para a distância de
+# leitura de uma tela de computador.
+#
+# Então cada proporção tem o seu padrão, em FRAÇÃO DO QUADRO:
+#
+#   (proporção mínima, fonte, margem de baixo, contorno, chars por linha)
+#
+# vertical    3,4% / 21,5% — o que ele aprovou, e a margem que escapa da UI
+# quadrado    4,0% / 11,0% — feed, sem barra por cima
+# horizontal  4,6% /  8,0% — a régua de legendagem de cinema e streaming
+PADROES_DE_LEGENDA = (
+    (1.50, 0.046, 0.080, 0.0044, 42),
+    (0.90, 0.040, 0.110, 0.0042, 32),
+    (0.00, 0.034, 0.215, 0.0039, 24),
+)
 
 
-def escalar_legenda(plan: EditPlan, info) -> None:
-    """Ajusta o tamanho da legenda à resolução do vídeo.
+def padrao_de_legenda(largura: int, altura: int) -> tuple[float, float, float, int]:
+    """(fonte, margem_v, contorno, chars) em pixels para ESTE quadro."""
+    prop = largura / max(altura, 1e-9)
+    for minima, f, m, c, ch in PADROES_DE_LEGENDA:
+        if prop >= minima:
+            return altura * f, altura * m, altura * c, ch
+    f, m, c, ch = PADROES_DE_LEGENDA[-1][1:]
+    return altura * f, altura * m, altura * c, ch
 
-    Sem isto, mudar de um vídeo de 1024 de altura para um de 1920 encolhe a
-    legenda pela metade sem ninguém ter mexido em nada.
+
+def escalar_legenda(plan: EditPlan, info, fator: float = 1.0) -> None:
+    """Põe a legenda no padrão do formato do vídeo.
+
+    ``fator`` é o empurrãozinho do usuário na primeira tela (menor/maior). Ele
+    multiplica só o TAMANHO — a posição continua sendo a do padrão, senão
+    escolher "maior" mandaria a legenda para cima do rosto.
     """
-    altura = 0
     try:
-        altura = int(info.display_size[1])
+        largura, altura = (int(x) for x in info.display_size)
     except Exception:  # noqa: BLE001
-        altura = 0
-    if altura < 200:
         return
-    k = altura / ALTURA_DE_REFERENCIA
+    if altura < 200 or largura < 200:
+        return
+    fonte, margem, contorno, chars = padrao_de_legenda(largura, altura)
     st = plan.style
-    st.fontsize = max(8, int(round(st.fontsize * k)))
-    st.margin_v = max(0, int(round(st.margin_v * k)))
-    st.margin_l = max(0, int(round(st.margin_l * k)))
-    st.margin_r = max(0, int(round(st.margin_r * k)))
-    st.outline = round(st.outline * k, 2)
-    st.shadow = round(st.shadow * k, 2)
+    st.fontsize = max(8, int(round(fonte * max(0.4, float(fator)))))
+    st.margin_v = max(0, int(round(margem)))
+    st.outline = round(max(1.0, contorno), 2)
+    st.shadow = round(max(0.0, contorno * 0.25), 2)
+    # margens laterais: a legenda nunca encosta na borda — 6% de cada lado
+    st.margin_l = st.margin_r = max(0, int(round(largura * 0.06)))
+    st.max_chars_per_line = chars
 
 
 def fontsize_do_formato(plan: EditPlan, info, fator: float = 1.0) -> int:
-    """O tamanho de legenda certo para ESTE vídeo, vezes o empurrão do usuário.
+    """O tamanho de legenda do padrão deste formato, vezes o empurrão do usuário.
 
-    Recalculado sempre a partir do tamanho base do preset — nunca do valor
-    que já está no plano. Assim gerar duas vezes com "maior" não vira
-    "gigante": a conta é sempre base x altura/1024 x fator.
+    Sempre recalculado do PADRÃO, nunca do valor que já está no plano: assim
+    gerar duas vezes com "maior" não vira "gigante".
     """
-    dados = presets_mod.get_preset(plan.preset) or {}
-    base = float((dados.get("style") or {}).get("fontsize", SubtitleStyle().fontsize))
-    altura = 0
     try:
-        altura = int(info.display_size[1])
+        largura, altura = (int(x) for x in info.display_size)
     except Exception:  # noqa: BLE001
-        altura = 0
-    k = (altura / ALTURA_DE_REFERENCIA) if altura >= 200 else 1.0
-    return max(8, int(round(base * k * max(0.4, float(fator)))))
+        return plan.style.fontsize
+    if altura < 200 or largura < 200:
+        return plan.style.fontsize
+    fonte, _m, _c, _ch = padrao_de_legenda(largura, altura)
+    return max(8, int(round(fonte * max(0.4, float(fator)))))
 
 
 def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
@@ -498,7 +526,8 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     try:
         saida = cortes_ia.decidir(chave, db.get_setting("gemini_model", "") or "",
                                   words, claps, whistles,
-                                  env=project.envelope())
+                                  env=project.envelope(),
+                                  vicios=project.analysis.get("fillers") or [])
     except gemini.ErroDaIA as exc:
         ctx.progress(0.96, f"IA indisponível ({exc}); a regra do programa "
                            f"decide sozinha desta vez")
@@ -659,6 +688,15 @@ def auto_edit(project: Project, ctx) -> dict:
     # resposta ruim, as listas vêm vazias e a regra do programa decide inteira.
     secoes_ia = (relatorio_ia or {}).get("secoes") or None
     camera_ia = (relatorio_ia or {}).get("camera") or None
+    # A TRILHA também obedece ao que ela leu: alto no gancho, baixo embaixo da
+    # explicação densa, fora em cima do preço. O ducking continua onde estava —
+    # ele é reflexo (abaixa quando alguém fala); isto aqui é intenção.
+    curva_musica = (relatorio_ia or {}).get("musica") or []
+    if project.plan.music:
+        if curva_musica:
+            project.plan.music["curva"] = curva_musica
+        else:
+            project.plan.music.pop("curva", None)
     result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
                              takes, extra_removed=manual_removed | repetidas,
                              markers=sorted(marcadores),
@@ -763,6 +801,7 @@ def auto_edit(project: Project, ctx) -> dict:
 
 PREVIA_ESCALA = "240"      # lado maior da prévia renderizada
 PREVIA_CRF = 32
+PREVIA_FPS = 30.0          # a prévia nunca precisa de mais que isto
 
 
 def previa_da_edicao(project: Project, ctx) -> dict:
@@ -784,14 +823,21 @@ def previa_da_edicao(project: Project, ctx) -> dict:
     """
     ctx.stage("previa", "montando a prévia que toca liso")
     return export(project, ctx, {
-        "filename": "previa-edicao.mp4", "restart": True,
+        # SEM restart: era ele que apagava a pasta de trabalho inteira a cada
+        # prévia, levando junto o cache da exportação final. O cache por hash
+        # é o que faz um retoque custar segundos em vez do vídeo inteiro.
+        "filename": "previa-edicao.mp4", "restart": False,
         # dentro do projeto, NÃO na pasta de Vídeos: a prévia é um arquivo de
         # trabalho de 240p e não pode ficar ao lado do vídeo final com cara
         # de ser ele.
         "output_dir": str(project.dir / "exports"),
+        # 30 fps SEMPRE na prévia. Ela é 240p e serve para você ver o corte, o
+        # zoom e a legenda — não há nada a perder, e num take de 60 fps isso
+        # sozinho tira um terço do tempo dela (medido: 34% do trabalho da
+        # cadeia inteira é decodificar e filtrar o dobro de quadros).
         "export_override": {"scale": PREVIA_ESCALA, "crf": PREVIA_CRF,
                             "preset": "ultrafast", "codec": "h264",
-                            "audio_bitrate": "96k"},
+                            "audio_bitrate": "96k", "fps": PREVIA_FPS},
         "overwrite": True,
     })
 
@@ -804,20 +850,21 @@ def one_click(project: Project, ctx) -> dict:
     decidido e a prévia leve gerada. Editar é retoque, não trabalho.
     """
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.42, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.42, 0.52, lambda c: auto_edit(project, c))
-    # a cópia leve da FONTE serve para arrastar a agulha e raspar a timeline
-    try:
-        p = _scoped(ctx, 0.52, 0.58, lambda c: build_proxy_job(project, c))
-    except Exception as exc:  # noqa: BLE001 — sem proxy ainda dá para editar
-        ctx.progress(0.58, f"cópia leve falhou ({exc}); usando a fonte")
-        p = {"ok": False}
+    a = _scoped(ctx, 0.0, 0.55, lambda c: analyze(project, c))
+    b = _scoped(ctx, 0.55, 0.65, lambda c: auto_edit(project, c))
+    # A CÓPIA LEVE DA FONTE saiu do caminho crítico. Ela existe para arrastar a
+    # agulha sobre a fonte, e o player só cai nela enquanto a prévia da edição
+    # está sendo refeita — ou seja, só depois do primeiro retoque. Gerá-la aqui
+    # era um passe inteiro sobre a fonte (num 1080p60 isso é minutos) entre o
+    # usuário e o vídeo dele, para um arquivo que ele talvez nunca use. Agora
+    # ela é feita quando o editor precisa, em segundo plano.
+    p = {"skipped": True, "detail": "a cópia leve é feita ao editar, não agora"}
     # a EDIÇÃO renderizada é o que ele assiste: linear, sem pulo, com zoom
     # e legenda queimados
     try:
-        v = _scoped(ctx, 0.58, 0.68, lambda c: previa_da_edicao(project, c))
+        v = _scoped(ctx, 0.65, 1.0, lambda c: previa_da_edicao(project, c))
     except Exception as exc:  # noqa: BLE001
-        ctx.progress(0.68, f"prévia da edição falhou ({exc})")
+        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
         v = {"ok": False}
     # O ARQUIVO FINAL não entra aqui — ele é disparado logo em seguida, por
     # baixo (server.api_oneclick). É a diferença entre esperar e receber: o

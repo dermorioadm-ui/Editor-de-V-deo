@@ -9,10 +9,39 @@ from ..ffmpeg_utils import MediaInfo, concat_demux, probe, write_wav
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
 from .renderer import (AUDIO_SR, RenderResult, build_audio_track, mux,
-                       plan_segments, process_audio, render_video_segments,
+                       fps_de_saida, plan_segments, process_audio,
+                       render_video_segments,
                        target_size)
 
 SYNC_TOLERANCE = 0.030      # acima disso o vídeo é reescalado por timestamp
+
+
+def _hash_audio(plan: EditPlan, timeline, clip_durations: dict,
+                sources: dict) -> str:
+    """A identidade da FAIXA DE ÁUDIO. Se não muda, não se refaz.
+
+    Entra tudo que decide como o áudio soa: quais pedaços da fonte tocam, em
+    que ordem, em que velocidade e por quanto tempo; a cadeia de tratamento; e
+    a trilha. NÃO entra nada de imagem — é justamente isso que faz um retoque
+    visual não pagar o loudnorm do vídeo inteiro.
+    """
+    import hashlib
+    import json
+
+    blocos = [{
+        "s": p.clip.source, "a": round(p.clip.src_start, 4),
+        "b": round(p.clip.src_end, 4), "v": round(p.clip.speed, 4),
+        "m": round(clip_durations.get(p.clip.id, 0.0), 4),
+        "k": p.clip.kind, "mudo": bool(getattr(p.clip, "muted", False)),
+    } for p in timeline]
+    payload = {
+        "blocos": blocos,
+        "audio": plan.audio.__dict__,
+        "musica": plan.music,
+        "fontes": {k: v.get("path") for k, v in sorted(sources.items())},
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True,
+                                   default=str).encode()).hexdigest()[:16]
 
 
 def export_project(
@@ -50,19 +79,34 @@ def export_project(
             on_progress(lo + (hi - lo) * max(0.0, min(1.0, frac)), msg)
 
     # 1) linha do tempo teórica e legendas de partida
-    timeline = Timeline(plan.active_clips, main.fps)
+    # A grade da linha do tempo é a da SAÍDA, não a da gravação: exportando um
+    # 60 fps a 30, quantizar em 60 deixaria metade das bordas entre dois
+    # quadros de saída, e a sobra de cada bloco viraria deriva somada no
+    # concat.
+    fps_saida = fps_de_saida(main, plan.export)
+    timeline = Timeline(plan.active_clips, fps_saida)
     cues = build_cues(timeline)
 
     # 2) trechos de vídeo (cutaways já aplicados) — UM encode por trecho
     report(0.0, "planejando trechos")
     segs = plan_segments(plan, timeline, sources, main)
     media_paths = {k: v["path"] for k, v in sources.items()}
-    # Cada FORMATO tem o seu próprio cache de trechos. Sem isso, exportar o
-    # 1:1 sobrescreveria as entradas do 9:16 no manifesto e o retoque seguinte
-    # reencodaria os três formatos inteiros — o cache por hash só paga se cada
-    # geometria guardar a sua.
+    # CADA SAÍDA TEM O SEU PRÓPRIO CACHE DE TRECHOS.
+    #
+    # Isto era um buraco caro e invisível: a prévia de 240p e a exportação
+    # final gravavam no MESMO `work/segments`, com o manifesto indexado pelo
+    # número do trecho. As chaves de conteúdo diferem (uma é 240p, a outra é a
+    # resolução da fonte), então cada uma despejava a entrada da outra — e a
+    # prévia ainda vinha com `restart`, que apagava a pasta inteira. Resultado
+    # prático: TODA edição refazia o vídeo inteiro duas vezes, uma em 240p e
+    # outra em tamanho real. Num vídeo de 9 minutos isso é a máquina travada
+    # sem parar, que é exatamente o que o usuário estava sentindo.
+    #
+    # A geometria e a escala entram no nome da pasta, então prévia, final e
+    # cada formato derivado guardam o seu e nenhum atrapalha o outro.
     aspecto = str(getattr(plan.export, "aspect", "fonte") or "fonte")
-    sub = "segments" if aspecto == "fonte" else f"segments-{aspecto.replace(':', 'x')}"
+    escala = str(getattr(plan.export, "scale", "source") or "source")
+    sub = f"segments-{aspecto.replace(':', 'x')}-{escala}"
     segs = render_video_segments(
         segs, plan, main, cues, work / sub, media_paths, hw,
         on_progress=lambda f, m: report(f, m, 0.02, 0.62), cancel=cancel)
@@ -82,20 +126,35 @@ def export_project(
             placed.clip.measured_duration = clip_durations[placed.clip.id]
 
     # 5) legendas refeitas sobre a linha do tempo REAL
-    measured_timeline = Timeline(plan.active_clips, main.fps)
+    measured_timeline = Timeline(plan.active_clips, fps_saida)
     cues_final = build_cues(measured_timeline)
 
     # 6) áudio em PCM, cadeia aplicada uma vez, AAC só no mux
+    #
+    # COM CACHE. O loudnorm são duas passadas sobre a faixa inteira, e ela não
+    # muda quando o retoque foi visual — trocar o texto de uma legenda, mexer
+    # no zoom, no filtro. Sem cache, cada retoque pagava o áudio do vídeo
+    # inteiro de novo, e era o que sobrava de "exportar tudo a cada ação"
+    # depois que os trechos de vídeo já vinham do cache.
     report(0.0, "montando o áudio", 0.66, 0.80)
-    track = build_audio_track(plan, measured_timeline, sources, clip_durations,
-                              on_progress=lambda f, m: report(f, m, 0.66, 0.78),
-                              warnings=pre_warnings)
-    raw_wav = work / "audio_raw.wav"
-    write_wav(raw_wav, track, AUDIO_SR)
+    chave_audio = _hash_audio(plan, measured_timeline, clip_durations, sources)
     processed = work / "audio.wav"
-    report(0.0, "processando o áudio (highpass → compressor → loudnorm)", 0.80, 0.86)
-    process_audio(raw_wav, processed, plan.audio, plan, sources,
-                  duration=len(track) / AUDIO_SR)
+    marca = work / "audio.key"
+    reusa = (processed.exists() and marca.exists()
+             and marca.read_text(encoding="utf-8").strip() == chave_audio)
+    if reusa:
+        report(1.0, "o áudio não mudou — reaproveitado", 0.66, 0.86)
+    else:
+        track = build_audio_track(plan, measured_timeline, sources, clip_durations,
+                                  on_progress=lambda f, m: report(f, m, 0.66, 0.78),
+                                  warnings=pre_warnings)
+        raw_wav = work / "audio_raw.wav"
+        write_wav(raw_wav, track, AUDIO_SR)
+        report(0.0, "processando o áudio (highpass → compressor → loudnorm)",
+               0.80, 0.86)
+        process_audio(raw_wav, processed, plan.audio, plan, sources,
+                      duration=len(track) / AUDIO_SR)
+        marca.write_text(chave_audio, encoding="utf-8")
     audio_info = probe(processed)
 
     # 7) sincronia: corrige no VÍDEO por timestamp, sem reencodar (10.3)

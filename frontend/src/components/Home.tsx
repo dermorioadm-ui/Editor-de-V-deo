@@ -40,6 +40,11 @@ export default function Home() {
   // um número cru de pixels que muda de significado a cada resolução.
   const [legenda, setLegenda] = useState(1.0)
   const [resolucao, setResolucao] = useState('source')
+  // 30 fps por padrão. Medido num 1920x1080 a 60 fps: baixar a saída para 30
+  // corta 34% do trabalho de renderização inteiro, e num vídeo de alguém
+  // falando para a câmera 60 fps não acrescenta nada — é o padrão de anúncio
+  // no Facebook, Instagram e YouTube.
+  const [fpsSaida, setFpsSaida] = useState(30)
   const [iaCortes, setIaCortes] = useState(true)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
@@ -133,7 +138,7 @@ export default function Home() {
       speed: { global_multiplier: velocidade },
       zoom: { intensity: zoomForca },
       style: { fontsize_scale: legenda },
-      export: { scale: resolucao, extras },
+      export: { scale: resolucao, extras, fps: fpsSaida },
       look: look || 'nenhum',
     }
   }
@@ -496,6 +501,20 @@ export default function Home() {
             </div>
             <p className="text-[10px] text-slate-600 leading-tight">
               além do vertical, recortados no rosto
+            </p>
+          </div>
+
+          <div className="w-36">
+            <label className="label">Quadros/s</label>
+            <select className="field w-full py-1.5 text-xs"
+                    value={fpsSaida}
+                    onChange={(e) => setFpsSaida(+e.target.value)}>
+              <option value={30}>30 (metade do tempo)</option>
+              <option value={0}>os da gravação</option>
+              <option value={24}>24 (cinema)</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              30 é o padrão de anúncio
             </p>
           </div>
 
