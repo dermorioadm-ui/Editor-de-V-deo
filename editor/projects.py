@@ -897,7 +897,18 @@ def exportar_final(project: Project, ctx) -> dict:
     # comprimido seria esticar 1,78x em cima de artefato de compressão. O
     # recorte é concêntrico no mesmo rosto e a legenda é reescalada para o
     # quadro novo, então os três saem com a legenda no mesmo lugar relativo.
-    extras = [e for e in (project.plan.export.extras or ()) if e and e != "fonte"]
+    # um extra com a MESMA proporção da gravação é o próprio vídeo principal
+    # com outro nome: sai da lista antes de custar um encode inteiro
+    from .render.renderer import PROPORCOES
+
+    try:
+        lw, lh = (int(x) for x in project.info.display_size)
+        prop_fonte = lw / max(lh, 1e-9)
+    except Exception:  # noqa: BLE001
+        prop_fonte = 0.0
+    extras = [e for e in (project.plan.export.extras or ())
+              if e and e != "fonte"
+              and abs(PROPORCOES.get(e, 0.0) - prop_fonte) > 0.01]
     saidas = [{"aspecto": "fonte", **principal}]
     base = _nome_de_arquivo(project.name)
     for i, aspecto in enumerate(extras):

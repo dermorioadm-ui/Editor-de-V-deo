@@ -28,7 +28,7 @@ import numpy as np
 
 from ..config import FFMPEG, AudioParams, ExportParams
 from ..edit.timeline import Timeline
-from ..edit.zoom import zoom_chain
+from ..edit.zoom import zoom_chain, zoom_maximo
 from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
                             run_with_progress, write_wav)
 from ..models import EditPlan
@@ -146,7 +146,47 @@ PROPORCOES = {
     "16:9": 16 / 9,
     "9:16": 9 / 16,
 }
-ALTURA_DERIVADA = {"1:1": 1080, "16:9": 720, "9:16": 1920}
+# As alturas que os players esperam, da maior para a menor, por proporção.
+ESCADA_DERIVADA = {
+    "1:1": (1080, 720),
+    "16:9": (1080, 720, 540),
+    "9:16": (1920, 1280, 960),
+}
+# Quanto se aceita esticar. O teto de zoom do programa já trata 1,15x como o
+# limite do aceitável; aqui vale um pouco mais porque a alternativa é entregar
+# o formato numa resolução que nenhum player espera.
+ESTICADA_MAXIMA = 1.25
+
+
+def janela_derivada(w: int, h: int, proporcao: float) -> tuple[int, int]:
+    """A MAIOR janela da fonte com aquela proporção. É o que existe de pixel."""
+    if proporcao <= 0:
+        return w, h
+    if proporcao > w / max(h, 1e-9):
+        return w, int(round(w / proporcao))
+    return int(round(h * proporcao)), h
+
+
+def tamanho_derivado(w: int, h: int, aspecto: str) -> tuple[int, int]:
+    """O tamanho de saída para este formato, escolhido pelo que a FONTE dá.
+
+    Uma tabela fixa de altura não serve: de um 1080x1920 o 16:9 real é uma
+    janela de 1080x608, e mandar isso para 1080p seria esticar 1,78x — o
+    anúncio sai mole. De um 1920x1080 o vertical real é 607x1080, e o mesmo
+    problema aparece espelhado. Então a altura é escolhida pela janela que
+    existe: a maior da escada cuja esticada caiba em ESTICADA_MAXIMA.
+    """
+    prop = PROPORCOES.get(aspecto, 0.0)
+    jw, _jh = janela_derivada(w, h, prop)
+    escada = ESCADA_DERIVADA.get(aspecto) or (h,)
+    escolhida = escada[-1]
+    for altura in escada:
+        largura = altura * prop
+        if jw > 0 and largura / jw <= ESTICADA_MAXIMA:
+            escolhida = altura
+            break
+    largura = int(round(escolhida * prop))
+    return largura - (largura % 2), int(escolhida) - (int(escolhida) % 2)
 
 
 def aspecto_do_export(export: ExportParams) -> str:
@@ -176,9 +216,7 @@ def target_size(main: MediaInfo, export: ExportParams) -> tuple[int, int]:
     prop_fonte = w / max(h, 1e-9)
     derivado = aspecto != "fonte" and abs(PROPORCOES[aspecto] - prop_fonte) > 0.01
     if derivado:
-        alvo_h = ALTURA_DERIVADA.get(aspecto, h)
-        alvo_w = int(round(alvo_h * PROPORCOES[aspecto]))
-        w, h = alvo_w, alvo_h
+        w, h = tamanho_derivado(w, h, aspecto)
     # "Resolução" é uma REDUÇÃO, não uma largura fixa. Tratá-la como largura
     # dava 720x404 no 16:9 quando o usuário pediu "720 de largura" olhando o
     # vertical — um tamanho que nenhum player espera. Como redução, 720 num
@@ -422,7 +460,17 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         # todos os pixels que existem; recortar depois do fit jogaria metade
         # fora antes de esticar de volta.
         sw, sh = (info.display_size if info else (width, height))
-        zc = zoom_chain(seg.zoom, sw, sh, width, height,
+        # NUM FORMATO DERIVADO O ZOOM JÁ FOI GASTO. O reenquadramento sozinho
+        # já é uma esticada (de um 1920x1080 o vertical real é 608x1080, que
+        # vai para 720 de largura), e a escada de zoom foi calculada para o
+        # formato PRINCIPAL, onde havia pixel de sobra. Empilhar as duas
+        # esticadas amolece a imagem. Aqui o zoom é reduzido ao que a janela
+        # daquele formato ainda aguenta — muitas vezes nada.
+        z = float(seg.zoom or 1.0)
+        jw, _jh = janela_derivada(sw, sh, width / max(height, 1e-9))
+        if jw > 0 and jw < sw - 1:
+            z = min(z, zoom_maximo(jw, width, plan.zoom.max_zoom))
+        zc = zoom_chain(z, sw, sh, width, height,
                         plan.zoom.anchor_x, plan.zoom.anchor_y, plan.zoom.unsharp)
         if zc:
             chain.append(zc)

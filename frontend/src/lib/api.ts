@@ -217,6 +217,9 @@ export const api = {
     post<any>(`/api/projects/${id}/audio/preview`, payload),
   // a exportação AUTOMÁTICA: mesmo arquivo, sobrescrevendo, com cache
   exportFinal: (id: string) => post<Job>(`/api/projects/${id}/export-final`, {}),
+  // o que é o arquivo, ANTES de criar o projeto — a primeira tela precisa da
+  // proporção para oferecer os formatos extras que fazem sentido
+  probe: (path: string) => post<any>('/api/probe', { path }),
   safeZone: (id: string) => req<any>(`/api/projects/${id}/safe-zone`),
   bitrateEstimate: (id: string) => req<any>(`/api/projects/${id}/bitrate-estimate`),
 }

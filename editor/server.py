@@ -509,6 +509,40 @@ def api_apply_preset(pid: str, payload: dict = Body(...)) -> dict:
     return {"ok": True, "plan": project.plan.to_dict()}
 
 
+@app.post("/api/probe")
+def api_probe(payload: dict = Body(...)) -> dict:
+    """O que é este arquivo, ANTES de criar o projeto.
+
+    A primeira tela precisa saber a proporção da gravação para oferecer os
+    formatos EXTRAS que fazem sentido — não adianta oferecer "horizontal" para
+    quem acabou de soltar um vídeo horizontal.
+    """
+    from .ffmpeg_utils import probe
+    from .render.renderer import PROPORCOES, janela_derivada
+
+    caminho = Path(str(payload.get("path") or "")).expanduser()
+    if not caminho.exists() or not caminho.is_file():
+        raise HTTPException(404, f"arquivo não encontrado: {caminho}")
+    try:
+        info = probe(caminho)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"não consegui ler o arquivo: {exc}") from exc
+    w, h = info.display_size
+    prop = w / max(h, 1e-9)
+    formato = ("16:9" if prop > 1.2 else "9:16" if prop < 0.85 else "1:1")
+    # o que dá para tirar deste material, e o quanto cada um estica
+    derivados = {}
+    for a, r in PROPORCOES.items():
+        if a == "fonte" or a == formato:
+            continue
+        jw, jh = janela_derivada(w, h, r)
+        derivados[a] = {"janela": [jw, jh]}
+    return {"width": w, "height": h, "fps": info.fps,
+            "duration": info.duration, "formato": formato,
+            "vertical": prop < 0.85, "derivados": derivados,
+            "bitrate": info.v_bitrate or info.bitrate}
+
+
 @app.get("/api/looks")
 def api_looks() -> list[dict]:
     """Catálogo dos filtros de cinema."""

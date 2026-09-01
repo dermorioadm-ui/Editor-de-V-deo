@@ -49,9 +49,33 @@ export default function Home() {
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
   const [extras, setExtras] = useState<string[]>([])
+  const [fonteInfo, setFonteInfo] = useState<any>(null)   // o que é o arquivo
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
+
+  // Descobre a proporção da gravação assim que o arquivo é carregado. Sem
+  // isso a tela oferecia "quadrado e horizontal" fixo, e quem gravava em
+  // horizontal não tinha como pedir o vertical — que é justamente o formato
+  // que ele mais usa.
+  useEffect(() => {
+    if (!path) { setFonteInfo(null); setExtras([]); return }
+    let vivo = true
+    api.probe(path).then((r) => {
+      if (!vivo) return
+      setFonteInfo(r)
+      setExtras((v) => v.filter((x) => x !== r.formato))
+    }).catch(() => { if (vivo) setFonteInfo(null) })
+    return () => { vivo = false }
+  }, [path])
+
+  const FORMATOS: Record<string, string> = {
+    '9:16': 'vertical (Reels, TikTok)',
+    '1:1': 'quadrado (feed)',
+    '16:9': 'horizontal (YouTube)',
+  }
+  const extrasPossiveis = Object.keys(FORMATOS)
+    .filter((f) => f !== (fonteInfo?.formato ?? '9:16'))
 
   const iaLiga = Boolean(ia?.tem_chave) && iaCortes
   // Tem chave mas o modelo ainda não foi escrito no servidor: gerar agora
@@ -346,6 +370,15 @@ export default function Home() {
                 <p className="text-base font-medium text-emerald-300">
                   Vídeo carregado — <b>ainda não comecei</b>
                 </p>
+                {fonteInfo && (
+                  <p className="text-xs text-slate-400 mt-1 font-mono">
+                    {fonteInfo.width}×{fonteInfo.height} ·{' '}
+                    {FORMATOS[fonteInfo.formato]} ·{' '}
+                    {Math.round(fonteInfo.fps)} fps ·{' '}
+                    {Math.floor(fonteInfo.duration / 60)}:
+                    {String(Math.round(fonteInfo.duration % 60)).padStart(2, '0')}
+                  </p>
+                )}
                 <p className="hint mt-1 max-w-xl mx-auto">
                   Confira a receita aqui embaixo (modelo da IA, filtro,
                   velocidade, zoom, legenda, formatos) e aperte
@@ -488,19 +521,21 @@ export default function Home() {
           <div className="w-44">
             <label className="label">Formatos extras</label>
             <div className="space-y-0.5 pt-0.5">
-              {[['1:1', 'quadrado (feed)'], ['16:9', 'horizontal (YouTube)']]
-                .map(([id, nome]) => (
+              {extrasPossiveis.map((id) => (
                 <label key={id} className="flex items-center gap-1.5 text-xs
                                            text-slate-300 cursor-pointer">
                   <input type="checkbox" checked={extras.includes(id)}
                          onChange={(e) => setExtras((v) => e.target.checked
                            ? [...v, id] : v.filter((x) => x !== id))} />
-                  {nome}
+                  {FORMATOS[id]}
                 </label>
               ))}
             </div>
             <p className="text-[10px] text-slate-600 leading-tight">
-              além do vertical, recortados no rosto
+              {fonteInfo
+                ? `além do ${FORMATOS[fonteInfo.formato]?.split(' ')[0]}, `
+                  + 'recortados no rosto'
+                : 'recortados no rosto, sem distorcer'}
             </p>
           </div>
 

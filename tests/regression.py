@@ -2257,6 +2257,33 @@ def testar_formatos_derivados() -> None:
 
     tamanhos = {a: target_size(fonte, ExportParams(aspect=a))
                 for a in ("fonte", "1:1", "16:9")}
+    # E O CAMINHO INVERSO: gravou em horizontal, quer o vertical.
+    from editor.render.renderer import janela_derivada, tamanho_derivado
+
+    horizontal = MediaInfo(path="x.mp4", width=1920, height=1080, fps=30.0,
+                           duration=10.0)
+    vert = target_size(horizontal, ExportParams(aspect="9:16"))
+    jw, jh = janela_derivada(1920, 1080, 9 / 16)
+    check(vert == (720, 1280),
+          f"de um horizontal sai vertical de verdade ({vert[0]}x{vert[1]})")
+    check(abs(vert[0] / vert[1] - 9 / 16) < 0.01,
+          "com a proporção 9:16 exata, sem distorcer")
+    check(vert[0] / jw <= 1.25,
+          f"e sem esticar mais que 25% (janela real {jw}x{jh}, "
+          f"estica {vert[0]/jw:.2f}x) — 1080x1920 seria 1,78x e sairia mole")
+    check(target_size(horizontal, ExportParams(aspect="16:9")) == (1920, 1080),
+          "pedir o formato que a fonte já tem devolve a fonte")
+    # o tamanho é escolhido pelo que a FONTE dá, não por tabela fixa
+    check(tamanho_derivado(3840, 2160, "9:16") == (1080, 1920),
+          f"de um 4K horizontal o vertical sobe para 1080x1920 "
+          f"({tamanho_derivado(3840, 2160, '9:16')}) — ali há pixel de sobra")
+
+    # e o zoom não se empilha em cima da esticada do reenquadramento
+    from editor.edit.zoom import zoom_maximo
+
+    check(zoom_maximo(jw, vert[0], 1.15) <= 1.001,
+          "no formato derivado o zoom já foi gasto pelo reenquadramento: "
+          f"teto {zoom_maximo(jw, vert[0], 1.15):.2f}x")
     check(tamanhos["fonte"] == (1080, 1920), "o principal continua o da fonte")
     check(tamanhos["1:1"] == (1080, 1080),
           f"o quadrado sai 1080x1080 — a maior janela que cabe, ZERO esticada "
