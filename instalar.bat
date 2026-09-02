@@ -34,13 +34,27 @@ set LIVRE=999
 for /f %%G in ('python -c "import shutil,os;print(shutil.disk_usage(os.environ.get('LOCALAPPDATA') or 'C:\\').free//(1024**3))"') do set LIVRE=%%G
 echo  [i] Espaco livre: %LIVRE% GB
 
-if %LIVRE% LSS 6 (
+REM Os 6 GB sao para uma instalacao DO ZERO (ambiente de ~3 GB + modelo de
+REM transcricao de ~1,5 GB). Quem ja tem o ambiente compartilhado esta so
+REM ATUALIZANDO: o pip confere as bibliotecas e baixa, no maximo, algumas
+REM centenas de MB. Exigir 6 GB aqui travava a atualizacao de quem tinha
+REM 4 GB livres e tudo instalado - sem motivo nenhum.
+set "VENV=%LOCALAPPDATA%\Editor de Video\venv"
+set "PY=%VENV%\Scripts\python.exe"
+set PRECISA=6
+if exist "%PY%" set PRECISA=1
+
+if %LIVRE% LSS %PRECISA% (
     echo.
-    echo  [X] Espaco insuficiente: %LIVRE% GB livres, e sao precisos uns 6 GB.
+    echo  [X] Espaco insuficiente: %LIVRE% GB livres, e sao precisos uns %PRECISA% GB.
     echo.
-    echo      Rode o limpar.bat desta pasta: ele apaga os ambientes das
-    echo      copias ANTIGAS do editor, que costumam ser o que encheu o
-    echo      disco ^(cada copia antiga guarda ~3 GB^).
+    echo      As versoes antigas do editor NAO aparecem em "Aplicativos" do
+    echo      Windows: cada uma e so uma pasta, e o que pesa e o ambiente
+    echo      Python que ficou dentro dela ^(~3 GB cada^).
+    echo.
+    echo      Rode o limpar.bat desta pasta: ele procura essas copias no
+    echo      computador inteiro, mostra o tamanho de cada uma e apaga o
+    echo      que voce autorizar.
     echo.
     pause
     exit /b 1

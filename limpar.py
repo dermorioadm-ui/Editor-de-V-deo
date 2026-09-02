@@ -3,7 +3,8 @@
 Quem baixa o ZIP a cada atualizacao acumula lixo em QUATRO lugares, e apagar
 a pasta so resolve o primeiro:
 
-  1. .venv dentro de cada copia   ~3 GB cada  (some com a pasta)
+  1. as copias antigas, com o .venv de ~3 GB dentro de cada uma
+     (procuradas no computador inteiro, nao so perto desta pasta)
   2. ambiente compartilhado orfao ~3 GB       (fica em AppData\\Local)
   3. cache do pip                 1 a 5 GB    (fica em AppData\\Local\\pip)
   4. projetos de teste            varia       (ficam em Videos\\Editor de Video)
@@ -25,7 +26,21 @@ import sys
 from pathlib import Path
 
 SOBE = 3          # quantos niveis acima da pasta atual a busca alcanca
-DESCE = 3         # e quantos niveis abaixo de cada um desses
+DESCE = 4         # e quantos niveis abaixo de cada raiz de busca
+
+# Onde as copias antigas costumam estar: cada ZIP baixado foi extraido em
+# Downloads, na Area de Trabalho, em Documentos, dentro do OneDrive ou na
+# raiz de outro disco. A busca antiga olhava so tres niveis em volta DESTA
+# pasta - quem tinha a copia velha na Area de Trabalho e a nova em Downloads
+# rodava o limpar.bat e ouvia "nenhuma copia antiga". Agora a varredura
+# cobre a pasta do usuario inteira e a raiz de cada disco.
+PASTAS_DA_CASA = ("Desktop", "Área de Trabalho", "Area de Trabalho",
+                  "Downloads", "Documents", "Documentos", "Videos", "Vídeos")
+# o que nunca guarda uma copia do editor e so faria a busca demorar
+NAO_ENTRA = {"windows", "program files", "program files (x86)", "programdata",
+             "$recycle.bin", "system volume information", "appdata",
+             "node_modules", ".git", ".cache", "recovery", "perflogs",
+             "library", "applications", "proc", "sys", "dev"}
 
 
 def e_copia_do_editor(pasta: Path) -> bool:
@@ -37,6 +52,63 @@ def e_copia_do_editor(pasta: Path) -> bool:
     return ((pasta / "requirements.txt").is_file()
             and (pasta / "editor").is_dir()
             and (pasta / "editor" / "__init__.py").is_file())
+
+
+def raizes_de_busca(aqui: Path) -> list[Path]:
+    casa = Path.home()
+    raizes = [aqui, *list(aqui.parents)[:SOBE], casa]
+    raizes += [casa / n for n in PASTAS_DA_CASA]
+    for od in sorted(casa.glob("OneDrive*")):
+        raizes.append(od)
+        raizes += [od / n for n in PASTAS_DA_CASA]
+    if os.name == "nt":
+        for letra in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            raizes.append(Path(f"{letra}:\\"))
+    unicas: list[Path] = []
+    vistas: set[Path] = set()
+    for r in raizes:
+        try:
+            if not r.is_dir():
+                continue
+            real = r.resolve()
+        except OSError:
+            continue
+        if real in vistas:
+            continue
+        vistas.add(real)
+        unicas.append(real)
+    return unicas
+
+
+def copias_do_editor(aqui: Path) -> list[Path]:
+    """Toda pasta do computador que e uma copia do editor, fora ESTA."""
+    achadas: list[Path] = []
+    vistas: set[Path] = set()
+    for raiz in raizes_de_busca(aqui):
+        for atual, dirs, _arqs in os.walk(raiz, onerror=lambda _e: None):
+            atual_p = Path(atual)
+            try:
+                fundo = len(atual_p.relative_to(raiz).parts)
+            except ValueError:
+                dirs[:] = []
+                continue
+            dirs[:] = [d for d in dirs
+                       if d.lower() not in NAO_ENTRA and not d.startswith(".")
+                       and d != "__pycache__"]
+            if fundo >= DESCE:
+                dirs[:] = []
+            if not e_copia_do_editor(atual_p):
+                continue
+            dirs[:] = []                     # dentro de uma copia nao ha outra
+            try:
+                real = atual_p.resolve()
+            except OSError:
+                continue
+            if real in vistas or real == aqui:
+                continue
+            vistas.add(real)
+            achadas.append(atual_p)
+    return achadas
 
 
 def tamanho(p: Path) -> int:
@@ -56,37 +128,8 @@ def medida(n: int) -> str:
     return f"{n / (1024 ** 2):.0f} MB"
 
 
-def rotulo_de(v: Path) -> str:
-    return " / ".join(v.parent.parts[-2:])
-
-
-def venvs_antigos(aqui: Path, compartilhado: Path) -> list[Path]:
-    achados: list[Path] = []
-    vistos: set[Path] = set()
-    for raiz in [aqui, *list(aqui.parents)[:SOBE]]:
-        for atual, dirs, _arqs in os.walk(raiz, onerror=lambda _e: None):
-            atual_p = Path(atual)
-            try:
-                if len(atual_p.relative_to(raiz).parts) >= DESCE:
-                    dirs[:] = []
-                    continue
-            except ValueError:
-                continue
-            dirs[:] = [d for d in dirs if d != ".venv"]
-            v = atual_p / ".venv"
-            if not v.is_dir():
-                continue
-            try:
-                real = v.resolve()
-            except OSError:
-                continue
-            if real in vistos or real == compartilhado:
-                continue
-            if not e_copia_do_editor(atual_p):
-                continue
-            vistos.add(real)
-            achados.append(v)
-    return achados
+def rotulo_de(pasta: Path) -> str:
+    return " / ".join(pasta.parts[-2:])
 
 
 # O app usa UM modelo por vez (editor/transcribe.py: resolve_model).
@@ -164,20 +207,47 @@ def main() -> int:
     liberado = 0
 
     # ---------------------------------------------------- 1) copias antigas
-    velhos = venvs_antigos(aqui, compartilhado)
-    if velhos:
-        print("\n  [1] AMBIENTES DE COPIAS ANTIGAS DO EDITOR\n")
-        alvos = []
-        for v in velhos:
-            t = tamanho(v)
-            atual = "   <- a copia que voce esta usando" if v.parent == aqui else ""
-            print(f"    {medida(t):>9}   {rotulo_de(v)}{atual}")
-            alvos.append((rotulo_de(v), v, t))
-        print(f"    {medida(sum(a[2] for a in alvos)):>9}   total\n")
-        if confirmar("Apagar esses ambientes?"):
-            liberado += apagar(alvos)
+    print("\n  Procurando copias antigas do editor no computador inteiro...")
+    copias = copias_do_editor(aqui)
+    proprio = aqui / ".venv"
+    tem_proprio = proprio.is_dir() and proprio.resolve() != compartilhado
+    if copias or tem_proprio:
+        print("\n  [1] COPIAS ANTIGAS DO EDITOR\n")
+        print("      Elas nao aparecem em \"Aplicativos\" do Windows: cada uma e")
+        print("      so uma pasta. O que pesa e o ambiente Python (.venv) que")
+        print("      ficou dentro dela.\n")
+        ambientes: list[tuple[str, Path, int]] = []
+        pastas: list[tuple[str, Path, int]] = []
+        for c in copias:
+            v = c / ".venv"
+            t_v = tamanho(v) if v.is_dir() else 0
+            t_c = tamanho(c)
+            amb = f"ambiente {medida(t_v)}" if t_v else "sem ambiente"
+            print(f"    {medida(t_c):>9}   {rotulo_de(c)}   ({amb})")
+            if t_v:
+                ambientes.append((rotulo_de(c), v, t_v))
+            pastas.append((rotulo_de(c), c, t_c))
+        if tem_proprio:
+            t_v = tamanho(proprio)
+            print(f"    {medida(t_v):>9}   {rotulo_de(aqui)} / .venv   "
+                  f"<- ambiente antigo DESTA copia (o app usa o compartilhado)")
+            ambientes.append((rotulo_de(aqui) + " / .venv", proprio, t_v))
+        print(f"    {medida(sum(a[2] for a in pastas) + (tamanho(proprio) if tem_proprio else 0)):>9}"
+              f"   total\n")
+        if ambientes and confirmar("Apagar os AMBIENTES dessas copias? (o mais pesado; seguro)"):
+            liberado += apagar(ambientes)
+            pastas = [(r, c, tamanho(c)) for r, c, _t in pastas]
+        if pastas:
+            print("\n      As pastas em si sao o programa antigo: codigo e interface.")
+            print("      Seus videos e projetos NAO moram nelas. Se voce guardou")
+            print("      algum arquivo seu dentro de uma delas, responda NAO e")
+            print("      tire antes.\n")
+            for r, _c, t in pastas:
+                print(f"    {medida(t):>9}   {r}")
+            if confirmar("Apagar essas PASTAS inteiras (as versoes antigas)?"):
+                liberado += apagar(pastas)
     else:
-        print("\n  [1] Nenhuma copia antiga com ambiente proprio. Ok.")
+        print("\n  [1] Nenhuma copia antiga do editor encontrada. Ok.")
 
     # ------------------------------------------------- 2) ambiente orfao
     if compartilhado.is_dir() and not e_copia_do_editor(aqui):

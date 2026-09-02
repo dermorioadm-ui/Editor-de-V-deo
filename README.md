@@ -333,9 +333,19 @@ Isso é conserto de um erro de projeto real. Antes o ambiente era criado
 cópias de ~3 GB paradas no disco, e a instalação seguinte morria no meio do
 download com `No space left on device`. Sem explicação nenhuma na tela.
 
-Agora o instalador **confere o espaço antes de começar** e, se faltar, manda
-você rodar o **`limpar.bat`** — que acha as cópias antigas, mostra o tamanho
-de cada uma e apaga só depois de você confirmar.
+Agora o instalador **confere o espaço antes de começar**: uns 6 GB para uma
+instalação do zero (ambiente + modelo de transcrição), mas só **1 GB quando o
+ambiente já existe** — atualizar não baixa quase nada, e exigir 6 GB aí
+travava quem tinha tudo instalado e 4 GB livres. Se faltar, ele manda você
+rodar o **`limpar.bat`**.
+
+As versões antigas **não aparecem em "Aplicativos" do Windows**: cada uma é
+só uma pasta, e o que pesa é o ambiente Python que ficou dentro dela. O
+`limpar.bat` procura essas cópias **no computador inteiro** (Área de
+Trabalho, Downloads, Documentos, OneDrive, a raiz de cada disco), mostra o
+tamanho de cada uma e pergunta em duas etapas: primeiro os ambientes (o
+peso), depois as pastas inteiras (as versões antigas em si). Nada é apagado
+sem você confirmar.
 
 **Apagar a pasta não limpa tudo.** Sobra peso em cinco lugares, e o
 `limpar.bat` acha os cinco, mostra o tamanho de cada um e pergunta **um por
@@ -343,7 +353,7 @@ um**:
 
 | | |
 |---|---|
-| `.venv` de cada cópia antiga | ~3 GB cada — esse some com a pasta |
+| cópias antigas do editor (com o `.venv` de ~3 GB dentro) | procuradas no computador inteiro, não só perto desta pasta |
 | ambiente compartilhado órfão | ~3 GB |
 | cache do pip | 1 a 5 GB |
 | projetos de teste | varia |
