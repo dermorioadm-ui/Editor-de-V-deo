@@ -58,15 +58,21 @@ $corFraco   = [System.Drawing.Color]::FromArgb(148, 163, 184)
 $corMarca   = [System.Drawing.Color]::FromArgb(56, 189, 248)
 $corOk      = [System.Drawing.Color]::FromArgb(74, 222, 128)
 $corErro    = [System.Drawing.Color]::FromArgb(248, 113, 113)
+$corSecao   = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$corTrilho  = [System.Drawing.Color]::FromArgb(28, 34, 48)
 
 function Fonte($tamanho, $estilo = [System.Drawing.FontStyle]::Regular) {
     New-Object System.Drawing.Font('Segoe UI', $tamanho, $estilo)
 }
 
 # -------------------------------------------------------------------- janela
+#
+# O desenho foi feito antes num molde em HTML do mesmo tamanho da janela, só
+# para poder OLHAR o resultado antes de escrever — WinForms não roda na
+# máquina onde este arquivo foi escrito. As medidas abaixo saíram desse molde.
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Instalar o Sharkcut'
-$form.ClientSize = New-Object System.Drawing.Size(620, 576)
+$form.ClientSize = New-Object System.Drawing.Size(620, 692)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -75,71 +81,93 @@ $form.ForeColor = $corTexto
 $form.Font = Fonte 9
 try { $form.Icon = New-Object System.Drawing.Icon($ico) } catch { }
 
-$topo = New-Object System.Windows.Forms.Panel
-$topo.SetBounds(0, 0, 620, 84)
-$topo.BackColor = $corPainel
-$form.Controls.Add($topo)
+function NovoPainel($pai, $x, $y, $largura, $altura, $cor) {
+    $p = New-Object System.Windows.Forms.Panel
+    $p.SetBounds($x, $y, $largura, $altura)
+    $p.BackColor = $cor
+    $pai.Controls.Add($p)
+    return $p
+}
 
-$logo = New-Object System.Windows.Forms.PictureBox
-$logo.SetBounds(24, 18, 48, 48)
-$logo.SizeMode = 'Zoom'
-try { $logo.Image = (New-Object System.Drawing.Icon($ico, 48, 48)).ToBitmap() } catch { }
-$topo.Controls.Add($logo)
-
-$titulo = New-Object System.Windows.Forms.Label
-$titulo.SetBounds(84, 16, 400, 30)
-$titulo.Text = 'Sharkcut'
-$titulo.Font = Fonte 16 ([System.Drawing.FontStyle]::Bold)
-$titulo.ForeColor = $corTexto
-$topo.Controls.Add($titulo)
-
-$subtitulo = New-Object System.Windows.Forms.Label
-$subtitulo.SetBounds(86, 48, 460, 20)
-$subtitulo.Text = 'editor de vídeo local — nada sai da sua máquina'
-$subtitulo.ForeColor = $corFraco
-$topo.Controls.Add($subtitulo)
-
-function NovoRotulo($x, $y, $largura, $texto, $cor) {
+# Rótulo com altura de LINHA e texto centrado na vertical. Sem o TextAlign o
+# texto cola no topo da caixa e as linhas do cartão saem desencontradas.
+function NovoRotulo($pai, $x, $y, $largura, $altura, $texto, $cor, $fonte) {
     $l = New-Object System.Windows.Forms.Label
-    $l.SetBounds($x, $y, $largura, 20)
+    $l.SetBounds($x, $y, $largura, $altura)
     $l.Text = $texto
     $l.ForeColor = $cor
-    $form.Controls.Add($l)
+    $l.TextAlign = 'MiddleLeft'
+    if ($fonte) { $l.Font = $fonte }
+    $pai.Controls.Add($l)
     return $l
 }
 
-$lblPython = NovoRotulo 26 102 560 '•  Python' $corFraco
-$lblDisco  = NovoRotulo 26 126 560 '•  Espaço em disco' $corFraco
-$lblFfmpeg = NovoRotulo 26 150 560 '•  ffmpeg' $corFraco
+# ---------------------------------------------------------------- cabeçalho
+$topo = NovoPainel $form 0 0 620 96 $corPainel
+# a linha fica ABAIXO do painel, não em cima: no WinForms quem é
+# adicionado depois vai para trás, então dentro do painel ela sumiria
+$null = NovoPainel $form 0 96 620 1 $corLinha
 
-$lblOpcoes = NovoRotulo 26 186 560 'Quando terminar:' $corTexto
+$logo = New-Object System.Windows.Forms.PictureBox
+$logo.SetBounds(28, 20, 56, 56)
+$logo.SizeMode = 'Zoom'
+$logo.BackColor = $corPainel
+# UM PNG, NÃO O .ico. O Icon.ToBitmap() do .NET não sabe ler entrada de ícone
+# comprimida em PNG — que é o formato do nosso .ico inteiro — e acaba
+# desenhando os bytes do PNG como se fossem pixels: sai um chuvisco colorido
+# no lugar da marca. Foi exatamente o que apareceu na tela do usuário.
+try { $logo.Image = [System.Drawing.Image]::FromFile((Join-Path $dir 'sharkcut-logo.png')) } catch { }
+$topo.Controls.Add($logo)
 
-function NovaCaixa($y, $texto, $marcada) {
+$null = NovoRotulo $topo 100 20 400 34 'Sharkcut' $corTexto (Fonte 18 ([System.Drawing.FontStyle]::Bold))
+$null = NovoRotulo $topo 102 54 460 20 'editor de vídeo local — nada sai da sua máquina' $corFraco $null
+
+# ------------------------------------------------------------ o que precisa
+$fonteSecao = Fonte 8
+$null = NovoRotulo $form 28 114 300 16 'O QUE PRECISA' $corSecao $fonteSecao
+$cartaoChecagem = NovoPainel $form 28 136 564 100 $corPainel
+$lblPython = NovoRotulo $cartaoChecagem 16 8 532 28 '•  Python' $corFraco $null
+$lblDisco  = NovoRotulo $cartaoChecagem 16 36 532 28 '•  espaço em disco' $corFraco $null
+$lblFfmpeg = NovoRotulo $cartaoChecagem 16 64 532 28 '•  ffmpeg' $corFraco $null
+
+# --------------------------------------------------------- quando terminar
+$null = NovoRotulo $form 28 254 300 16 'QUANDO TERMINAR' $corSecao $fonteSecao
+$cartaoOpcoes = NovoPainel $form 28 276 564 124 $corPainel
+
+function NovaCaixa($pai, $y, $texto, $marcada) {
     $c = New-Object System.Windows.Forms.CheckBox
-    $c.SetBounds(28, $y, 566, 22)
+    $c.SetBounds(16, $y, 532, 28)
     $c.Text = $texto
     $c.Checked = $marcada
     $c.ForeColor = $corTexto
+    $c.BackColor = $corPainel
     $c.FlatStyle = 'Flat'
-    $form.Controls.Add($c)
+    $c.TextAlign = 'MiddleLeft'
+    $pai.Controls.Add($c)
     return $c
 }
 
-$cxArea    = NovaCaixa 210 'Criar o ícone na Área de Trabalho' $true
-$cxMenu    = NovaCaixa 234 'Criar o ícone no Menu Iniciar' $true
-$cxBarra   = NovaCaixa 258 'Fixar na barra de tarefas (pode pedir um clique seu)' $true
-$cxAbrir   = NovaCaixa 282 'Abrir o Sharkcut assim que terminar' $true
+$cxArea  = NovaCaixa $cartaoOpcoes 8  'Criar o ícone na Área de Trabalho' $true
+$cxMenu  = NovaCaixa $cartaoOpcoes 36 'Criar o ícone no Menu Iniciar' $true
+$cxBarra = NovaCaixa $cartaoOpcoes 64 'Fixar na barra de tarefas (pode pedir um clique seu)' $true
+$cxAbrir = NovaCaixa $cartaoOpcoes 92 'Abrir o Sharkcut assim que terminar' $true
 
-$barra = New-Object System.Windows.Forms.ProgressBar
-$barra.SetBounds(26, 318, 568, 8)
-$barra.Maximum = 7
-$barra.Style = 'Continuous'
-$form.Controls.Add($barra)
+# -------------------------------------------------------------------- andamento
+# Barra desenhada à mão: um trilho e um preenchimento, dois painéis. A
+# ProgressBar do Windows vem com o verde do sistema e um brilho animado que
+# não dá para desligar — fica com cara de instalador de 2009 dentro de uma
+# janela escura.
+$trilho = NovoPainel $form 28 420 564 6 $corTrilho
+$cheio = New-Object System.Windows.Forms.Panel
+$cheio.SetBounds(0, 0, 0, 6)
+$cheio.BackColor = $corMarca
+$trilho.Controls.Add($cheio)
 
-$lblStatus = NovoRotulo 26 332 568 'Pronto para instalar.' $corMarca
+$lblStatus = NovoRotulo $form 28 434 564 22 'Pronto para instalar.' $corMarca $null
 
+$null = NovoRotulo $form 28 464 300 16 'DETALHES' $corSecao $fonteSecao
 $log = New-Object System.Windows.Forms.TextBox
-$log.SetBounds(26, 356, 568, 148)
+$log.SetBounds(28, 486, 564, 118)
 $log.Multiline = $true
 $log.ReadOnly = $true
 $log.ScrollBars = 'Vertical'
@@ -149,8 +177,9 @@ $log.Font = New-Object System.Drawing.Font('Consolas', 8)
 $log.BorderStyle = 'FixedSingle'
 $form.Controls.Add($log)
 
+# ----------------------------------------------------------------------- botões
 $btSair = New-Object System.Windows.Forms.Button
-$btSair.SetBounds(26, 520, 120, 40)
+$btSair.SetBounds(28, 624, 110, 42)
 $btSair.Text = 'Sair'
 $btSair.FlatStyle = 'Flat'
 $btSair.BackColor = $corPainel
@@ -160,7 +189,7 @@ $btSair.Add_Click({ $form.Close() })
 $form.Controls.Add($btSair)
 
 $btInstalar = New-Object System.Windows.Forms.Button
-$btInstalar.SetBounds(374, 520, 220, 40)
+$btInstalar.SetBounds(372, 624, 220, 42)
 $btInstalar.Text = 'INSTALAR'
 $btInstalar.FlatStyle = 'Flat'
 $btInstalar.BackColor = $corMarca
@@ -188,8 +217,11 @@ function Status($texto, $cor = $null) {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
+$PASSOS = 7
+
 function Passo($n) {
-    $barra.Value = [Math]::Min($n, $barra.Maximum)
+    $fracao = [Math]::Min([Math]::Max($n, 0), $PASSOS) / $PASSOS
+    $cheio.Width = [int]($trilho.Width * $fracao)
     [System.Windows.Forms.Application]::DoEvents()
 }
 
