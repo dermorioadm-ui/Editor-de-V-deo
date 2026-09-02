@@ -74,7 +74,12 @@ export default function Timeline(props: Props) {
   const total = sourceDuration || envelope?.duration || 1
   // trilhos extras (sobreposição, desfoque, trilha) ficam abaixo das legendas,
   // no eixo de SAÍDA — é onde os itens de cada camada vivem
-  const extras = (view.tracks ?? []).filter((t) => t.id !== 'V1')
+  // useMemo de propósito: `extras` está nos deps do efeito que desenha a
+  // camada estática inteira (onda + 148 blocos + hachuras + legendas). Sem
+  // memo ele nascia de novo a cada render — e cada mousemove é um render
+  // (hover) — então a timeline redesenhava tudo a cada pixel de mouse.
+  const extras = useMemo(
+    () => (view.tracks ?? []).filter((t) => t.id !== 'V1'), [view.tracks])
   const height = PAD_TOP + ROW.ruler + ROW.marks + ROW.wave + ROW.sections +
     ROW.blocks + ROW.scenes + ROW.subs + extras.length * (ROW.track + 2) + 10
 

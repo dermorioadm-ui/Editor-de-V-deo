@@ -112,28 +112,37 @@ export default function Editor() {
   // O MP4 FINAL é gerado por baixo, depois que esta tela já abriu. Este efeito
   // é o que faz o botão "baixar o vídeo" acender sozinho quando ele fica
   // pronto — e voltar a dizer "gerando…" a cada retoque.
-  const jobs = useStore((s) => s.jobs)
+  // SELETOR ESTÁVEL. Assinar `s.jobs` inteiro fazia o Editor — a árvore
+  // toda: player, timeline, texto — re-renderizar a cada tique de progresso da
+  // exportação de fundo, ~8 vezes por segundo, durante minutos. É boa parte
+  // do "pesa" no navegador enquanto se retoca. Aqui a store devolve uma
+  // STRING (id|status|progresso em passos de 5%), que só muda quando algo que
+  // a interface mostra muda; o objeto completo é lido da store na hora.
+  const chaveExport = useStore((s) => {
+    if (!project) return ''
+    let ultimo: any = null
+    for (const j of Object.values(s.jobs ?? {}) as any[]) {
+      if (j.kind !== 'exportacao' || j.project_id !== project.id) continue
+      if (!ultimo || (j.created_at ?? 0) >= (ultimo.created_at ?? 0)) ultimo = j
+    }
+    if (!ultimo) return ''
+    return `${ultimo.id}|${ultimo.status}|${Math.round((ultimo.progress ?? 0) * 20)}`
+  })
   useEffect(() => {
-    if (!project) return
-    const meus = Object.values(jobs ?? {}).filter((j: any) =>
-      j.kind === 'exportacao' && j.project_id === project.id)
-    if (!meus.length) return
-    const ultimo: any = meus.reduce((a: any, b: any) =>
-      (b.created_at ?? 0) >= (a.created_at ?? 0) ? b : a)
+    if (!chaveExport) return
+    const id = chaveExport.split('|')[0]
+    const ultimo: any = (getState().jobs ?? {})[id]
+    if (!ultimo) return
     setExportando(['fila', 'rodando'].includes(ultimo.status) ? ultimo : null)
     if (ultimo.status === 'ok' && ultimo.result?.download) {
       setBaixar(`${ultimo.result.download}?v=${ultimo.id}`)
-      // os formatos extras (quadrado, horizontal) do MESMO corte
       setOutrosFormatos((ultimo.result.formatos ?? [])
         .filter((f: any) => f.aspecto && f.aspecto !== 'fonte' && f.download)
         .map((f: any) => ({ aspecto: f.aspecto,
                             url: `${f.download}?v=${ultimo.id}` })))
-      // se o usuário editou DURANTE a exportação, o arquivo que acabou de
-      // sair já nasceu velho — e o debounce dispara outra. Contador local, não
-      // relógio: o do servidor é outra máquina.
       setBaixarVelho(edicoes.current !== edicoesNoExport.current)
     }
-  }, [jobs, project?.id])
+  }, [chaveExport])
 
   // A CÓPIA LEVE DA FONTE é feita no PRIMEIRO retoque, não no clique único.
   // Ela só serve enquanto a prévia da edição está sendo refeita — antes do
@@ -172,10 +181,20 @@ export default function Editor() {
   }, [activeJob?.id, activeJob?.status])
 
   // qualquer mudança na linha do tempo envelhece a prévia renderizada
+  const exportandoRef = useRef<any>(null)
+  useEffect(() => { exportandoRef.current = exportando }, [exportando])
   const marcarPreviaVelha = useCallback(() => {
     edicoes.current += 1
     setPreviaVelha(true)
     setBaixarVelho(true)      // editou: o arquivo exportado ficou velho
+    // A EXPORTAÇÃO EM VOO JÁ NASCEU VELHA. A fila tem um worker só: sem
+    // cancelar, a prévia do retoque esperava minutos atrás de um arquivo que
+    // ia para o lixo, e a máquina fazia dois encodes cheios em vez de um.
+    // Cancela; o debounce de 6 s dispara outra quando você parar.
+    const ex = exportandoRef.current
+    if (ex && ['fila', 'rodando'].includes(ex.status)) {
+      api.cancelJob(ex.id).catch(() => {})
+    }
   }, [])
 
   // O RETOQUE TAMBÉM SE ENTREGA SOZINHO. Uns segundos parado e o arquivo
@@ -299,6 +318,25 @@ export default function Editor() {
       toast('error', 'Não deu para apagar', String(e.message ?? e))
     }
   }, [project, timeline, refresh, snapshot])
+
+  // CORTA A FRASE QUE ESTÁ NA TELA. Palavra é pequeno demais, bloco de corte
+  // de silêncio é arbitrário; o que a pessoa ouve e quer tirar é a frase — e a
+  // frase já existe no modelo como a legenda corrente, com as palavras dela.
+  // Mesmo caminho do Texto: o servidor encaixa a borda no vale e nunca come a
+  // palavra vizinha.
+  const cutWords = useCallback(async (wordIds: number[]) => {
+    if (!project || !wordIds.length) return
+    snapshot()
+    try {
+      const res = await api.removeWords(project.id, wordIds)
+      await refresh()
+      const failed = (res.applied ?? []).filter((a: any) => !a.ok)
+      if (failed.length) toast('warn', 'Parte da frase não pôde sair', failed[0].reason)
+      else toast('ok', 'Frase removida', `${wordIds.length} palavra(s)`)
+    } catch (e: any) {
+      toast('error', 'Não deu para remover a frase', String(e.message ?? e))
+    }
+  }, [project, refresh, snapshot])
 
   const restore = useCallback(async (start: number, end: number) => {
     if (!project) return
@@ -653,6 +691,7 @@ export default function Editor() {
                   previaVelha={previaVelha}
                   proxyUrl={proxyUrl}
                   onDeleteSelection={deleteSelection}
+                  onCutCue={cutWords}
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)

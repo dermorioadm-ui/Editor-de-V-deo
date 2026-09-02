@@ -35,6 +35,9 @@ interface Props {
   // corta o trecho marcado (início/fim) — quem executa é o Editor, que já
   // sabe encaixar a borda no vale e nunca comer palavra
   onDeleteSelection?: () => void
+  // corta a FRASE que está na tela agora (a legenda corrente) — a unidade em
+  // que o usuário ouve e pensa; quem executa é o Editor
+  onCutCue?: (wordIds: number[]) => void
 }
 
 /**
@@ -45,7 +48,7 @@ interface Props {
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
                                 sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
-                                 proxyUrl, onDeleteSelection }: Props) {
+                                 proxyUrl, onDeleteSelection, onCutCue }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -334,6 +337,11 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       // I = início do trecho, O = fim — o padrão de todo editor de vídeo
       if (e.key === 'i' || e.key === 'I' || e.key === '[') { e.preventDefault(); marcar('inicio') }
       if (e.key === 'o' || e.key === 'O' || e.key === ']') { e.preventDefault(); marcar('fim') }
+      // X = tira a FRASE que está na tela agora. É o retoque de uma tecla:
+      // você ouve a frase ruim, aperta, ela sai — sem marcar nada.
+      if ((e.key === 'x' || e.key === 'X') && cueRef.current?.word_ids?.length) {
+        e.preventDefault(); onCutCue?.(cueRef.current.word_ids)
+      }
       if (e.code === 'ArrowLeft') seekOutput(playhead - (e.shiftKey ? 1 : 0.1))
       if (e.code === 'ArrowRight') seekOutput(playhead + (e.shiftKey ? 1 : 0.1))
     }
@@ -342,6 +350,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   })
 
   const cue = cueAt(playhead, cues)
+  const cueRef = useRef<SubtitleCue | null>(null)
+  cueRef.current = cue ?? null
   const block = blockAtOutput(playhead, blocks)
 
   // O JOGO DE CÂMERAS, ao vivo. O bloco atual carrega o zoom que a exportação
@@ -517,6 +527,11 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                   onClick={() => marcar('inicio')}>⟦ início</button>
           <button className="btn btn-xs" title="marcar o FIM do trecho ruim aqui (O)"
                   onClick={() => marcar('fim')}>fim ⟧</button>
+          {cue?.word_ids?.length ? (
+            <button className="btn btn-xs"
+                    title={`tira do vídeo a frase que está na tela agora (X): “${cue.text.slice(0, 60)}”`}
+                    onClick={() => onCutCue?.(cue.word_ids)}>✂ esta frase</button>
+          ) : null}
           {selection && selection.end - selection.start > 0.04 && (
             <>
               <button className="btn btn-xs btn-danger"

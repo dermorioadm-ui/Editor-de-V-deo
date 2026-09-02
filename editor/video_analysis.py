@@ -26,9 +26,17 @@ def detect_subtitle_band(path: str | Path, info: MediaInfo | None = None,
     sw = SAMPLE_WIDTH
     sh = max(2, int(round(h * sw / w)))
     sh -= sh % 2
-    step = max(1, int(info.duration * (info.fps or 30) / max(frames, 1)))
+    # SÓ OS QUADROS-CHAVE. `select` sozinho obrigava o ffmpeg a DECODIFICAR o
+    # vídeo inteiro para jogar fora 33 mil quadros e ficar com 40 — medido:
+    # 11,9 s por minuto de 1080p60, ou ~111 s de CPU cheia num vídeo de 9 min,
+    # disparados no instante em que o editor abre, em cima da exportação de
+    # fundo. Com -skip_frame nokey o decodificador pula tudo que não é
+    # quadro-chave (um a cada ~2 s): decodifica 1 em 120 e a amostra é a mesma.
+    chaves = max(1, int(info.duration / 2.0))          # GOP típico de 2 s
+    step = max(1, chaves // max(frames, 1))
     proc = subprocess.run(
-        [FFMPEG, "-v", "error", "-nostdin", "-i", str(path),
+        [FFMPEG, "-v", "error", "-nostdin", "-skip_frame", "nokey",
+         "-i", str(path),
          "-vf", f"select='not(mod(n\\,{step}))',scale={sw}:{sh}",
          "-vsync", "vfr", "-frames:v", str(frames),
          "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"],

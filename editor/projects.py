@@ -823,7 +823,17 @@ def previa_da_edicao(project: Project, ctx) -> dict:
     quebra o zoom e a legenda vêm queimados: o que ele vê é, ao pixel, o que
     vai baixar.
     """
+    from .ffmpeg_utils import em_segundo_plano
+
     ctx.stage("previa", "montando a prévia que toca liso")
+    em_segundo_plano(True)
+    try:
+        return _export_previa(project, ctx)
+    finally:
+        em_segundo_plano(False)
+
+
+def _export_previa(project: Project, ctx) -> dict:
     return export(project, ctx, {
         # SEM restart: era ele que apagava a pasta de trabalho inteira a cada
         # prévia, levando junto o cache da exportação final. O cache por hash
@@ -932,11 +942,17 @@ def exportar_final(project: Project, ctx) -> dict:
     retoque: sem sobrescrever, a pasta de Vídeos viraria "vsl_editado (7).mp4"
     e ninguém saberia qual é o bom.
     """
-    principal = export(project, ctx, {
-        "restart": False,       # o cache por trecho é o que faz o retoque ser barato
-        "overwrite": True,
-        "hw_encoder": "auto",
-    })
+    from .ffmpeg_utils import em_segundo_plano
+
+    em_segundo_plano(True)      # roda por baixo: cede a CPU para quem está retocando
+    try:
+        principal = export(project, ctx, {
+            "restart": False,   # o cache por trecho é o que faz o retoque ser barato
+            "overwrite": True,
+            "hw_encoder": "auto",
+        })
+    finally:
+        em_segundo_plano(False)
     # E OS FORMATOS EXTRAS, do MESMO corte. Cada um é uma geração de encode
     # A PARTIR DA FONTE, não do arquivo pronto: derivar o 16:9 do 9:16 já
     # comprimido seria esticar 1,78x em cima de artefato de compressão. O

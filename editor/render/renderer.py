@@ -603,17 +603,33 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # quando são queimadas, e a posição só quando algo posicional toca o trecho
     # — sem isso, editar uma legenda com burn desligado (ou qualquer edição
     # noutro ponto) invalidava trechos que não mudaram um pixel.
-    seg_cues = [(round(c["start"], 3), round(c["end"], 3), c["text"])
+    # TEMPOS RELATIVOS AO TRECHO, nunca absolutos. O trecho é renderizado a
+    # partir do seu próprio -ss, então o que a imagem dele contém depende de
+    # ONDE a legenda cai DENTRO dele — não de em que minuto do vídeo ele está.
+    # Com tempo absoluto na chave, um corte no minuto 2 deslocava todos os
+    # trechos seguintes em alguns segundos, mudava TODAS as chaves depois do
+    # corte e reencodava o vídeo inteiro dali para a frente: o retoque "barato"
+    # só era barato para trocar o texto de uma legenda, não para cortar.
+    t0 = seg.t_start
+    seg_cues = [(round(c["start"] - t0, 3), round(c["end"] - t0, 3), c["text"])
                 for c in cues
-                if c["end"] > seg.t_start - 0.5
-                and c["start"] < seg.t_start + seg.nominal + 1.0] \
+                if c["end"] > t0 - 0.5
+                and c["start"] < t0 + seg.nominal + 1.0] \
         if plan.export.burn_subtitles else []
-    seg_blurs = [b.to_dict() for b in plan.blurs
-                 if b.enabled and b.out_end > seg.t_start
-                 and b.out_start < seg.t_start + seg.nominal]
-    seg_overlays = [o.to_dict() for o in plan.overlays
-                    if o.enabled and o.out_end > seg.t_start
-                    and o.out_start < seg.t_start + seg.nominal]
+
+    def _relativo(d: dict) -> dict:
+        d = dict(d)
+        for k in ("out_start", "out_end"):
+            if k in d and d[k] is not None:
+                d[k] = round(float(d[k]) - t0, 3)
+        return d
+
+    seg_blurs = [_relativo(b.to_dict()) for b in plan.blurs
+                 if b.enabled and b.out_end > t0
+                 and b.out_start < t0 + seg.nominal]
+    seg_overlays = [_relativo(o.to_dict()) for o in plan.overlays
+                    if o.enabled and o.out_end > t0
+                    and o.out_start < t0 + seg.nominal]
     positional = bool(seg_cues or seg_blurs or seg_overlays)
     key = _hash({
         "src": seg.source_path, "start": round(seg.src_start, 4),
@@ -623,7 +639,8 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
         "unsharp": plan.zoom.unsharp,
         "look": plan.look, "look_vignette": plan.look_vignette,
-        "t_start": round(seg.t_start, 3) if positional else None,
+        # a POSIÇÃO ABSOLUTA não entra: tudo que é posicional já está relativo
+        "posicional": positional,
         "nominal": round(seg.nominal, 4),
         "style": plan.style.__dict__ if seg_cues else None,
         "aspect": aspecto_do_export(plan.export),

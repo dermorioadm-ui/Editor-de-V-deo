@@ -227,7 +227,18 @@ def transcribe(
         on_progress(0.02, f"tirei {duration - compacta:.0f} s de silêncio antes "
                           f"de transcrever: {compacta/60:.1f} min em vez de "
                           f"{duration/60:.1f} min")
-    blocks = chunk_bounds(compacta, [])
+    # As fronteiras de bloco precisam cair em SILÊNCIO — cortar em tempo fixo
+    # parte uma palavra ao meio e ela sai truncada nas duas transcrições. Os
+    # silêncios conhecidos estão no tempo REAL; o áudio agora é o compactado.
+    # Em vez de inverter o mapa, recalcula-se o envelope sobre o áudio
+    # compactado (numpy, centésimos de segundo): os tocos de PAUSA_MANTIDA e
+    # as pausas curtas que ficaram inteiras aparecem como silêncio ali.
+    if compacta > CHUNK_TARGET * 1.25:
+        from .audio.envelope import compute_envelope
+        silencios_compactos = compute_envelope(samples, 16000).all_silence_runs(0.3)
+    else:
+        silencios_compactos = []
+    blocks = chunk_bounds(compacta, silencios_compactos)
     words: list[dict] = []
     segments: list[dict] = []
 

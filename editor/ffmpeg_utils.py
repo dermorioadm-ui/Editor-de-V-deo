@@ -29,12 +29,39 @@ class FFmpegError(RuntimeError):
         super().__init__(f"ffmpeg falhou (código {returncode}):\n{tail}")
 
 
+# Prioridade BAIXA para o trabalho de fundo. A exportação e a prévia rodam
+# enquanto o usuário retoca; em prioridade normal elas disputam os 4 núcleos
+# de igual para igual com o navegador e a interface engasga. Em prioridade
+# baixa o sistema dá a CPU para quem está interagindo e o ffmpeg fica com o
+# que sobra — que, com o usuário só olhando, é tudo.
+_BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000)
+_FUNDO = {"ativo": False}
+
+
+def em_segundo_plano(ativo: bool = True) -> None:
+    """Liga/desliga a prioridade baixa para os próximos processos ffmpeg."""
+    _FUNDO["ativo"] = bool(ativo)
+
+
 def _popen(cmd: Sequence[str], **kw):
+    flags = _CREATE_NO_WINDOW
+    pre = None
+    if _FUNDO["ativo"]:
+        if sys.platform.startswith("win"):
+            flags |= _BELOW_NORMAL
+        else:
+            def pre() -> None:  # noqa: E306 — nice(10) só no filho
+                try:
+                    import os as _os
+                    _os.nice(10)
+                except Exception:  # noqa: BLE001
+                    pass
     return subprocess.Popen(
         list(cmd),
         stdout=kw.pop("stdout", subprocess.PIPE),
         stderr=kw.pop("stderr", subprocess.PIPE),
-        creationflags=_CREATE_NO_WINDOW,
+        creationflags=flags,
+        preexec_fn=pre,
         **kw,
     )
 
