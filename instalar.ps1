@@ -201,9 +201,12 @@ $form.Controls.Add($btInstalar)
 # ------------------------------------------------------------------ auxílios
 $script:arquivoLog = Join-Path $env:TEMP 'sharkcut-instalacao.log'
 
+$script:saidaDoPasso = ''
+
 function Escrever($texto) {
     if (-not $texto) { return }
     $limpo = $texto.TrimEnd()
+    $script:saidaDoPasso += "`n" + $limpo
     $log.AppendText(($limpo + "`r`n"))
     # a caixa de log mostra umas dez linhas; o arquivo guarda tudo, que é o
     # que dá para mandar para alguém quando a instalação falha
@@ -262,6 +265,7 @@ function Derramar($caminho, $de) {
 # nunca bloqueia.
 function Rodar($programa, $argumentos, $titulo) {
     Status $titulo
+    $script:saidaDoPasso = ''
     $saida = [System.IO.Path]::GetTempFileName()
     $erros = [System.IO.Path]::GetTempFileName()
     try {
@@ -294,18 +298,33 @@ function Rodar($programa, $argumentos, $titulo) {
     $codigo = -1
     try { $codigo = $p.ExitCode } catch { $codigo = -1 }
     if ($null -eq $codigo) { $codigo = -1 }
-    Escrever "(terminou com código $codigo)"
+    if ($codigo -eq -1) {
+        Escrever '(o Windows não devolveu o código de saída deste passo)'
+    } else {
+        Escrever "(terminou com código $codigo)"
+    }
     return [int]$codigo
 }
 
 # A VERDADE sobre a instalação não é o código do pip: é se o Python consegue
-# importar as bibliotecas. Isso não tem como dar falso positivo nem falso
-# negativo — ou o editor tem o que precisa para rodar, ou não tem.
+# importar as bibliotecas. Ou o editor tem o que precisa para rodar, ou não
+# tem.
+#
+# E quem responde isso é o que o Python IMPRIME, não o código de saída. Na
+# máquina do usuário o código voltou -1 em TODOS os passos — o Windows não
+# entrega essa informação para o objeto que o Start-Process devolve — e a
+# importação, que tinha dado certo e escrito na tela que deu, foi tratada
+# como falha. A senha abaixo só aparece na saída se a linha do import inteira
+# tiver rodado até o fim.
 function BibliotecasProntas {
-    $codigo = Rodar $pyVenv `
-        @('-c', '"import fastapi, uvicorn, numpy, faster_whisper, httpx; print(''bibliotecas ok'')"') `
-        'conferindo as bibliotecas'
-    return ($codigo -eq 0)
+    # a senha nasce DENTRO da função: se ela viesse de fora e chegasse vazia,
+    # a comparação passaria a casar com qualquer coisa e a conferência
+    # aprovaria até um ambiente quebrado
+    $senha = 'BIBLIOTECAS-PRONTAS'
+    Rodar $pyVenv `
+        @('-c', ('"import fastapi, uvicorn, numpy, faster_whisper, httpx; print(''{0}'')"' -f $senha)) `
+        'conferindo as bibliotecas' | Out-Null
+    return ($script:saidaDoPasso -match [regex]::Escape($senha))
 }
 
 # Só a saída, sem janela e sem enfeite — para perguntar a versão de alguém.
@@ -472,7 +491,9 @@ function Instalar {
 
     $r = Rodar $pyVenv @('-m', 'pip', 'install', '-r', ('"{0}"' -f $req)) `
                'instalando as bibliotecas (a parte demorada)'
-    if ($r -ne 0) {
+    # -1 quer dizer "o Windows não contou", e isso é o normal em muita
+    # máquina; não vale assustar o usuário com isso no log.
+    if ($r -gt 0) {
         Escrever "o pip terminou com código $r — conferindo se as bibliotecas ficaram prontas assim mesmo"
     }
     if (-not (BibliotecasProntas)) {
