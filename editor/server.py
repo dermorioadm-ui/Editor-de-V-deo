@@ -1886,6 +1886,50 @@ def api_ia_config_set(payload: dict = Body(...)) -> dict:
     return api_ia_config()
 
 
+@app.post("/api/ai/chave-de-arquivo")
+def api_ia_chave_de_arquivo(payload: dict = Body(...)) -> dict:
+    """Lê a chave de um .txt que o usuário aponta — sem abrir, copiar e colar.
+
+    A chave dele mora num arquivo de texto numa pasta de Documentos. Fazê-lo
+    abrir o arquivo, selecionar a linha certa e colar no campo era um atrito
+    que travava tudo — "a IA não funciona" quando faltava só a chave. Aqui o
+    servidor (que roda na máquina dele) lê o arquivo, acha o que parece uma
+    chave do Gemini (começa com AIza), guarda, TESTA na hora e fixa o modelo,
+    exatamente como o campo de colar faz. A chave nunca volta na resposta.
+    """
+    import re
+
+    from .ai import gemini as gem
+
+    caminho = str(payload.get("path") or "").strip()
+    if not caminho:
+        raise HTTPException(400, "aponte o arquivo .txt onde a chave está")
+    p = Path(caminho).expanduser()
+    if not p.is_file():
+        raise HTTPException(404, f"arquivo não encontrado: {p.name}")
+    if p.stat().st_size > 65536:
+        raise HTTPException(400, f"'{p.name}' é grande demais para ser um arquivo "
+                                 f"de chave (mais de 64 KB)")
+    texto = p.read_bytes().decode("utf-8", "replace")
+    achadas = re.findall(r"AIza[0-9A-Za-z_\-]{20,}", texto)
+    if not achadas:
+        raise HTTPException(400, f"não achei uma chave do Gemini (ela começa com "
+                                 f"'AIza') dentro de '{p.name}'")
+    chave = achadas[0]
+    api_ia_config_set({"chave": chave, "cortes": True})
+    try:
+        teste = gem.testar_chave(chave, db.get_setting("gemini_model", "") or "")
+    except gem.ErroDaIA as exc:
+        db.set_setting(CHAVE_IA, "")
+        db.set_setting("gemini_model", "")
+        raise HTTPException(400, f"a chave dentro de '{p.name}' não passou: {exc}") from exc
+    cfg = api_ia_config()
+    if teste.get("modelo"):
+        db.set_setting("gemini_model", teste["modelo"])
+        cfg = api_ia_config()
+    return {**cfg, "arquivo": p.name, "quantas": len(set(achadas))}
+
+
 @app.get("/api/ai/modelos")
 def api_ia_modelos() -> dict:
     """Os modelos que ESTA chave alcança, para a primeira tela escolher.

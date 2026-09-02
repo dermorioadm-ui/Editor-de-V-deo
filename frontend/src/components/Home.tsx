@@ -244,6 +244,24 @@ export default function Home() {
     } finally { setSalvandoChave(false) }
   }
 
+  /** A chave está num .txt numa pasta — aponte o arquivo e pronto. O
+   *  servidor lê, acha a chave, testa e guarda, sem copiar e colar. */
+  async function lerChaveDoArquivo() {
+    setSalvandoChave(true)
+    try {
+      const r = await api.escolher('texto', 'Escolher o arquivo .txt com a chave do Gemini')
+      if (r.cancelado) return
+      const c = await api.chaveDeArquivo(r.path)
+      await lerIa()
+      setChave('')
+      toast('ok', `Chave lida de ${c.arquivo}, testada e modelo fixado`,
+        `vai usar ${c.modelo}`)
+    } catch (e: any) {
+      setIa(await api.aiConfig().catch(() => null))
+      toast('error', 'Não deu para ler a chave do arquivo', String(e.message ?? e))
+    } finally { setSalvandoChave(false) }
+  }
+
   async function escolherNoDisco() {
     try {
       const r = await api.escolher('video', 'Escolher o vídeo para editar')
@@ -378,6 +396,11 @@ export default function Home() {
                       disabled={!chave.trim() || salvandoChave}
                       onClick={salvarChave}>
                 {salvandoChave ? 'testando…' : 'guardar'}
+              </button>
+              <button className="btn btn-xs shrink-0" disabled={salvandoChave}
+                      title="aponte o .txt onde a chave está guardada — o app lê, testa e guarda, sem copiar e colar"
+                      onClick={lerChaveDoArquivo}>
+                ler de um .txt
               </button>
             </>
           )}

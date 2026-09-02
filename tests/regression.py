@@ -291,6 +291,7 @@ def main() -> int:
     testar_ia_opina_codigo_executa()
     testar_modelo_da_ia_fica_fixado()
     testar_chave_da_ia_nao_vaza()
+    testar_chave_lida_de_arquivo()
     testar_trilha_acompanha_o_corte()
     testar_legenda_da_previa_bate_com_a_exportacao()
     testar_janela_do_sistema()
@@ -1506,6 +1507,67 @@ def testar_chave_da_ia_nao_vaza() -> None:
               and marca not in detalhe,
               f"chave recusada com motivo legível e sem eco da chave: {detalhe[:60]}")
     finally:
+        cliente.post("/api/ai/config", json={"chave": ""})
+
+
+def testar_chave_lida_de_arquivo() -> None:
+    """A chave mora num .txt numa pasta do usuário: o app lê o arquivo.
+
+    Abrir o .txt, achar a linha, copiar, colar — era esse atrito que deixava
+    a IA "sem funcionar". A rota recebe o caminho que a janela do sistema
+    devolveu, acha a chave (começa com AIza), guarda, testa e fixa o modelo.
+    A chave nunca volta na resposta; arquivo sem chave é erro com motivo; e
+    chave que não passa no teste é apagada de novo, não fica guardada errada.
+    """
+    import tempfile
+
+    from editor.ai import gemini as gem
+    from editor.server import app
+
+    cliente = TestClient(app)
+    tmp = Path(tempfile.mkdtemp(prefix="chave_txt_"))
+    marca = "AIzaSyLIDA-DO-ARQUIVO-TXT-DE-TESTE-00001234"
+    com = tmp / "api gemini.txt"
+    com.write_text(f"minha chave do gemini\n\nchave: {marca}\n(criada em agosto)\n",
+                   encoding="utf-8")
+    sem = tmp / "vazio.txt"
+    sem.write_text("aqui não tem chave nenhuma\n", encoding="utf-8")
+
+    guardado = (gem.testar_chave, gem.escolher_modelo, gem.listar_modelos)
+    try:
+        gem.listar_modelos = lambda *a, **k: [{"id": "gemini-2.5-flash", "nome": "",
+                                              "entrada": 0, "saida": 0}]
+        gem.escolher_modelo = lambda chave, pedido="": {"id": "gemini-2.5-flash", "nome": ""}
+        gem.testar_chave = lambda chave, modelo="": {"ok": True, "modelo": "gemini-2.5-flash"}
+
+        r = cliente.post("/api/ai/chave-de-arquivo", json={"path": str(com)})
+        corpo = r.json()
+        check(r.status_code == 200 and corpo.get("tem_chave") and corpo.get("final") == "1234",
+              f"a chave foi lida do .txt e guardada (final …{corpo.get('final')})")
+        check(corpo.get("arquivo") == "api gemini.txt" and corpo.get("modelo") == "gemini-2.5-flash",
+              "a resposta diz de que arquivo veio e que modelo ficou fixado")
+        check(marca not in r.text and "AIzaSy" not in r.text,
+              "e a chave NÃO volta na resposta")
+        check(gem.chave_guardada() == marca, "a chave guardada é exatamente a do arquivo")
+
+        r2 = cliente.post("/api/ai/chave-de-arquivo", json={"path": str(sem)})
+        check(r2.status_code == 400 and "não achei" in str(r2.json().get("detail", "")),
+              f"arquivo sem chave é recusado com motivo: {str(r2.json().get('detail', ''))[:60]}")
+        check(gem.chave_guardada() == marca, "e a chave boa continua guardada")
+
+        r3 = cliente.post("/api/ai/chave-de-arquivo", json={"path": str(tmp / "nao_existe.txt")})
+        check(r3.status_code == 404, "arquivo que não existe dá 404, não stack trace")
+
+        def falha(chave, modelo=""):
+            raise gem.ErroDaIA("a chave do Gemini não foi aceita.")
+        gem.testar_chave = falha
+        r4 = cliente.post("/api/ai/chave-de-arquivo", json={"path": str(com)})
+        check(r4.status_code == 400 and "não passou" in str(r4.json().get("detail", ""))
+              and marca not in r4.text,
+              "chave que não passa no teste volta erro legível, sem eco da chave")
+        check(not gem.chave_guardada(), "e é apagada de novo — não fica uma chave errada guardada")
+    finally:
+        gem.testar_chave, gem.escolher_modelo, gem.listar_modelos = guardado
         cliente.post("/api/ai/config", json={"chave": ""})
 
 

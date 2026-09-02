@@ -1214,7 +1214,10 @@ do botão.
 ### Como ligar
 
 1. Pegue uma chave no Google AI Studio.
-2. **Na tela inicial**, no card do topo: cole a chave → **guardar**. Ela é
+2. **Na tela inicial**, no card do topo: cole a chave → **guardar** — ou, se
+   ela está num `.txt` numa pasta sua, **ler de um .txt**: aponte o arquivo
+   na janela do sistema e o app acha a chave (começa com `AIza`), testa e
+   guarda, sem abrir, copiar e colar. Ela é
    testada na hora, então um erro de chave aparece ali, com o campo na frente
    — e não no meio do processamento de um vídeo de 2 GB.
 3. Pronto. Todo vídeo que você soltar dali em diante já sai cortado pela IA.

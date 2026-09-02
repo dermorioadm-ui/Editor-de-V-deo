@@ -35,7 +35,7 @@ export const api = {
   // então ele pode abrir o mesmo diálogo de qualquer programa e devolver o
   // caminho. Nada é enviado: o que atravessa é uma string.
   janela: () => req<{ disponivel: boolean }>('/api/janela'),
-  escolher: (kind: 'video' | 'audio' | 'image' | 'media',
+  escolher: (kind: 'video' | 'audio' | 'image' | 'media' | 'texto',
              titulo?: string, varios = false) =>
     post<{ ok: boolean; cancelado: boolean; path: string; paths: string[] }>(
       '/api/escolher', { kind, titulo, varios }),
@@ -195,6 +195,9 @@ export const api = {
   // IA — a chave NUNCA volta por aqui, só se ela existe e os quatro últimos
   // caracteres, o bastante para o usuário reconhecer qual chave está lá
   aiConfig: () => req<any>('/api/ai/config'),
+  // a chave lida de um .txt que o usuário aponta — o servidor lê, testa e
+  // guarda; a chave nunca volta na resposta
+  chaveDeArquivo: (path: string) => post<any>('/api/ai/chave-de-arquivo', { path }),
   aiModelos: () => req<any>('/api/ai/modelos'),
   setAiConfig: (payload: any) => post<any>('/api/ai/config', payload),
   testAi: () => post<any>('/api/ai/test'),
