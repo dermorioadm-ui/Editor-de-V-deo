@@ -144,10 +144,22 @@ def overlay_inputs(overlays: list, clip_out_start: float,
 
 def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                   width: int, height: int, first_input_index: int,
-                  tag_in: str, tag_out: str) -> tuple[str, list[str]]:
-    """PNGs com entrada configurável (Parte 8)."""
+                  tag_in: str, tag_out: str, ref_height: int = 0) -> tuple[str, list[str]]:
+    """PNGs com entrada configurável (Parte 8).
+
+    ``ref_height`` é a altura do quadro para o qual a sobreposição foi
+    AUTORADA — a da fonte. O tamanho de um overlay é ``iw*scale`` em pixels do
+    PNG, e isso só está certo quando a saída tem o tamanho da fonte. Na prévia
+    de 240p o mesmo PNG saía com os MESMOS pixels em cima de um quadro 4,5x
+    menor: um cartão de 84% da largura cobria a tela inteira, e a prévia,
+    que promete ser "ao pixel o que vai baixar", mentia justamente no que o
+    usuário anexou. Nos formatos derivados (16:9 a partir do vertical) o
+    erro era o mesmo em outra proporção. A sobreposição agora ocupa a mesma
+    FRAÇÃO DA ALTURA em qualquer saída — que é a régua do tipo do cartão.
+    """
     if not overlays:
         return "", []
+    fator = (height / float(ref_height)) if ref_height and ref_height > 0 else 1.0
     parts: list[str] = []
     inputs: list[str] = []
     cur = tag_in
@@ -160,7 +172,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         start = max(0.0, o.out_start - clip_out_start)
         end = max(start + 0.05, o.out_end - clip_out_start)
         scaled = f"__ov{i}"
-        scale_w = f"iw*{o.scale:.4f}"
+        scale_w = f"iw*{o.scale * fator:.4f}"
         chain = [f"[{idx}:v]format=rgba,scale={scale_w}:-1"]
         if o.opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={o.opacity:.3f}")

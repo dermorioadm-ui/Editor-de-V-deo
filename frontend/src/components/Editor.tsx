@@ -501,7 +501,10 @@ export default function Editor() {
                 <b>{r.copy ?? 0}</b> de copy fora
                 {typeof r.palavras_fora === 'number' && typeof r.palavras === 'number'
                   && r.palavras > 0 &&
-                  ` (${r.palavras_fora} de ${r.palavras} palavras)`}
+                  ` (${r.palavras_fora} de ${r.palavras} palavras saíram${
+                    typeof r.palavras_propostas === 'number'
+                      && r.palavras_propostas > r.palavras_fora
+                      ? ` · ${r.palavras_propostas} propostas` : ''})`}
                 {' · '}<b>{r.secoes ?? 0}</b> etapa(s) de ritmo
                 {' · '}câmera em <b>{r.camera ?? 0}</b>
                 {(r.fechado ?? 0) > 0 && ` (${r.fechado} fechando)`}
@@ -693,6 +696,30 @@ export default function Editor() {
                   proxyUrl={proxyUrl}
                   onDeleteSelection={deleteSelection}
                   onCutCue={cutWords}
+                  overlays={project.plan?.overlays ?? []}
+                  cutaways={project.plan?.cutaways ?? []}
+                  media={project.media ?? []}
+                  onOverlayChange={async (id, patch) => {
+                    snapshot()
+                    try {
+                      await api.updateOverlay(project.id, id, patch)
+                      await refresh()
+                    } catch (e: any) {
+                      toast('warn', 'Não deu para mover', String(e.message ?? e))
+                    }
+                  }}
+                  onOverlayDelete={async (id) => {
+                    snapshot()
+                    await api.deleteOverlay(project.id, id)
+                    await refresh()
+                    toast('ok', 'Sobreposição removida')
+                  }}
+                  onCutawayDelete={async (id) => {
+                    snapshot()
+                    await api.deleteCutaway(project.id, id)
+                    await refresh()
+                    toast('ok', 'Cobertura removida', 'O vídeo principal volta a aparecer ali.')
+                  }}
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)

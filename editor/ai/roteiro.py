@@ -19,6 +19,9 @@ porque sem ver a imagem não há como decidir onde ela cabe.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from dataclasses import dataclass
 
 from ..models import SECTIONS
@@ -76,6 +79,17 @@ Regras que valem mais que sua vontade de enfeitar:
 - O cartão entra EM CIMA da fala que ele resume, não antes nem depois.
 - Se o vídeo não enumera nada e não diz número nenhum, devolva a lista vazia.
   Nenhum cartão é melhor que um cartão genérico.
+
+=== ANEXOS ===
+Quando o usuário anexou mídias (vídeos e imagens), TODAS entram no vídeo,
+cada uma exatamente uma vez — ele anexou de propósito, para valorizar o
+anúncio. Sua tarefa é dizer em QUE BLOCO cada uma entra: o bloco em que a
+fala trata do que a mídia mostra, ou do que o usuário escreveu sobre ela.
+Vídeo entra como "cobertura" (a imagem dele cobre a tela e a voz continua por
+baixo — é como se mostra uma gravação de tela enquanto se explica). Imagem
+entra como "sobreposicao" (aparece por cima do vídeo). Se nenhum bloco falar
+exatamente daquilo, escolha o mais próximo do assunto. Nunca devolva a lista
+de anexos vazia havendo mídia na lista.
 
 Responda somente o JSON do esquema."""
 
@@ -173,8 +187,9 @@ def montar_pedido(blocos: list[Bloco], midias: list[dict],
             "enquadramento, não para discordar da intenção dele.",
             "Vídeo entra como 'cobertura' (cobre a imagem, a voz continua por "
             "baixo). Imagem entra como 'sobreposicao' (aparece por cima).",
-            f"Entre {MIN_ANEXO:.0f} e {MAX_ANEXO:.0f} segundos. Uma mídia só, por "
-            "bloco: se ela não ajuda em nenhum bloco, não a use.",
+            f"Entre {MIN_ANEXO:.0f} e {MAX_ANEXO:.0f} segundos. Uma mídia por "
+            "bloco. TODA mídia da lista entra, exatamente uma vez: se nenhum "
+            "bloco fala exatamente daquilo, escolha o mais próximo do assunto.",
         ]
     return "\n".join(linhas)
 
@@ -201,12 +216,20 @@ def blocos_do_plano(plan, palavras: list[dict]) -> list[Bloco]:
 
 # ------------------------------------------------------------------ aplicação
 def aplicar(plan, resposta: dict, midias: list[dict],
-            duracao_saida: float) -> dict:
+            duracao_saida: float, blocos: list | None = None,
+            completar: bool = False) -> dict:
     """Traduz a intenção em edição — recusando tudo que não couber.
 
     Devolve o relatório do que entrou e do que foi recusado, com motivo. Nada
     aqui é aplicado "quase": ou a sugestão respeita as invariantes, ou ela não
     acontece e aparece na lista de recusas.
+
+    ``completar`` é a regra da IMPRESSORA: toda mídia que o usuário anexou
+    sai no vídeo. O que a IA não posicionou (ou posicionou errado e foi
+    recusado) o programa posiciona — pelas palavras da descrição contra o
+    texto dos blocos e, na falta delas, espalhado no meio do vídeo. Fica
+    desligado por padrão para a aplicação manual, em que o usuário está
+    olhando cada item; no clique único é obrigatório.
     """
     from .. import anexos
 
@@ -296,11 +319,122 @@ def aplicar(plan, resposta: dict, midias: list[dict],
                          "ajustes": janela.ajustes})
         quantos += 1
 
+    if completar:
+        anexados += _completar_anexos(plan, midias, anexados, blocos or [],
+                                      duracao_saida, recusados)
+
     return {"leitura": str(resposta.get("leitura", ""))[:300],
             "aplicados": aplicados, "anexos": anexados,
             "cartoes": _cartoes_pedidos(resposta, plan, porindice, duracao_saida,
                                         recusados),
             "recusados": recusados}
+
+
+# Palavras que aparecem em qualquer descrição e não dizem do que a mídia trata.
+_VAZIAS = {"para", "com", "que", "uma", "isso", "essa", "este", "esta", "aqui",
+           "quando", "onde", "como", "mais", "muito", "voce", "dele", "dela",
+           "tela", "video", "imagem", "print", "foto", "gravacao", "mostra",
+           "mostrando", "entra", "falo", "falar", "parte", "trecho", "hora",
+           "momento", "whatsapp", "screenshot", "captura"}
+
+
+def _sem_acento(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", texto)
+                   if not unicodedata.combining(c))
+
+
+def _bloco_por_palavras(midia: dict, textos: dict, elegiveis: list):
+    """O bloco cuja fala mais repete as palavras da descrição — ou nenhum."""
+    base = f"{midia.get('descricao') or ''} {midia.get('name') or ''}".lower()
+    base = _sem_acento(re.sub(r"[_\-\.\d]+", " ", base))
+    tokens = set(re.findall(r"[a-z]{4,}", base)) - _VAZIAS
+    if not tokens:
+        return None
+    melhor, pontos = None, 0
+    for x in elegiveis:
+        txt = _sem_acento(textos.get(x[0], "")).lower()
+        p = sum(1 for t in tokens if t in txt)
+        if p > pontos:
+            melhor, pontos = x, p
+    return melhor if pontos > 0 else None
+
+
+def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
+                      duracao_saida: float, recusados: list[dict]) -> list[dict]:
+    """Posiciona o que ficou de fora. O usuário anexou; o vídeo sai com tudo.
+
+    Ordem de preferência para o lugar: (1) o bloco cuja fala repete as
+    palavras da descrição; (2) espalhado — a k-ésima de n mídias cai em
+    (k+1)/(n+1) do vídeo. Nunca no gancho (os primeiros 8 s ou 15%) e nunca
+    nos últimos 2 s. Cobertura não pode cair em cima de outra cobertura.
+    Mídia que já está no vídeo (de uma rodada anterior) não entra de novo.
+    """
+    from .. import anexos
+
+    usados = {a["media_id"] for a in ja}
+    usados |= {c.media_id for c in plan.cutaways if getattr(c, "enabled", True)}
+    usados |= {o.media_id for o in plan.overlays if getattr(o, "enabled", True)}
+    faltam = [m for m in midias
+              if m.get("kind") in ("video", "image")
+              and m.get("id") not in usados
+              and not str(m.get("id", "")).startswith("k_")]
+    clips = plan.active_clips
+    if not faltam or not clips or duracao_saida <= 0:
+        return []
+
+    gancho = min(8.0, duracao_saida * 0.15)
+    marcos, t = [], 0.0
+    for i, c in enumerate(clips):
+        marcos.append((i, round(t, 4), round(t + c.out_duration, 4)))
+        t += c.out_duration
+    elegiveis = [x for x in marcos if x[1] >= gancho and x[1] < duracao_saida - 2.0] \
+        or marcos
+    textos = {b.i: b.texto for b in blocos}
+
+    saida: list[dict] = []
+    for k, m in enumerate(faltam):
+        tipo = "cobertura" if m.get("kind") == "video" else "sobreposicao"
+        dur_m = float((m.get("info") or {}).get("duration") or 0.0)
+        segundos = max(MIN_ANEXO, min(MAX_ANEXO, dur_m if dur_m > 0 else 4.0))
+        pela_palavra = _bloco_por_palavras(m, textos, elegiveis)
+        alvo_frac = (k + 1) / (len(faltam) + 1) * duracao_saida
+        ordem = sorted(elegiveis, key=lambda x: abs(x[1] - alvo_frac))
+        candidatos = ([pela_palavra] if pela_palavra else []) + \
+            [x for x in ordem if x != pela_palavra]
+        colocado = None
+        for cand in candidatos:
+            inicio = cand[1]
+            try:
+                midia = anexos.validar(midias, m["id"],
+                                       "video" if tipo == "cobertura" else "image")
+                janela = anexos.encaixar(midia, inicio, inicio + segundos,
+                                         limite=duracao_saida)
+                if tipo == "cobertura":
+                    anexos.sem_sobreposicao(plan.cutaways, janela.out_start,
+                                            janela.out_end)
+                    for a in ja + saida:
+                        if a["tipo"] == "cobertura" and (
+                                min(janela.out_end, a["out_end"])
+                                - max(janela.out_start, a["out_start"]) > 0.02):
+                            raise anexos.AnexoInvalido("colide com outro anexo")
+            except anexos.AnexoInvalido:
+                continue
+            colocado = {
+                "media_id": midia["id"], "tipo": tipo,
+                "out_start": janela.out_start, "out_end": janela.out_end,
+                "nome": m.get("name", ""), "origem": "programa",
+                "porque": ("entrou no bloco que fala das palavras da sua descrição"
+                           if cand == pela_palavra else
+                           "a IA não disse onde: entrou no ponto mais equilibrado do vídeo"),
+                "ajustes": janela.ajustes,
+            }
+            break
+        if colocado:
+            saida.append(colocado)
+        else:
+            recusados.append({"o_que": f"anexo de {m.get('name', '')}",
+                              "motivo": "não achei uma janela livre para ele"})
+    return saida
 
 
 MAX_CARTOES = 5

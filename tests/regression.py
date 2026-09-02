@@ -309,6 +309,9 @@ def main() -> int:
     testar_controles_antes_de_gerar()
     testar_presets_atualizam()
     testar_corte_nao_reencoda_o_resto()
+    testar_anexo_sempre_entra()
+    testar_sobreposicao_no_tamanho_da_previa()
+    testar_muleta_sai_com_um_vale()
 
     print()
     if FALHAS:
@@ -2689,6 +2692,209 @@ def testar_corte_nao_reencoda_o_resto() -> None:
     check(final == antes,
           f"a faxina joga fora o que ficou duas gerações para trás ({len(final)} trechos)")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_anexo_sempre_entra() -> None:
+    """A regra da IMPRESSORA: toda mídia que o usuário anexou sai no vídeo.
+
+    Antes, o pedido à IA dizia "se ela não ajuda em nenhum bloco, não a use" —
+    e sem chave da IA nada era posicionado. A mídia anexada na primeira tela
+    aparecia num painel com botão de "inserir", que é o contrário de entregar
+    pronto. Agora: a IA é instruída a colocar tudo; o que ela deixar de fora
+    (ou errar) o programa posiciona — pelas palavras da descrição contra a
+    fala e, na falta delas, espalhado no meio do vídeo — fora do gancho e sem
+    cobertura em cima de cobertura.
+    """
+    from editor.ai.roteiro import INSTRUCAO, Bloco, aplicar, montar_pedido
+    from editor.models import Clip, Cutaway, EditPlan
+
+    plan = EditPlan()
+    plan.clips = [Clip(src_start=float(k * 3), src_end=float(k * 3 + 3)) for k in range(10)]
+    falas = ["presta atenção nisso", "o problema é esse",
+             "quando você faz o cadastro no sistema", "aí o relatório mostra tudo",
+             "olha os números", "o passo dois é configurar", "e o passo três",
+             "tem garantia", "clica no link", "até mais"]
+    blocos = [Bloco(i=k, inicio=k * 3.0, fim=k * 3.0 + 3, texto=t)
+              for k, t in enumerate(falas)]
+    midias = [
+        {"id": "v1", "kind": "video", "name": "WhatsApp Video 2025-08-31.mp4",
+         "info": {"duration": 4.0}, "descricao": "tela do cadastro no sistema"},
+        {"id": "i1", "kind": "image", "name": "print.png",
+         "info": {"width": 800, "height": 400}, "descricao": ""},
+        {"id": "v2", "kind": "video", "name": "gravacao.mp4",
+         "info": {"duration": 20.0}, "descricao": ""},
+    ]
+
+    # 1) a IA não disse nada sobre os anexos: com `completar`, TUDO entra
+    rel = aplicar(plan, {"leitura": "", "anexos": []}, midias, 30.0,
+                  blocos=blocos, completar=True)
+    ids = {a["media_id"] for a in rel["anexos"]}
+    check(ids == {"v1", "i1", "v2"},
+          f"as três mídias anexadas entraram no vídeo ({sorted(ids)})")
+    check(all(a.get("origem") == "programa" for a in rel["anexos"]),
+          "e cada uma diz que foi o programa que a posicionou")
+
+    # 2) a descrição casa com a fala: "cadastro no sistema" é o bloco 2 (6 s)
+    v1 = next(a for a in rel["anexos"] if a["media_id"] == "v1")
+    check(abs(v1["out_start"] - 6.0) < 0.01 and v1["tipo"] == "cobertura",
+          f"o vídeo da tela de cadastro entrou no bloco que fala de cadastro "
+          f"({v1['out_start']:.1f} s, {v1['tipo']})")
+    check("descrição" in v1["porque"], "e o motivo diz que foi pela descrição")
+    check(abs((v1["out_end"] - v1["out_start"]) - 4.0) < 0.01,
+          f"e dura o que a mídia tem, 4 s ({v1['out_end'] - v1['out_start']:.1f})")
+
+    # 3) nada no gancho: min(8 s, 15% de 30 s) = 4,5 s
+    check(all(a["out_start"] >= 4.5 for a in rel["anexos"]),
+          f"nenhum anexo cai no gancho ({min(a['out_start'] for a in rel['anexos']):.1f} s)")
+    # 4) cobertura nunca em cima de cobertura
+    cobs = sorted((a["out_start"], a["out_end"]) for a in rel["anexos"]
+                  if a["tipo"] == "cobertura")
+    check(all(b[0] >= a[1] - 0.02 for a, b in zip(cobs, cobs[1:])),
+          f"as coberturas não se sobrepõem ({cobs})")
+    # 5) o teto de duração vale: 20 s de mídia viram no máximo 6 s
+    v2 = next(a for a in rel["anexos"] if a["media_id"] == "v2")
+    check(abs((v2["out_end"] - v2["out_start"]) - 6.0) < 0.01,
+          f"mídia longa entra com o teto de 6 s ({v2['out_end'] - v2['out_start']:.1f})")
+    i1 = next(a for a in rel["anexos"] if a["media_id"] == "i1")
+    check(i1["tipo"] == "sobreposicao", "imagem entra como sobreposição")
+
+    # 6) na aplicação MANUAL (sem completar) nada entra sozinho
+    rel2 = aplicar(plan, {"leitura": "", "anexos": []}, midias, 30.0,
+                   blocos=blocos, completar=False)
+    check(not rel2["anexos"], "sem `completar` o programa não posiciona nada por conta")
+
+    # 7) idempotente: o que já está no vídeo não entra de novo
+    plan.cutaways.append(Cutaway(media_id="v1", out_start=6.0, out_end=10.0))
+    rel3 = aplicar(plan, {"leitura": "", "anexos": []}, [midias[0]], 30.0,
+                   blocos=blocos, completar=True)
+    check(not rel3["anexos"], "mídia que já está no vídeo não é posicionada outra vez")
+
+    # 8) e o pedido à IA mudou de lado
+    pedido = montar_pedido(blocos, midias, 30.0)
+    check("TODA mídia" in pedido and "não a use" not in pedido,
+          "o pedido manda TODA mídia entrar, em vez de 'se não ajuda, não use'")
+    check("=== ANEXOS ===" in INSTRUCAO,
+          "a instrução da IA tem uma seção sobre anexos (não tinha nenhuma)")
+
+
+def testar_sobreposicao_no_tamanho_da_previa() -> None:
+    """A sobreposição ocupa a MESMA fração do quadro na prévia e na exportação.
+
+    O tamanho de um overlay era ``iw*scale`` em pixels do PNG — certo só
+    quando a saída tem o tamanho da fonte. Na prévia de 240p o PNG saía com os
+    MESMOS pixels em cima de um quadro 4,5x menor: um cartão de 84% da largura
+    cobria a tela. A prévia promete ser "ao pixel o que vai baixar" e mentia
+    justamente no que o usuário anexou. Agora escala pela altura da saída.
+    """
+    import subprocess
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan, Overlay
+    from editor.render.filters import overlay_chain
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    # 1) a fórmula: mesma fração de altura em qualquer saída
+    o = Overlay(media_id="m", out_start=0.0, out_end=2.0, scale=0.8)
+    cheio, _ = overlay_chain([o], {"m": "/x.png"}, 0.0, 1080, 1920, 1, "a", "b",
+                             ref_height=1920)
+    previa, _ = overlay_chain([o], {"m": "/x.png"}, 0.0, 135, 240, 1, "a", "b",
+                              ref_height=1920)
+    check("iw*0.8000" in cheio, "na saída do tamanho da fonte o scale é o pedido")
+    check("iw*0.1000" in previa,
+          "na prévia de 240 o scale encolhe junto (0,8 × 240/1920 = 0,1)")
+    antigo, _ = overlay_chain([o], {"m": "/x.png"}, 0.0, 135, 240, 1, "a", "b")
+    check("iw*0.8000" in antigo, "sem a régua, o comportamento antigo continua")
+
+    # 2) a prova no pixel: renderiza a mesma sobreposição em dois tamanhos e
+    #    mede quanto do quadro ela ocupa
+    tmp = Path(tempfile.mkdtemp(prefix="ov_previa_"))
+    video = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x202020:s=432x768:r=30:d=2",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(video)], check=True)
+    png = tmp / "vermelho.png"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "color=c=red:s=200x100", "-frames:v", "1", str(png)],
+                   check=True)
+    info = probe(video)
+
+    def fracao_vermelha(escala: str) -> float:
+        plan = EditPlan()
+        plan.export = ExportParams(scale=escala, burn_subtitles=False,
+                                   preset="ultrafast", crf=30)
+        plan.clips = [Clip(src_start=0.0, src_end=2.0)]
+        plan.overlays = [Overlay(media_id="m", out_start=0.0, out_end=2.0,
+                                 x=0.5, y=0.5, scale=1.0,
+                                 anim_in="none", anim_out="none")]
+        tl = Timeline(plan.active_clips, 30.0)
+        segs = plan_segments(plan, tl,
+                             {"main": {"path": str(video), "info": info, "kind": "video"}},
+                             info)
+        segs = render_video_segments(segs, plan, info, [], tmp / f"segs-{escala}",
+                                     {"main": str(video), "m": str(png)}, None)
+        saida = segs[0].file
+        w, h = probe(saida).display_size
+        cru = subprocess.run([FFMPEG, "-v", "error", "-ss", "1.0", "-i", saida,
+                              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                             capture_output=True, check=True).stdout
+        img = np.frombuffer(cru, np.uint8).reshape(h, w, 3)
+        vermelho = (img[:, :, 0] > 170) & (img[:, :, 1] < 90) & (img[:, :, 2] < 90)
+        linhas = np.flatnonzero(vermelho.any(axis=1))
+        return (linhas[-1] - linhas[0] + 1) / h if linhas.size else 0.0
+
+    f_fonte = fracao_vermelha("source")
+    f_previa = fracao_vermelha("216")          # metade: 216x384
+    check(0.10 < f_fonte < 0.16,
+          f"no tamanho da fonte a sobreposição ocupa ~13% da altura ({f_fonte:.1%})")
+    check(abs(f_fonte - f_previa) < 0.02,
+          f"e na prévia pela metade ocupa a MESMA fração ({f_previa:.1%}) — "
+          f"antes ocupava o dobro")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_muleta_sai_com_um_vale() -> None:
+    """A muleta ("então", "né") sai com UM vale de verdade e um respiro mínimo.
+
+    Com a mesma trava do corte de copy — 120 ms dos dois lados — a muleta
+    nunca saía: ela vive dentro da fala corrida. O usuário via o "então" no
+    vídeo e a IA dizendo que tinha pedido para tirar. A muleta é curta e a
+    emenda é pequena: um lado com vale e o outro com 60 ms bastam para o fade
+    esconder. O corte de COPY (ideia inteira) continua exigindo os dois lados.
+    """
+    from editor.ai.cortes import VALE_FRACO, VALE_MIN, aplicar
+    from editor.audio.envelope import compute_envelope
+
+    def cenario(gap_antes: float, gap_depois: float):
+        a = (0.0, 0.5)
+        m = (a[1] + gap_antes, a[1] + gap_antes + 0.25)
+        b = (m[1] + gap_depois, m[1] + gap_depois + 0.5)
+        env = compute_envelope(build([a, m, b], b[1] + 0.3, claps=[], noise=0.0011), 16000)
+        words = [{"id": 0, "start": a[0], "end": a[1], "text": "a"},
+                 {"id": 1, "start": m[0], "end": m[1], "text": "então"},
+                 {"id": 2, "start": b[0], "end": b[1], "text": "b"}]
+        return aplicar(words, {"leitura": "", "remover": [
+            {"de": 1, "ate": 1, "tipo": "vicio", "motivo": "muleta"}]}, env=env)
+
+    # vale de 200 ms antes, 70 ms depois: SAI, avisando que a emenda é apertada
+    r = cenario(0.20, 0.07)
+    check(len(r["takes"]) == 1 and r["takes"][0]["source"] == "ia_vicio",
+          f"muleta com vale de um lado e respiro mínimo do outro sai ({len(r['takes'])})")
+    check(r["takes"] and "apertada" in r["takes"][0]["reason"],
+          "e o motivo avisa que a emenda é apertada")
+    # 50 ms dos dois lados: colada na fala, NÃO sai
+    r2 = cenario(0.05, 0.05)
+    check(not r2["takes"] and any("colada" in x["motivo"] for x in r2["recusados"]),
+          f"muleta colada dos dois lados continua recusada "
+          f"({VALE_MIN*1000:.0f} ms de um lado e {VALE_FRACO*1000:.0f} do outro)")
+    # 200 ms de um lado e 30 ms do outro: abaixo do respiro mínimo, NÃO sai
+    r3 = cenario(0.20, 0.03)
+    check(not r3["takes"], "sem nem o respiro mínimo de um lado, não sai")
 
 
 if __name__ == "__main__":

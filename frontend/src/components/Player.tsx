@@ -38,6 +38,14 @@ interface Props {
   // corta a FRASE que está na tela agora (a legenda corrente) — a unidade em
   // que o usuário ouve e pensa; quem executa é o Editor
   onCutCue?: (wordIds: number[]) => void
+  // MEXER NO ELEMENTO EM CIMA DO VÍDEO: as sobreposições (cartão, PNG) viram
+  // caixas arrastáveis na própria prévia; a cobertura vira um chip com ×.
+  overlays?: any[]
+  cutaways?: any[]
+  media?: { id: string; name: string; info: any }[]
+  onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
+  onOverlayDelete?: (id: string) => void
+  onCutawayDelete?: (id: string) => void
 }
 
 /**
@@ -48,7 +56,9 @@ interface Props {
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
                                 sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
-                                 proxyUrl, onDeleteSelection, onCutCue }: Props) {
+                                 proxyUrl, onDeleteSelection, onCutCue,
+                                 overlays, cutaways, media,
+                                 onOverlayChange, onOverlayDelete, onCutawayDelete }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -68,6 +78,109 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // e o texto quebrava em 4 linhas onde a exportação faz 2.
   const [box, setBox] = useState({ left: 0, top: 0, width: 0, height: 0, vh: 1920 })
   const palco = useRef<HTMLDivElement | null>(null)
+
+  // ------------------------------------------------------------------
+  // O ELEMENTO EM CIMA DO VÍDEO. A geometria é a do render: o PNG ocupa
+  // (largura natural × scale) pixels do quadro da FONTE, centrado em (x, y)
+  // — então a caixa desenhada aqui é, em fração do quadro, exatamente onde
+  // a sobreposição está queimada na prévia. Arrastar move; o canto
+  // redimensiona; Delete apaga. A cobertura cobre o quadro inteiro, então
+  // não há o que arrastar: ela vira um chip com o nome e um ×.
+  const [selOverlay, setSelOverlay] = useState<string | null>(null)
+  const [pend, setPend] = useState<{ id: string; x: number; y: number; scale: number } | null>(null)
+  const pendRef = useRef<typeof pend>(null)
+  const ovDrag = useRef<{ id: string; modo: 'move' | 'scale'; mx: number; my: number
+                          x0: number; y0: number; s0: number; cx: number; cy: number } | null>(null)
+  const fonteW = sourceSize?.[0] || 1080
+  const fonteH = sourceSize?.[1] || 1920
+  const ovAtivos = (overlays ?? []).filter((o: any) => o.enabled !== false
+    && playhead >= o.out_start - 0.001 && playhead <= o.out_end + 0.001)
+  const cutAtivo = (cutaways ?? []).find((c: any) => c.enabled !== false
+    && playhead >= c.out_start && playhead <= c.out_end)
+  const geo = (o: any) => {
+    const p = pend && pend.id === o.id ? pend : o
+    const m = (media ?? []).find((x) => x.id === o.media_id)
+    const mw = Number(m?.info?.width) || 400
+    const mh = Number(m?.info?.height) || 200
+    const fw = (mw * p.scale) / fonteW
+    const fh = (mh * p.scale) / fonteH
+    return {
+      left: box.left + (p.x - fw / 2) * box.width,
+      top: box.top + (p.y - fh / 2) * box.height,
+      width: Math.max(8, fw * box.width),
+      height: Math.max(8, fh * box.height),
+      nome: m?.name ?? 'sobreposição', x: p.x, y: p.y, scale: p.scale,
+    }
+  }
+  useEffect(() => {
+    // o valor otimista do arrasto sai de cena quando o projeto já reflete a
+    // mudança — sem isso a caixa pulava para trás no meio-segundo entre
+    // soltar o mouse e a resposta do servidor
+    if (!pend) return
+    const o = (overlays ?? []).find((x: any) => x.id === pend.id)
+    if (!o) { setPend(null); pendRef.current = null; return }
+    if (Math.abs(o.x - pend.x) < 1e-3 && Math.abs(o.y - pend.y) < 1e-3
+        && Math.abs(o.scale - pend.scale) < 1e-3) { setPend(null); pendRef.current = null }
+  }, [overlays, pend])
+  useEffect(() => {
+    if (selOverlay && !(overlays ?? []).some((o: any) => o.id === selOverlay)) setSelOverlay(null)
+  }, [overlays, selOverlay])
+  const iniciarArrasto = (e: React.MouseEvent, o: any, modo: 'move' | 'scale') => {
+    e.preventDefault(); e.stopPropagation()
+    const g = geo(o)
+    setSelOverlay(o.id)
+    setState({ selection: null, selectedClip: null })
+    palco.current?.focus()
+    const rc = palco.current?.getBoundingClientRect()
+    ovDrag.current = { id: o.id, modo, mx: e.clientX, my: e.clientY,
+                       x0: g.x, y0: g.y, s0: g.scale,
+                       cx: g.left + g.width / 2, cy: g.top + g.height / 2 }
+    const onMove = (ev: MouseEvent) => {
+      const d = ovDrag.current
+      if (!d || !rc || box.width <= 0) return
+      let novo: typeof pend
+      if (d.modo === 'move') {
+        const nx = Math.min(1, Math.max(0, d.x0 + (ev.clientX - d.mx) / box.width))
+        const ny = Math.min(1, Math.max(0, d.y0 + (ev.clientY - d.my) / box.height))
+        novo = { id: d.id, x: Number(nx.toFixed(4)), y: Number(ny.toFixed(4)), scale: d.s0 }
+      } else {
+        // pela distância ao centro: puxar para fora cresce, para dentro encolhe
+        const d0 = Math.hypot(d.mx - rc.left - d.cx, d.my - rc.top - d.cy) || 1
+        const d1 = Math.hypot(ev.clientX - rc.left - d.cx, ev.clientY - rc.top - d.cy)
+        const ns = Math.min(4, Math.max(0.1, d.s0 * (d1 / d0)))
+        novo = { id: d.id, x: d.x0, y: d.y0, scale: Number(ns.toFixed(4)) }
+      }
+      pendRef.current = novo
+      setPend(novo)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      const d = ovDrag.current
+      ovDrag.current = null
+      const p = pendRef.current
+      if (!d || !p || p.id !== d.id) return
+      if (Math.abs(p.x - d.x0) > 1e-4 || Math.abs(p.y - d.y0) > 1e-4
+          || Math.abs(p.scale - d.s0) > 1e-4) {
+        onOverlayChange?.(d.id, { x: p.x, y: p.y, scale: p.scale })
+      } else {
+        pendRef.current = null
+        setPend(null)
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const aoTeclarNoPalco = (e: React.KeyboardEvent) => {
+    if (!selOverlay) return
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // stopPropagation aqui é o que impede o Delete da timeline de agir junto
+      e.preventDefault(); e.stopPropagation()
+      onOverlayDelete?.(selOverlay); setSelOverlay(null)
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation(); setSelOverlay(null)
+    }
+  }
 
   const enterStill = useCallback((clip: Clip, offset: number) => {
     stillRef.current = { clip, perfStart: performance.now(), offset0: offset }
@@ -380,8 +493,13 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
 
   return (
     <div className="flex flex-col gap-2 h-full min-h-0">
-      <div ref={palco} className="relative flex-1 min-h-0 bg-black rounded-lg
-                      overflow-hidden border border-line">
+      <div ref={palco} tabIndex={0}
+           className="relative flex-1 min-h-0 bg-black rounded-lg
+                      overflow-hidden border border-line focus:outline-none"
+           onKeyDown={aoTeclarNoPalco}
+           onMouseDown={(e) => {
+             if (!(e.target as HTMLElement).closest?.('[data-ov]')) setSelOverlay(null)
+           }}>
         {/* a MOLDURA do quadro: exatamente o retângulo da imagem, com
             overflow escondido. É ela que transforma o scale do zoom em
             RECORTE — sem ela o vídeo parecia crescer sobre as tarjas em vez
@@ -514,6 +632,50 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             </div>
           )
         })()}
+        {box.height > 0 && !stillClip && ovAtivos.map((o: any) => {
+          const g = geo(o)
+          const sel = o.id === selOverlay
+          return (
+            <div key={o.id} data-ov="1"
+                 className={`absolute select-none ${sel
+                   ? 'border-2 border-accent'
+                   : 'border border-dashed border-white/40 hover:border-white/80'}`}
+                 style={{ left: g.left, top: g.top, width: g.width, height: g.height,
+                          cursor: ovDrag.current?.modo === 'move' ? 'grabbing' : 'grab' }}
+                 title="arraste para mover · o canto redimensiona · Delete apaga"
+                 onMouseDown={(e) => iniciarArrasto(e, o, 'move')}>
+              {sel && (
+                <>
+                  <span className="absolute -top-5 left-0 chip border-accent/60 text-accent
+                                   bg-ink-900/90 text-[10px] whitespace-nowrap">
+                    {g.nome} · {Math.round(g.scale * 100)}%
+                  </span>
+                  <button className="absolute -top-5 right-0 chip border-red-800/70
+                                     text-red-300 bg-ink-900/90 text-[10px]"
+                          title="tira esta sobreposição do vídeo (Delete)"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOverlayDelete?.(o.id); setSelOverlay(null)
+                          }}>×</button>
+                  <div data-ov="1"
+                       className="absolute -right-1.5 -bottom-1.5 w-3 h-3 bg-accent
+                                  rounded-sm cursor-nwse-resize"
+                       onMouseDown={(e) => iniciarArrasto(e, o, 'scale')} />
+                </>
+              )}
+            </div>
+          )
+        })}
+        {cutAtivo && !stillClip && (
+          <span className="absolute top-1.5 right-1.5 chip border-violet-700/70
+                           text-violet-200 bg-ink-900/90 flex items-center gap-1">
+            cobertura: {(media ?? []).find((m) => m.id === cutAtivo.media_id)?.name ?? 'vídeo'}
+            <button className="text-red-300 hover:text-red-200 font-bold px-1"
+                    title="tira esta cobertura do vídeo (o áudio original continua)"
+                    onClick={() => onCutawayDelete?.(cutAtivo.id)}>×</button>
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-xs">

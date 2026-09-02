@@ -42,6 +42,7 @@ FOLGA = 0.04             # respiro em volta da palavra, antes do snap
 # quem julga é a IA. As três travas abaixo saíram de medição, não de opinião.
 MAX_COPY = 0.25          # no máximo um quarto do vídeo sai por julgamento
 VALE_MIN = 0.12          # o corte precisa de 120 ms de vale onde se esconder
+VALE_FRACO = 0.06        # ...mas a MULETA aceita 60 ms de um lado, se o outro tem vale
 JANELA_VALE = 0.25       # e ele é procurado nesta janela em volta da borda
 GANCHO = 8.0             # os primeiros segundos são intocáveis...
 GANCHO_FRACAO = 0.15     # ...mas nunca mais que isto do vídeo
@@ -430,7 +431,9 @@ def aplicar(words: list[dict], resposta: dict, env=None,
 
     takes: list[dict] = []
     gasto_copy = 0
+    palavras_removidas = 0
     for f in faixas:
+        nota = ""
         bloco = words[f["de"]:f["ate"] + 1]
         texto = " ".join(str(w.get("text", "")).strip() for w in bloco)
         t0, t1 = float(bloco[0]["start"]), float(bloco[-1]["end"])
@@ -451,14 +454,23 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                     "motivo": "muleta é palavra, não frase — faixa grande "
                               "demais para tirar como vício"})
                 continue
+            # A muleta ("então", "né", "tipo") vive DENTRO da fala corrida: quase
+            # nunca tem 120 ms de respiro dos dois lados, e com a mesma trava
+            # do corte de copy ela nunca saía — o usuário via o "então" na tela
+            # e a IA dizendo que tinha pedido para tirar. A muleta é curta e a
+            # emenda dela é pequena: basta um lado com vale de verdade e o
+            # outro com um respiro mínimo para o fade de 12 ms esconder.
             va, vb = _tem_vale(env, t0), _tem_vale(env, t1)
-            if min(va, vb) < VALE_MIN:
+            if max(va, vb) < VALE_MIN or min(va, vb) < VALE_FRACO:
                 recusadas.append({
                     "o_que": texto[:40],
                     "motivo": f"a muleta está colada na fala ({min(va, vb)*1000:.0f} ms "
-                              f"de respiro; preciso de {VALE_MIN*1000:.0f}). Tirar "
-                              f"daqui picota a frase"})
+                              f"de respiro; preciso de {VALE_MIN*1000:.0f} de um lado "
+                              f"e {VALE_FRACO*1000:.0f} do outro). Tirar daqui "
+                              f"picota a frase"})
                 continue
+            if min(va, vb) < VALE_MIN:
+                nota = " (emenda apertada: pouco respiro de um lado)"
 
         if copy:
             # 1) o gancho não se toca
@@ -494,12 +506,13 @@ def aplicar(words: list[dict], resposta: dict, env=None,
             "clap_id": None,
             "clap_time": None,
             "text": texto[:400],
-            "reason": f["motivo"] or ("a IA achou que atrapalha" if copy
-                                      else "muleta que não faz falta" if vicio
-                                      else "a IA marcou como refeito"),
+            "reason": (f["motivo"] or ("a IA achou que atrapalha" if copy
+                                       else "muleta que não faz falta" if vicio
+                                       else "a IA marcou como refeito")) + nota,
             "source": "ia_copy" if copy else "ia_vicio" if vicio else "ia",
             "restored": False,
         })
+        palavras_removidas += f["ate"] - f["de"] + 1
     # O RITMO e a CÂMERA voltam em FAIXAS DE TEMPO, não em números.
     #
     # A tentação era pedir a velocidade e o zoom prontos ao modelo. Isso
@@ -529,7 +542,10 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                 "refeito": sum(1 for t in takes if t["source"] == "ia"),
                 "copy": sum(1 for t in takes if t["source"] == "ia_copy"),
                 "vicio": sum(1 for t in takes if t["source"] == "ia_vicio"),
-                "palavras_fora": sum(f["ate"] - f["de"] + 1 for f in faixas),
+                # o que SAIU de verdade — antes era a soma do que a IA
+                # propôs, e "0 de copy fora (56 palavras)" não fechava
+                "palavras_fora": palavras_removidas,
+                "palavras_propostas": sum(f["ate"] - f["de"] + 1 for f in faixas),
                 "propostos": len(faixas),
                 "recusados": len(recusadas),
                 "secoes": len(secoes),

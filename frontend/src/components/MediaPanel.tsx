@@ -98,6 +98,25 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                     {hdr && <span className="text-amber-400"> · HDR</span>}
                   </p>
                 )}
+                {(() => {
+                  // A MÍDIA ANEXADA JÁ ESTÁ NO VÍDEO: o clique único a posiciona
+                  // (pela IA, ou pelo programa). Sem dizer isso aqui, os botões
+                  // de baixo liam como "ainda falta inserir" — e o usuário
+                  // inseria de novo, em cima do que já tinha entrado.
+                  const usos = [
+                    ...view.cutaways.filter((c: any) => c.media_id === m.id)
+                      .map((c: any) => c.out_start),
+                    ...(view.overlays ?? []).filter((o: any) => o.media_id === m.id)
+                      .map((o: any) => o.out_start),
+                  ].sort((a: number, b: number) => a - b)
+                  return usos.length ? (
+                    <p className="text-[10px] text-emerald-300 mt-1 leading-snug">
+                      ✓ já está no vídeo em {usos.map((t: number) => timecode(t)).join(', ')}
+                      {' '}— arraste ou apague em cima da prévia; os botões abaixo
+                      põem outra vez
+                    </p>
+                  ) : null
+                })()}
                 {hdr && !mainHdr && (
                   <p className="text-[10px] text-amber-400/90 mt-1 leading-snug">
                     HLG/BT.2020 detectado. O tonemap para BT.709 entra automaticamente —

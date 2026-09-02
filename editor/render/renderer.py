@@ -494,7 +494,8 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     if overlays:
         ov_graph, ov_inputs = F.overlay_chain(
             overlays, media_paths, seg.t_start, width, height,
-            first_input_index=1, tag_in=cur_tag, tag_out="__vo")
+            first_input_index=1, tag_in=cur_tag, tag_out="__vo",
+            ref_height=main.display_size[1])
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
@@ -646,6 +647,9 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "aspect": aspecto_do_export(plan.export),
         "export": plan.export.__dict__,
         "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
+        # a régua do tamanho das sobreposições (altura da fonte): entrou na
+        # chave quando a fórmula passou a escalar pela altura da saída
+        "ov_ref": main.display_size[1] if seg_overlays else None,
         "hw": hw, "size": target_size(main, plan.export),
         "fps": fps_de_saida(main, plan.export),
     })

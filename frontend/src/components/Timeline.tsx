@@ -55,6 +55,20 @@ export default function Timeline(props: Props) {
   const [start, setStart] = useState(0)
   const [size, setSize] = useState({ w: 800, h: 220 })
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
+  // O CORTE SELECIONADO. Clicar dentro de um trecho removido (vermelho) o
+  // seleciona: Delete devolve o trecho ao vídeo, e os botões da barra colam
+  // ou afastam o corte da fala em passos de 80 ms. É o retoque leve que o
+  // usuário pediu — "cliquei no que a IA (ou o programa) tirou e resolvo" —
+  // sem precisar achar a alça de 3 px na borda.
+  const [selRemoved, setSelRemoved] = useState<{ start: number; end: number } | null>(null)
+  useEffect(() => {
+    // o trecho mudou de forma (ou voltou ao vídeo): a seleção não descreve
+    // mais nada
+    if (!selRemoved) return
+    const existe = (view.removed ?? []).some((r) =>
+      Math.abs(r.start - selRemoved.start) < 0.02 && Math.abs(r.end - selRemoved.end) < 0.02)
+    if (!existe) setSelRemoved(null)
+  }, [view.removed, selRemoved])
   const drag = useRef<{ mode: string; t0: number; x0: number; s0: number
                         cueId?: string } | null>(null)
   const [subDrag, setSubDrag] = useState<
@@ -269,13 +283,22 @@ export default function Timeline(props: Props) {
         g.fillRect(x0, yWave, 3, ROW.wave)
         g.fillRect(x1 - 3, yWave, 3, ROW.wave)
       }
+      const escolhido = selRemoved && Math.abs(selRemoved.start - r.start) < 0.02
+        && Math.abs(selRemoved.end - r.end) < 0.02
       if (x1 - x0 < 3) {
-        g.fillStyle = 'rgba(239,120,120,0.85)'
-        g.fillRect(x0, yWave + ROW.wave - CUT_BAR, Math.max(1, x1 - x0), CUT_BAR)
+        g.fillStyle = escolhido ? '#38bdf8' : 'rgba(239,120,120,0.85)'
+        g.fillRect(x0 - (escolhido ? 1 : 0), yWave + ROW.wave - CUT_BAR,
+                   Math.max(escolhido ? 3 : 1, x1 - x0), CUT_BAR)
         continue
       }
       drawGone(x0, x1, 'rgba(127,29,29,0.22)', 'rgba(220,120,120,0.55)',
                r.reason === 'silencio' ? 'silêncio cortado' : 'trecho removido')
+      if (escolhido) {
+        g.strokeStyle = '#38bdf8'
+        g.lineWidth = 2
+        g.strokeRect(x0 + 1, yWave + 1, Math.max(2, x1 - x0 - 2), ROW.wave - 2)
+        g.lineWidth = 1
+      }
     }
     for (const take of view.takes ?? []) {
       if (take.restored) continue
@@ -460,7 +483,7 @@ export default function Timeline(props: Props) {
         g.beginPath(); g.moveTo(x + 3, yMarks + 8); g.lineTo(x - 9, yMarks + 2); g.stroke()
       }
     }
-  }, [size, height, start, span, envelope, wavePeaks, view, selectedClip,
+  }, [size, height, start, span, envelope, wavePeaks, view, selectedClip, selRemoved,
       subsOnSource, subDrag, redDrag, itemDrag, dropAlvo, bands, extras, toX,
       outputToSourceT, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
       ySubs, yTracks])
@@ -639,6 +662,21 @@ export default function Timeline(props: Props) {
                      side: melhor.side, t })
         return
       }
+      // dentro do vermelho: seleciona o corte. Corte estreito (1 px na régua
+      // de baixo) ganha 4 px de folga de cada lado, senão não há como clicar.
+      const dentro = (view.removed ?? []).find((r) => {
+        if (r.reason === 'palma') return false
+        const a = toX(r.start); const b = toX(r.end)
+        const folga = b - a < 8 ? 4 : 0
+        return x >= a - folga && x <= b + folga
+      })
+      if (dentro) {
+        setSelRemoved({ start: dentro.start, end: dentro.end })
+        setState({ selection: null, selectedClip: null })
+        const out = sourceToOutput(dentro.start, view.blocks)
+        if (out != null) setPlayhead(out)
+        return
+      }
     }
     if (y >= ySubs && y < ySubs + ROW.subs && !e.altKey) {
       let best: { id: string; side: 'start' | 'end'; d: number } | null = null
@@ -661,6 +699,7 @@ export default function Timeline(props: Props) {
     if (y >= ySections && y < yBlocks + ROW.blocks) {
       const block = view.blocks.find((b) =>
         b.source === 'main' && t >= b.src_start && t <= b.src_end)
+      setSelRemoved(null)
       setState({ selectedClip: block?.id ?? null })
       if (block) {
         const out = sourceToOutput(t, view.blocks)
@@ -668,6 +707,7 @@ export default function Timeline(props: Props) {
       }
       return
     }
+    setSelRemoved(null)
     drag.current = { mode: 'select', t0: t, x0: x, s0: start }
     setState({ selection: { start: t, end: t } })
   }
@@ -754,10 +794,17 @@ export default function Timeline(props: Props) {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
       if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable) return
+      if (e.key === 'Escape' && selRemoved) { setSelRemoved(null); return }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       if (selection) {
         e.preventDefault()
         props.onDeleteSelection()
+      } else if (selRemoved) {
+        // Delete em cima de um corte DEVOLVE o trecho: apagar o que foi
+        // apagado é trazer de volta
+        e.preventDefault()
+        props.onRestore(selRemoved.start, selRemoved.end)
+        setSelRemoved(null)
       } else if (selectedClip) {
         // sem área marcada, Delete apaga o BLOCO clicado — é o gesto do CapCut
         e.preventDefault()
@@ -766,7 +813,7 @@ export default function Timeline(props: Props) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selection, selectedClip, props])
+  }, [selection, selectedClip, selRemoved, props])
 
   const hoveredRemoved = hover
     ? (view.removed ?? []).find((r) => hover.t >= r.start && hover.t <= r.end)
@@ -816,7 +863,39 @@ export default function Timeline(props: Props) {
             recuperar este take
           </button>
         )}
-        {hoveredRemoved && !hoveredTake && hoveredRemoved.reason !== 'palma' && (
+        {selRemoved && (
+          <span className="flex items-center gap-1">
+            <span className="text-accent">
+              corte de {(selRemoved.end - selRemoved.start).toFixed(2)} s
+            </span>
+            <button className="btn btn-xs btn-primary"
+                    title="devolve este trecho ao vídeo (Delete)"
+                    onClick={() => {
+                      props.onRestore(selRemoved.start, selRemoved.end)
+                      setSelRemoved(null)
+                    }}>devolver</button>
+            <button className="btn btn-xs"
+                    title="deixa 80 ms a mais de ar de cada lado (o corte encolhe)"
+                    onClick={() => {
+                      const d = Math.min(0.08, (selRemoved.end - selRemoved.start - 0.05) / 2)
+                      if (d <= 0.005) return
+                      props.onResizeRemoved(selRemoved.start, selRemoved.end,
+                                            selRemoved.start + d, selRemoved.end - d)
+                      setSelRemoved({ start: selRemoved.start + d, end: selRemoved.end - d })
+                    }}>◂ respira</button>
+            <button className="btn btn-xs"
+                    title="cola o corte 80 ms mais perto da fala, dos dois lados (o corte cresce)"
+                    onClick={() => {
+                      const a = Math.max(0, selRemoved.start - 0.08)
+                      const b = selRemoved.end + 0.08
+                      props.onResizeRemoved(selRemoved.start, selRemoved.end, a, b)
+                      setSelRemoved({ start: a, end: b })
+                    }}>cola ▸</button>
+            <button className="btn btn-xs" title="desmarcar (Esc)"
+                    onClick={() => setSelRemoved(null)}>×</button>
+          </span>
+        )}
+        {hoveredRemoved && !hoveredTake && !selRemoved && hoveredRemoved.reason !== 'palma' && (
           <button className="btn btn-xs"
                   onClick={() => props.onRestore(hoveredRemoved.start, hoveredRemoved.end)}>
             recuperar trecho

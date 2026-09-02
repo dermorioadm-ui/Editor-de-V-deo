@@ -874,15 +874,34 @@ def enriquecer(project: Project, ctx) -> dict:
     quer_cartao = bool(db.get_setting("ia_cartoes", True))
     if not midias and not quer_cartao:
         return {"ok": False, "pulada": True, "motivo": "nada para posicionar"}
+
+    # SEM IA, O ANEXO ENTRA ASSIM MESMO. O usuário anexou a mídia na primeira
+    # tela para ela SAIR no vídeo — não para achá-la num painel depois com um
+    # botão de "inserir". Sem chave (ou com a IA fora do ar) quem posiciona é
+    # o programa: pelas palavras da descrição contra a fala, e na falta delas
+    # espalhada no meio do vídeo. Só o cartão precisa mesmo da IA, porque é
+    # ela quem escreve as palavras dele.
+    def pelo_programa(motivo: str) -> dict:
+        if not midias:
+            return {"ok": False, "pulada": True, "motivo": motivo}
+        ctx.stage("anexos", f"posicionando {len(midias)} mídia(s) pela regra do "
+                            f"programa ({motivo})")
+        r = aplicar_plano_da_ia(
+            project, {"leitura": "", "blocos": [], "anexos": [], "cartoes": []},
+            so_anexos=True)
+        ctx.progress(1.0, f"{len(r.get('anexos') or [])} anexo(s) no lugar, "
+                          f"sem a IA ({motivo})")
+        return {"ok": True, "sem_ia": True, "motivo": motivo, **r}
+
     if not gemini.chave_guardada():
-        return {"ok": False, "pulada": True, "motivo": "sem chave do Gemini"}
+        return pelo_programa("sem chave do Gemini")
     ctx.stage("anexos", f"posicionando {len(midias)} mídia(s) e escrevendo "
                         f"os cartões")
     try:
         plano = plano_da_ia(project, ctx, com_anexos=bool(midias))
-    except Exception as exc:  # noqa: BLE001 — o vídeo sai sem isso
-        ctx.progress(1.0, f"não deu para posicionar os anexos ({exc})")
-        return {"ok": False, "erro": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — o vídeo sai sem a IA, não sem os anexos
+        ctx.progress(0.5, f"a IA não respondeu ({exc}); os anexos entram pela regra")
+        return pelo_programa(f"a IA não respondeu: {exc}")
     r = aplicar_plano_da_ia(project, plano.get("plano") or plano, so_anexos=True)
     ctx.progress(1.0, f"{len(r.get('anexos') or [])} anexo(s) e "
                       f"{len(r.get('cartoes') or [])} cartão(ões) no lugar")
@@ -1431,7 +1450,13 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
               if m.get("kind") in ("video", "image")]
     if so_anexos:
         plano = {k: v for k, v in plano.items() if k != "blocos"}
-    relatorio = roteiro.aplicar(plan, plano, midias, duracao_de_saida(project))
+    palavras = project.analysis.get("words") or []
+    blocos = roteiro.blocos_do_plano(plan, palavras) if palavras else []
+    # `completar` só no caminho automático: é a regra da impressora — toda
+    # mídia anexada sai no vídeo, posicionada pela IA ou, na falta, pelo
+    # programa. Na aplicação manual o usuário está olhando item a item.
+    relatorio = roteiro.aplicar(plan, plano, midias, duracao_de_saida(project),
+                                blocos=blocos, completar=so_anexos)
 
     for a in relatorio["anexos"]:
         if a["tipo"] == "cobertura":

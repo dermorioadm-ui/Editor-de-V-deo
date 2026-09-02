@@ -1140,8 +1140,15 @@ bloco a bloco, e responde três coisas:
    revelação, prova, monetização, oferta, garantia, CTA.
 2. **Onde o ritmo pede um plano mais fechado** — o pico da argumentação fecha,
    o respiro abre, e a alternância é o que dá dinâmica.
-3. **Onde cada anexo seu entra** e por quanto tempo, se você marcar a caixa
-   dos anexos.
+3. **Onde cada anexo seu entra** e por quanto tempo. **Toda mídia que você
+   anexou na primeira tela sai no vídeo, exatamente uma vez** — você anexou
+   de propósito. A IA diz o bloco; o que ela deixar de fora (ou errar) o
+   programa posiciona sozinho: pelas palavras da sua descrição contra a fala
+   e, na falta delas, espalhado no meio do vídeo, nunca no gancho. Isso vale
+   até **sem chave da IA** — só o cartão de tópico precisa dela, porque é ela
+   quem escreve as palavras. Depois, em cima da própria prévia, você
+   **arrasta** a sobreposição, **redimensiona** pelo canto e **apaga** com
+   Delete; uma cobertura vira um chip com × no canto do vídeo.
 
 O que ela **não** faz: escolher tempo de corte, valor de zoom, posição em
 pixels, ou mexer em qualquer coisa sozinha. Ela responde por *índice de bloco*
@@ -1154,7 +1161,12 @@ enquadramento pela tabela `SECTIONS`, com as mesmas seis invariantes de
 0,05, teto pela resolução da fonte, âncora alcançável, bloco travado
 intocado). O anexo passa inteiro por `editor/anexos.py`. **Se a sugestão não
 couber, ela é recusada com o motivo escrito na tela** — nunca aplicada pela
-metade.
+metade — e a mídia recusada entra assim mesmo, pela regra do programa.
+
+E o que a automação tirou você resolve **clicando no vermelho** da linha do
+tempo: o corte fica selecionado, Delete devolve o trecho, e os botões
+**◂ respira** / **cola ▸** afastam ou colam o corte na fala em passos de 80 ms
+— o mesmo vocabulário do controle de corte, agora por trecho.
 
 Um bloco que **você** travou é intocável para a IA, e isso aparece na lista de
 recusas.
