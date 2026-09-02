@@ -61,7 +61,8 @@ def chave_guardada() -> str:
     return (os.environ.get("EDITOR_GEMINI_KEY", "").strip()
             or str(db.get_setting("gemini_api_key", "") or "").strip())
 
-_modelos: dict[str, Any] = {"quando": 0.0, "lista": []}
+# cache da lista de modelos, um por método (generateContent, predictLongRunning)
+_modelos: dict[str, dict[str, Any]] = {}
 
 
 class ErroDaIA(RuntimeError):
@@ -161,13 +162,19 @@ def _post(chave: str, caminho: str, corpo: dict) -> dict:
     raise ultimo or ErroDaIA("não consegui falar com o Gemini.")
 
 
-def listar_modelos(chave: str, forcar: bool = False) -> list[dict]:
-    """Os modelos que ESTA chave pode usar para generateContent."""
+def listar_modelos(chave: str, forcar: bool = False,
+                   metodo: str = "generateContent") -> list[dict]:
+    """Os modelos que ESTA chave pode usar para ``metodo``.
+
+    ``generateContent`` é o texto (e a imagem, no Nano Banana);
+    ``predictLongRunning`` é o vídeo (Veo).
+    """
     import httpx
 
     agora = time.time()
-    if not forcar and _modelos["lista"] and agora - _modelos["quando"] < CACHE_MODELOS:
-        return _modelos["lista"]
+    cache = _modelos.setdefault(metodo, {"quando": 0.0, "lista": []})
+    if not forcar and cache["lista"] and agora - cache["quando"] < CACHE_MODELOS:
+        return cache["lista"]
     with _cliente(chave) as c:
         try:
             r = c.get(f"{BASE}/models", params={"pageSize": 200})
@@ -178,7 +185,7 @@ def listar_modelos(chave: str, forcar: bool = False) -> list[dict]:
         dados = r.json()
     saida = []
     for m in dados.get("models", []) or []:
-        if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+        if metodo not in (m.get("supportedGenerationMethods") or []):
             continue
         saida.append({
             "id": str(m.get("name", "")).removeprefix("models/"),
@@ -186,7 +193,7 @@ def listar_modelos(chave: str, forcar: bool = False) -> list[dict]:
             "entrada": int(m.get("inputTokenLimit") or 0),
             "saida": int(m.get("outputTokenLimit") or 0),
         })
-    _modelos.update({"quando": agora, "lista": saida})
+    cache.update({"quando": agora, "lista": saida})
     return saida
 
 

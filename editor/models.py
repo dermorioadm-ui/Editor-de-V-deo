@@ -148,12 +148,19 @@ class Cutaway:
 
 @dataclass
 class Overlay:
-    """PNG com transparência sobre a linha do tempo de saída (Parte 8)."""
+    """Uma JANELA por cima do vídeo — PNG, foto ou VÍDEO (picture-in-picture).
+
+    O elemento aparece numa caixa que o usuário arrasta e redimensiona em cima
+    da prévia, como no Canva ou no CapCut. A fala principal continua por
+    baixo: um vídeo aqui entra SEM o áudio dele. ``media_start`` é o ponto de
+    entrada dentro da mídia (só faz sentido para vídeo).
+    """
 
     id: str = field(default_factory=lambda: new_id("o_"))
     media_id: str = ""
     out_start: float = 0.0
     out_end: float = 3.0
+    media_start: float = 0.0
     x: float = 0.5                  # 0..1 relativo à largura (centro do PNG)
     y: float = 0.25                 # 0..1 relativo à altura
     scale: float = 1.0

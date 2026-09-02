@@ -85,9 +85,11 @@ Quando o usuário anexou mídias (vídeos e imagens), TODAS entram no vídeo,
 cada uma exatamente uma vez — ele anexou de propósito, para valorizar o
 anúncio. Sua tarefa é dizer em QUE BLOCO cada uma entra: o bloco em que a
 fala trata do que a mídia mostra, ou do que o usuário escreveu sobre ela.
-Vídeo entra como "cobertura" (a imagem dele cobre a tela e a voz continua por
-baixo — é como se mostra uma gravação de tela enquanto se explica). Imagem
-entra como "sobreposicao" (aparece por cima do vídeo). Se nenhum bloco falar
+Vídeo e imagem entram como "sobreposicao": uma JANELA por cima do vídeo
+(picture-in-picture), com quem fala continuando visível e a voz continuando
+por baixo — o usuário depois arrasta e redimensiona a janela na prévia. Use
+"cobertura" (a mídia cobre a tela inteira, a voz continua) SOMENTE quando o
+que o usuário escreveu sobre a mídia pedir tela cheia. Se nenhum bloco falar
 exatamente daquilo, escolha o mais próximo do assunto. Nunca devolva a lista
 de anexos vazia havendo mídia na lista.
 
@@ -185,8 +187,9 @@ def montar_pedido(blocos: list[Bloco], midias: list[dict],
             "Quando houver 'O USUÁRIO DIZ', OBEDEÇA: é ele quem sabe o que o "
             "arquivo é e onde quer. O quadro serve para você conferir o "
             "enquadramento, não para discordar da intenção dele.",
-            "Vídeo entra como 'cobertura' (cobre a imagem, a voz continua por "
-            "baixo). Imagem entra como 'sobreposicao' (aparece por cima).",
+            "Tudo entra como 'sobreposicao' (uma janela por cima do vídeo, quem "
+            "fala continua visível). 'cobertura' (tela cheia) SÓ quando 'O "
+            "USUÁRIO DIZ' pedir tela cheia.",
             f"Entre {MIN_ANEXO:.0f} e {MAX_ANEXO:.0f} segundos. Uma mídia por "
             "bloco. TODA mídia da lista entra, exatamente uma vez: se nenhum "
             "bloco fala exatamente daquilo, escolha o mais próximo do assunto.",
@@ -298,7 +301,17 @@ def aplicar(plan, resposta: dict, midias: list[dict],
         if quantos >= len(midias):
             break
         tipo = str(item.get("tipo", "")).strip()
-        esperado = "video" if tipo == "cobertura" else "image"
+        if tipo not in TIPOS:
+            tipo = "sobreposicao"
+        notas: list[str] = []
+        # TELA CHEIA SÓ QUANDO O USUÁRIO PEDE. A IA gostava de "cobertura":
+        # o vídeo do usuário sumia atrás da gravação de tela e ele não tinha
+        # como mexer — janela ele arrasta, encolhe e apaga na prévia.
+        if tipo == "cobertura" and not pede_tela_cheia(m):
+            tipo = "sobreposicao"
+            notas.append("entrou como janela por cima do vídeo; só cobre a "
+                         "tela inteira quando a descrição pede tela cheia")
+        esperado = "video" if tipo == "cobertura" else "any"
         inicio = _inicio_na_saida(plan, bloco)
         segundos = max(MIN_ANEXO, min(MAX_ANEXO, segundos))
         try:
@@ -316,7 +329,7 @@ def aplicar(plan, resposta: dict, midias: list[dict],
                          "out_start": janela.out_start, "out_end": janela.out_end,
                          "nome": m.get("name", ""),
                          "porque": str(item.get("porque", ""))[:120],
-                         "ajustes": janela.ajustes})
+                         "ajustes": notas + janela.ajustes})
         quantos += 1
 
     if completar:
@@ -359,6 +372,22 @@ def _bloco_por_palavras(midia: dict, textos: dict, elegiveis: list):
     return melhor if pontos > 0 else None
 
 
+# O que, na descrição, pede que a mídia cubra a tela inteira em vez de entrar
+# como janela. Sem isso na descrição, TUDO é janela: é o que se arrasta e
+# redimensiona na prévia.
+_TELA_CHEIA = ("tela cheia", "tela inteira", "cobre a tela", "cobrindo a tela",
+               "cobre o video", "no lugar do video", "substitui o video",
+               "fullscreen", "full screen", "cobertura")
+
+
+def pede_tela_cheia(midia: dict) -> bool:
+    """A descrição do usuário pede tela cheia? Imagem nunca cobre a tela."""
+    if midia.get("kind") != "video":
+        return False
+    texto = _sem_acento(str(midia.get("descricao") or "").lower())
+    return any(p in texto for p in _TELA_CHEIA)
+
+
 def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
                       duracao_saida: float, recusados: list[dict]) -> list[dict]:
     """Posiciona o que ficou de fora. O usuário anexou; o vídeo sai com tudo.
@@ -366,7 +395,8 @@ def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
     Ordem de preferência para o lugar: (1) o bloco cuja fala repete as
     palavras da descrição; (2) espalhado — a k-ésima de n mídias cai em
     (k+1)/(n+1) do vídeo. Nunca no gancho (os primeiros 8 s ou 15%) e nunca
-    nos últimos 2 s. Cobertura não pode cair em cima de outra cobertura.
+    nos últimos 2 s. Tudo entra como JANELA por cima do vídeo; cobertura
+    (tela cheia) só quando a descrição pede, e nunca em cima de outra.
     Mídia que já está no vídeo (de uma rodada anterior) não entra de novo.
     """
     from .. import anexos
@@ -393,7 +423,7 @@ def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
 
     saida: list[dict] = []
     for k, m in enumerate(faltam):
-        tipo = "cobertura" if m.get("kind") == "video" else "sobreposicao"
+        tipo = "cobertura" if pede_tela_cheia(m) else "sobreposicao"
         dur_m = float((m.get("info") or {}).get("duration") or 0.0)
         segundos = max(MIN_ANEXO, min(MAX_ANEXO, dur_m if dur_m > 0 else 4.0))
         pela_palavra = _bloco_por_palavras(m, textos, elegiveis)
@@ -406,17 +436,22 @@ def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
             inicio = cand[1]
             try:
                 midia = anexos.validar(midias, m["id"],
-                                       "video" if tipo == "cobertura" else "image")
+                                       "video" if tipo == "cobertura" else "any")
                 janela = anexos.encaixar(midia, inicio, inicio + segundos,
                                          limite=duracao_saida)
                 if tipo == "cobertura":
                     anexos.sem_sobreposicao(plan.cutaways, janela.out_start,
                                             janela.out_end)
-                    for a in ja + saida:
-                        if a["tipo"] == "cobertura" and (
-                                min(janela.out_end, a["out_end"])
-                                - max(janela.out_start, a["out_start"]) > 0.02):
-                            raise anexos.AnexoInvalido("colide com outro anexo")
+                # DOIS ANEXOS NO MESMO INSTANTE, NÃO. Duas janelas nascem no
+                # mesmo canto do quadro: sobrepostas no tempo, uma tapa a
+                # outra. E cobertura em cima de cobertura o render descarta
+                # calado. Então o programa procura outro bloco livre.
+                ocupados = [(a["out_start"], a["out_end"]) for a in ja + saida]
+                ocupados += [(o.out_start, o.out_end) for o in plan.overlays
+                             if getattr(o, "enabled", True)]
+                for a0, a1 in ocupados:
+                    if min(janela.out_end, a1) - max(janela.out_start, a0) > 0.02:
+                        raise anexos.AnexoInvalido("colide com outro anexo")
             except anexos.AnexoInvalido:
                 continue
             colocado = {

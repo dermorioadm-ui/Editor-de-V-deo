@@ -98,6 +98,28 @@ def wrap(text: str, max_chars: int, max_lines: int) -> list[str] | None:
     return lines
 
 
+def requebrar(text: str, max_chars: int, max_lines: int) -> str:
+    """Refaz a quebra de um texto já pronto para OUTRA régua de caracteres.
+
+    É o que salva a legenda do formato DERIVADO: as legendas nascem quebradas
+    para a régua da fonte (42 caracteres no horizontal) e o vertical só cabe
+    24 — o ASS sai com WrapStyle 2 (sem quebra automática), então a linha
+    passava da tela e era cortada nas laterais. Se o texto não cabe em
+    ``max_lines`` linhas, aceita até duas linhas a mais: legenda alta é
+    legível, legenda cortada não.
+    """
+    plano = " ".join(str(text or "").split())
+    if not plano:
+        return str(text or "")
+    if all(len(l) <= max_chars for l in str(text).split("\n")):
+        return str(text)
+    for extra in range(0, 3):
+        linhas = wrap(plano, max_chars, max_lines + extra)
+        if linhas:
+            return "\n".join(linhas)
+    return "\n".join(wrap(plano, max_chars, 99) or [plano])
+
+
 def _balance(lines: list[str], max_chars: int) -> list[str]:
     """Evita uma linha cheia e outra com uma palavra só."""
     words = (lines[0] + " " + lines[1]).split()

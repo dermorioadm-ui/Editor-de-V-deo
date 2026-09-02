@@ -3,6 +3,7 @@ import FileBrowser from './FileBrowser'
 import TonemapCompare from './TonemapCompare'
 import PhotoPanel from './PhotoPanel'
 import Positioner from './Positioner'
+import GerarIA from './GerarIA'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { getPlayhead, toast, useStore } from '../state/store'
@@ -63,6 +64,9 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
 
   return (
     <div className="p-4 space-y-5 max-w-5xl">
+      <GerarIA projectId={project.id}
+               horizontal={(project.info?.display_width ?? 0) >= (project.info?.display_height ?? 1)}
+               onChanged={onChanged} snapshot={snapshot} />
       {/* --------------------------------------------------- biblioteca */}
       <section className="card p-3">
         <div className="flex items-center gap-2 mb-2">
@@ -154,6 +158,22 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                               }}>
                         inserir empurrando
                       </button>
+                      <button className="btn btn-xs" disabled={busy}
+                              title="o vídeo entra numa janela por cima do quadro (picture-in-picture), sem o áudio dele; a fala continua"
+                              onClick={async () => {
+                                snapshot()
+                                await api.addOverlay(project.id, {
+                                  media_id: m.id, out_start: getPlayhead(),
+                                  out_end: Math.min(view.duration,
+                                    getPlayhead() + Math.min(6, m.info?.duration ?? 5)),
+                                  media_start: 0,
+                                })
+                                await onChanged()
+                                toast('ok', 'Entrou como janela',
+                                  'Arraste, redimensione ou apague em cima da prévia. A fala continua por baixo.')
+                              }}>
+                        pôr como janela aqui
+                      </button>
                     </>
                   )}
                   {m.kind === 'image' && (
@@ -174,16 +194,17 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                       <button className="btn btn-xs" disabled={busy}
                               onClick={async () => {
                                 snapshot()
+                                // sem x/y/scale: o servidor põe no canto e no
+                                // tamanho de janela; o resto é arrastar na prévia
                                 await api.addOverlay(project.id, {
                                   media_id: m.id, out_start: getPlayhead(),
                                   out_end: getPlayhead() + 3,
-                                  x: safeZone?.anchor?.x ?? 0.5,
-                                  y: safeZone?.anchor?.y ?? 0.15,
                                 })
                                 await onChanged()
-                                toast('ok', 'Sobreposição criada na âncora do topo')
+                                toast('ok', 'Entrou como janela',
+                                  'Arraste, redimensione ou apague em cima da prévia.')
                               }}>
-                        sobrepor PNG
+                        pôr como janela aqui
                       </button>
                     </>
                   )}

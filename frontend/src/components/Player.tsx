@@ -3,6 +3,7 @@ import type { Clip, SubtitleCue } from '../types'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
+import PipVideo from './PipVideo'
 import { getState, setPlayhead, setState, usePlayhead, useStore } from '../state/store'
 
 interface Props {
@@ -42,7 +43,7 @@ interface Props {
   // caixas arrastáveis na própria prévia; a cobertura vira um chip com ×.
   overlays?: any[]
   cutaways?: any[]
-  media?: { id: string; name: string; info: any }[]
+  media?: { id: string; name: string; kind?: string; info: any }[]
   onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
   onOverlayDelete?: (id: string) => void
   onCutawayDelete?: (id: string) => void
@@ -100,8 +101,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const geo = (o: any) => {
     const p = pend && pend.id === o.id ? pend : o
     const m = (media ?? []).find((x) => x.id === o.media_id)
-    const mw = Number(m?.info?.width) || 400
-    const mh = Number(m?.info?.height) || 200
+    // display_*: um vídeo gravado em pé tem width/height trocados pela rotação
+    const mw = Number(m?.info?.display_width || m?.info?.width) || 400
+    const mh = Number(m?.info?.display_height || m?.info?.height) || 200
     const fw = (mw * p.scale) / fonteW
     const fh = (mh * p.scale) / fonteH
     return {
@@ -110,6 +112,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       width: Math.max(8, fw * box.width),
       height: Math.max(8, fh * box.height),
       nome: m?.name ?? 'sobreposição', x: p.x, y: p.y, scale: p.scale,
+      video: m?.kind === 'video',
     }
   }
   useEffect(() => {
@@ -644,6 +647,25 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                           cursor: ovDrag.current?.modo === 'move' ? 'grabbing' : 'grab' }}
                  title="arraste para mover · o canto redimensiona · Delete apaga"
                  onMouseDown={(e) => iniciarArrasto(e, o, 'move')}>
+              {/* O ELEMENTO DE VERDADE dentro da caixa — a imagem, ou o vídeo
+                  tocando em janela. Quando a prévia RENDERIZADA está no ar o
+                  elemento já vem queimado nela e só a caixa é desenhada;
+                  enquanto se arrasta, o elemento acompanha a mão. */}
+              {(!linear || pend?.id === o.id) && (
+                g.video
+                  ? <PipVideo src={api.mediaFileUrl(projectId, o.media_id)}
+                              t={(Number(o.media_start) || 0) + Math.max(0, playhead - o.out_start)}
+                              playing={playing}
+                              fallback={api.frameUrl(projectId,
+                                (Number(o.media_start) || 0)
+                                  + Math.floor(Math.max(0, playhead - o.out_start) * 2) / 2,
+                                o.media_id, 540)}
+                              opacity={o.opacity ?? 1} />
+                  : <img src={api.mediaFileUrl(projectId, o.media_id)} alt=""
+                         draggable={false}
+                         className="w-full h-full object-fill pointer-events-none select-none"
+                         style={{ opacity: o.opacity ?? 1 }} />
+              )}
               {sel && (
                 <>
                   <span className="absolute -top-5 left-0 chip border-accent/60 text-accent

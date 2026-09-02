@@ -204,6 +204,14 @@ export const api = {
     post<any>(`/api/projects/${id}/ai/comparar`, { modelos }),
   applyAiPlan: (id: string, plano: any) =>
     post<any>(`/api/projects/${id}/ai/apply`, { plano }),
+  // gerar imagem (Nano Banana) ou vídeo (Veo) e pôr como janela no cursor.
+  // É um JOB: a resposta é o job; a mídia aparece quando ele termina.
+  gerarIa: (id: string, payload: { tipo: 'image' | 'video'; prompt: string;
+                                   proporcao?: string; out_start?: number;
+                                   duracao?: number; duracao_video?: number;
+                                   colocar?: boolean }) =>
+    post<Job>(`/api/projects/${id}/ai/gerar`, payload),
+  mediaFileUrl: (id: string, mid: string) => `/api/projects/${id}/media/${mid}/file`,
 
   frameUrl: (id: string, t: number, source = 'main', width = 360, look = '') =>
     `/api/projects/${id}/frame?t=${t.toFixed(3)}&source=${source}&width=${width}`

@@ -312,6 +312,9 @@ def main() -> int:
     testar_anexo_sempre_entra()
     testar_sobreposicao_no_tamanho_da_previa()
     testar_muleta_sai_com_um_vale()
+    testar_janela_de_video()
+    testar_legenda_vertical_nao_corta()
+    testar_geracao_com_ia_mockada()
 
     print()
     if FALHAS:
@@ -1129,17 +1132,28 @@ def testar_anexo_nao_come_palavra() -> None:
         except AnexoInvalido as exc:
             check(esperado in str(exc), f"mídia '{alvo}' recusada: {exc}")
 
-    # 3) tipo trocado nos dois sentidos
+    # 3) imagem NUNCA cobre a tela; como JANELA ("any") entram imagem E vídeo
+    #    — o vídeo em janela é o picture-in-picture, lido com -ss/-t e sem áudio
     try:
         validar(midias, "i1", "video")
         check(False, "imagem como cobertura deveria ser recusada")
     except AnexoInvalido as exc:
         check("imagem" in str(exc), f"imagem não vira cobertura: {exc}")
+    check(validar(midias, "v1", "any")["id"] == "v1",
+          "vídeo entra como janela por cima do quadro")
+    check(validar(midias, "i1", "any")["id"] == "i1", "imagem também entra como janela")
     try:
-        validar(midias, "v1", "image")
-        check(False, "vídeo como sobreposição deveria ser recusado")
+        validar(midias + [{"id": "a1", "kind": "audio", "name": "som.mp3", "info": {}}],
+                "a1", "any")
+        check(False, "áudio como janela deveria ser recusado")
     except AnexoInvalido as exc:
-        check("vídeo" in str(exc), f"vídeo não vira sobreposição: {exc}")
+        check("imagem e vídeo" in str(exc), f"áudio não entra por cima do quadro: {exc}")
+    try:
+        validar([{"id": "v0", "kind": "video", "name": "quebrado.mp4", "info": {}}],
+                "v0", "any")
+        check(False, "vídeo sem duração legível deveria ser recusado")
+    except AnexoInvalido as exc:
+        check("duração" in str(exc), f"vídeo que o ffprobe não leu é recusado: {exc}")
 
     # 4) fora do vídeo
     try:
@@ -1351,14 +1365,20 @@ def testar_ia_opina_codigo_executa() -> None:
     check(any("nada" in r["motivo"] for r in rel["recusados"]),
           "e o excesso de ênfase é dito, não cortado calado")
 
-    # 4) anexos: a janela ENCOLHE para o que a mídia cobre; tipo errado e
-    #    mídia inexistente são recusados
-    check(len(rel["anexos"]) == 1, f"só um anexo entrou ({len(rel['anexos'])})")
-    a = rel["anexos"][0]
+    # 4) anexos: a janela ENCOLHE para o que a mídia cobre; a mídia que não
+    #    existe é recusada; "cobertura" sem 'tela cheia' na descrição vira
+    #    JANELA (para o vídeo E para a imagem — imagem nunca cobre a tela)
+    check(len(rel["anexos"]) == 2, f"os dois anexos reais entraram ({len(rel['anexos'])})")
+    a = next(x for x in rel["anexos"] if x["media_id"] == "mv")
     check(abs((a["out_end"] - a["out_start"]) - 2.0) < 0.01,
           f"os 5 s pedidos viraram os 2 s que a mídia tem "
           f"({a['out_end'] - a['out_start']:.1f} s)")
-    check("é uma imagem" in motivos, "imagem como cobertura recusada")
+    check(all(x["tipo"] == "sobreposicao" for x in rel["anexos"]),
+          "cobertura pedida pela IA sem 'tela cheia' na descrição entrou como janela")
+    check(all(any("janela" in aj for aj in x["ajustes"]) for x in rel["anexos"]),
+          "e cada um diz que virou janela")
+    check(any("não existe" in r["motivo"] for r in rel["recusados"]),
+          "mídia inexistente recusada")
     check("mídia 7 não existe" in motivos, "mídia inventada recusada")
 
     # 5) a etapa vira enquadramento pela tabela de sempre, não por número da IA
@@ -2722,7 +2742,8 @@ def testar_anexo_sempre_entra() -> None:
         {"id": "i1", "kind": "image", "name": "print.png",
          "info": {"width": 800, "height": 400}, "descricao": ""},
         {"id": "v2", "kind": "video", "name": "gravacao.mp4",
-         "info": {"duration": 20.0}, "descricao": ""},
+         "info": {"duration": 20.0},
+         "descricao": "gravação do painel, mostra em tela cheia"},
     ]
 
     # 1) a IA não disse nada sobre os anexos: com `completar`, TUDO entra
@@ -2736,9 +2757,9 @@ def testar_anexo_sempre_entra() -> None:
 
     # 2) a descrição casa com a fala: "cadastro no sistema" é o bloco 2 (6 s)
     v1 = next(a for a in rel["anexos"] if a["media_id"] == "v1")
-    check(abs(v1["out_start"] - 6.0) < 0.01 and v1["tipo"] == "cobertura",
-          f"o vídeo da tela de cadastro entrou no bloco que fala de cadastro "
-          f"({v1['out_start']:.1f} s, {v1['tipo']})")
+    check(abs(v1["out_start"] - 6.0) < 0.01 and v1["tipo"] == "sobreposicao",
+          f"o vídeo da tela de cadastro entrou no bloco que fala de cadastro, "
+          f"como JANELA ({v1['out_start']:.1f} s, {v1['tipo']})")
     check("descrição" in v1["porque"], "e o motivo diz que foi pela descrição")
     check(abs((v1["out_end"] - v1["out_start"]) - 4.0) < 0.01,
           f"e dura o que a mídia tem, 4 s ({v1['out_end'] - v1['out_start']:.1f})")
@@ -2755,8 +2776,24 @@ def testar_anexo_sempre_entra() -> None:
     v2 = next(a for a in rel["anexos"] if a["media_id"] == "v2")
     check(abs((v2["out_end"] - v2["out_start"]) - 6.0) < 0.01,
           f"mídia longa entra com o teto de 6 s ({v2['out_end'] - v2['out_start']:.1f})")
+    check(v2["tipo"] == "cobertura",
+          "só quem pediu 'tela cheia' na descrição cobre a tela")
     i1 = next(a for a in rel["anexos"] if a["media_id"] == "i1")
     check(i1["tipo"] == "sobreposicao", "imagem entra como sobreposição")
+
+    # 5b) a IA pede cobertura para um vídeo cuja descrição NÃO pede tela
+    #     cheia: vira janela, com o motivo escrito — o usuário quer arrastar
+    #     e encolher, não sumir atrás da gravação de tela
+    plan_b = EditPlan()
+    plan_b.clips = [Clip(src_start=float(k * 3), src_end=float(k * 3 + 3)) for k in range(10)]
+    rel_b = aplicar(plan_b, {"leitura": "", "anexos": [
+        {"midia": 0, "bloco": 2, "tipo": "cobertura", "segundos": 4.0, "porque": "x"}]},
+        midias, 30.0, blocos=blocos, completar=False)
+    check(len(rel_b["anexos"]) == 1 and rel_b["anexos"][0]["tipo"] == "sobreposicao",
+          "cobertura pedida pela IA sem 'tela cheia' na descrição vira janela")
+    check(any("janela" in a for a in rel_b["anexos"][0]["ajustes"]),
+          "e o ajuste é dito, não feito escondido")
+    check(not plan_b.cutaways, "nenhuma cobertura foi criada por conta da IA")
 
     # 6) na aplicação MANUAL (sem completar) nada entra sozinho
     rel2 = aplicar(plan, {"leitura": "", "anexos": []}, midias, 30.0,
@@ -2895,6 +2932,300 @@ def testar_muleta_sai_com_um_vale() -> None:
     # 200 ms de um lado e 30 ms do outro: abaixo do respiro mínimo, NÃO sai
     r3 = cenario(0.20, 0.03)
     check(not r3["takes"], "sem nem o respiro mínimo de um lado, não sai")
+
+
+def testar_janela_de_video() -> None:
+    """Vídeo como JANELA por cima do quadro (picture-in-picture).
+
+    Antes, só PNG entrava como sobreposição; vídeo era "cobertura" — cobria a
+    tela e o usuário sumia atrás da gravação de tela, sem ter como arrastar
+    nem encolher. Agora o vídeo entra na mesma caixa do PNG: lido com -ss no
+    ponto certo da mídia, -t só até o fim da janela e SEM o áudio dele — a
+    fala principal continua por baixo. Conferido no pixel.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan, Overlay
+    from editor.render.filters import overlay_chain
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    # 1) a descrição das entradas: vídeo com -ss no ponto certo, imagem em laço
+    o = Overlay(media_id="m", out_start=4.0, out_end=7.0, media_start=1.5)
+    _g, ent = overlay_chain([o], {"m": "/x.mp4"}, 5.0, 1080, 1920, 1, "a", "b",
+                            ref_height=1920)
+    check(ent and ent[0]["video"] and abs(ent[0]["ss"] - 2.5) < 1e-6,
+          f"o trecho que começa 1 s depois da janela entra no vídeo em "
+          f"media_start + 1 s = 2,5 s ({ent[0]['ss'] if ent else '?'})")
+    check(ent and abs(ent[0]["t"] - 2.5) < 1e-6,
+          f"e lê só o que a janela ainda dura mais meio segundo ({ent[0]['t'] if ent else '?'})")
+    _g, ent_png = overlay_chain([o], {"m": "/x.png"}, 5.0, 1080, 1920, 1, "a", "b")
+    check(ent_png and not ent_png[0]["video"], "PNG continua entrando em laço de imagem")
+
+    # 2) no pixel: um vídeo vermelho-depois-azul por cima de um quadro cinza
+    tmp = Path(tempfile.mkdtemp(prefix="pip_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x202020:s=432x768:r=30:d=2",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    janela = tmp / "janela.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=red:s=200x100:r=30:d=1",
+                    "-f", "lavfi", "-i", "color=c=blue:s=200x100:r=30:d=1",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                    "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+                    "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(janela)], check=True)
+    info = probe(fonte)
+
+    def cor_no_centro(media_start: float, t: float) -> tuple[int, int, int]:
+        plan = EditPlan()
+        plan.export = ExportParams(scale="source", burn_subtitles=False,
+                                   preset="ultrafast", crf=30)
+        plan.clips = [Clip(src_start=0.0, src_end=2.0)]
+        plan.overlays = [Overlay(media_id="m", out_start=0.0, out_end=2.0,
+                                 media_start=media_start, x=0.5, y=0.5, scale=1.0,
+                                 anim_in="none", anim_out="none")]
+        tl = Timeline(plan.active_clips, 30.0)
+        segs = plan_segments(plan, tl,
+                             {"main": {"path": str(fonte), "info": info, "kind": "video"}},
+                             info)
+        segs = render_video_segments(segs, plan, info, [], tmp / f"segs-{media_start}",
+                                     {"main": str(fonte), "m": str(janela)}, None)
+        saida = segs[0].file
+        w, h = probe(saida).display_size
+        cru = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t:.3f}", "-i", saida,
+                              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                             capture_output=True, check=True).stdout
+        img = np.frombuffer(cru, np.uint8).reshape(h, w, 3)
+        px = img[h // 2, w // 2]
+        # e o quadro fora da janela continua cinza — a janela NÃO cobre a tela
+        canto = img[20, 20]
+        check(all(abs(int(c) - 0x20) < 24 for c in canto),
+              f"fora da janela o vídeo principal continua aparecendo ({canto.tolist()})")
+        return int(px[0]), int(px[1]), int(px[2])
+
+    r, g, b = cor_no_centro(0.0, 0.5)
+    check(r > 170 and g < 90 and b < 90,
+          f"aos 0,5 s a janela mostra o começo do vídeo sobreposto — vermelho ({r},{g},{b})")
+    r, g, b = cor_no_centro(1.0, 0.5)
+    check(b > 170 and r < 90 and g < 90,
+          f"com media_start=1 s a janela já mostra o azul ({r},{g},{b}) — o -ss vale")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_legenda_vertical_nao_corta() -> None:
+    """A legenda do formato DERIVADO é quebrada na régua DELE.
+
+    "As legendas do vídeo vertical cortam, na horizontal fica até bom": a
+    fonte é horizontal (42 caracteres por linha) e o 9:16 derivado só cabe
+    24. As legendas nasciam com as linhas do horizontal, o ASS sai com
+    WrapStyle 2 (sem quebra automática) e a linha passava da tela pelos dois
+    lados. Agora a quebra é refeita para a régua do formato — e nenhuma
+    palavra some no caminho. Conferido no pixel do libass.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.ffmpeg_utils import MediaInfo
+    from editor.models import EditPlan
+    from editor.projects import escalar_legenda
+    from editor.render.renderer import regua_da_legenda
+    from editor.subtitles.ass import build_ass
+    from editor.subtitles.linebreak import requebrar, wrap
+
+    main = MediaInfo(path="x.mp4", duration=10.0, width=1920, height=1080)
+    plan = EditPlan()
+    escalar_legenda(plan, main)
+    check(plan.style.max_chars_per_line == 42,
+          f"a fonte horizontal quebra em 42 caracteres ({plan.style.max_chars_per_line})")
+    pw, ph, vert = regua_da_legenda(main, ExportParams(aspect="9:16"), plan.style)
+    check(abs(ph / pw - 16 / 9) < 0.01 and vert.max_chars_per_line == 24,
+          f"o 9:16 derivado tem régua própria: {pw}x{ph}, {vert.max_chars_per_line} chars")
+
+    frase = ("isso muda tudo na sua comunicação com o cliente e faz o anúncio "
+             "vender muito mais")
+    horizontal = "\n".join(wrap(frase, 42, 2) or [frase])
+    check(len(horizontal.split("\n")) == 2 and all(len(l) <= 42 for l in horizontal.split("\n")),
+          "a legenda nasce em duas linhas de até 42 (como no horizontal)")
+    novo = requebrar(horizontal, vert.max_chars_per_line, vert.max_lines)
+    check(all(len(l) <= 24 for l in novo.split("\n")),
+          f"refeita para o vertical, nenhuma linha passa de 24 ({[len(l) for l in novo.split(chr(10))]})")
+    check(" ".join(novo.split()) == " ".join(horizontal.split()),
+          "e nenhuma palavra sumiu nem mudou de ordem")
+    check(requebrar("curta", 24, 2) == "curta", "texto que já cabe não é mexido")
+
+    # no pixel: o libass desenha o texto de cada versão num quadro 1080x1920
+    def extremos(texto: str) -> tuple[int, int]:
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "leg.ass"
+            ass_path.write_text(build_ass([{"start": 0.0, "end": 1.0, "text": texto}],
+                                          vert, pw, ph), encoding="utf-8")
+            escaped = str(ass_path).replace("\\", "/").replace(":", r"\:")
+            proc = subprocess.run(
+                [FFMPEG, "-v", "error", "-nostdin",
+                 "-f", "lavfi", "-i", f"color=c=black:s={pw}x{ph}:d=0.1",
+                 "-vf", f"ass='{escaped}'", "-frames:v", "1",
+                 "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"],
+                capture_output=True, check=True)
+            quadro = np.frombuffer(proc.stdout, np.uint8)[: pw * ph].reshape(ph, pw)
+        cols = np.flatnonzero((quadro > 40).any(axis=0))
+        return (int(cols[0]), int(cols[-1])) if cols.size else (-1, -1)
+
+    a0, a1 = extremos(horizontal)
+    b0, b1 = extremos(novo)
+    check(a0 >= 0 and (a0 < 20 or a1 > pw - 20),
+          f"com a quebra do horizontal o texto encosta ou passa da borda "
+          f"(o defeito: colunas {a0}..{a1} num quadro de {pw})")
+    check(b0 >= 40 and b1 <= pw - 40,
+          f"com a quebra refeita a legenda cabe com folga (colunas {b0}..{b1})")
+
+
+def testar_geracao_com_ia_mockada() -> None:
+    """Gerar imagem (Nano Banana) e vídeo (Veo) de dentro da edição.
+
+    O HTTP é simulado — não há chave nesta máquina — mas tudo em volta é o de
+    verdade: o arquivo desce para a pasta do projeto, vira mídia, e entra como
+    JANELA no ponto do cursor, no tamanho e canto de janela. A fala principal
+    continua por baixo (o vídeo gerado entra sem áudio, como qualquer janela).
+    """
+    import base64
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.ai import gemini, gerar
+    from editor.config import FFMPEG
+    from editor.models import Clip
+
+    tmp = Path(tempfile.mkdtemp(prefix="gerar_ia_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x303030:s=960x540:r=30:d=3",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    png = tmp / "gerada.png"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "color=c=red:s=400x200", "-frames:v", "1", str(png)], check=True)
+    mp4 = tmp / "gerado.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=30:d=1",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    str(mp4)], check=True)
+    png_bytes, mp4_bytes = png.read_bytes(), mp4.read_bytes()
+
+    project = svc.create(str(fonte), "gerado por ia", "VSL")
+    project.plan.clips = [Clip(src_start=0.0, src_end=3.0)]
+    project.save_plan()
+
+    chamadas: list[tuple[str, dict]] = []
+
+    def fake_listar(chave, forcar=False, metodo="generateContent"):
+        if metodo == "generateContent":
+            return [{"id": "gemini-2.5-flash", "nome": "", "entrada": 0, "saida": 0},
+                    {"id": "gemini-2.5-flash-image", "nome": "", "entrada": 0, "saida": 0}]
+        return [{"id": "veo-3.1-generate-preview", "nome": "", "entrada": 0, "saida": 0}]
+
+    def fake_post(chave, caminho, corpo):
+        chamadas.append((caminho, corpo))
+        if ":generateContent" in caminho:
+            return {"candidates": [{"content": {"parts": [
+                {"text": "aqui está"},
+                {"inlineData": {"mimeType": "image/png",
+                                "data": base64.b64encode(png_bytes).decode("ascii")}}]}}]}
+        return {"name": "models/veo-3.1-generate-preview/operations/op1", "done": False}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"name": "x", "done": True, "response": {"generateVideoResponse": {
+                "generatedSamples": [{"video": {"uri": "https://generativelanguage.googleapis.com/v1beta/files/abc:download?alt=media"}}]}}}
+
+    class Cliente:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, *a, **k): return Resp()
+
+    class Ctx:
+        def stage(self, n, m=""): pass
+        def progress(self, f, m="", s=""): pass
+        def cancelled(self): return False
+        def scoped(self, lo, hi, stage=""): return lambda f, m="": None
+
+    guardado = (gerar.listar_modelos, gerar._post, gerar._cliente, gerar._baixar,
+                gemini.chave_guardada, gerar.INTERVALO_VIDEO)
+    try:
+        gerar.listar_modelos = fake_listar
+        gerar._post = fake_post
+        gerar._cliente = lambda chave: Cliente()
+        gerar._baixar = lambda chave, uri: mp4_bytes
+        gemini.chave_guardada = lambda: "chave-de-teste-nao-vaza"
+        gerar.INTERVALO_VIDEO = 0.0
+
+        r = svc.gerar_com_ia(project, Ctx(), {"tipo": "image", "prompt": "gráfico de barras subindo",
+                                              "out_start": 0.5, "duracao": 1.0})
+        m = r["media"]
+        check(m["kind"] == "image" and Path(m["path"]).exists()
+              and Path(m["path"]).parent == project.dir / "gerado",
+              f"a imagem gerada desceu para a pasta do projeto ({m['path']})")
+        check(r.get("modelo") == "gemini-2.5-flash-image",
+              f"e foi pedida ao modelo de IMAGEM da chave ({r.get('modelo')})")
+        corpo = chamadas[0][1]
+        check(corpo["generationConfig"]["responseModalities"] == ["IMAGE"]
+              and corpo["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9",
+              "o pedido pede IMAGEM na proporção da fonte horizontal")
+        ov = r.get("overlay") or {}
+        check(abs(ov.get("out_start", -1) - 0.5) < 1e-6 and abs(ov.get("out_end", -1) - 1.5) < 1e-6,
+              f"entrou como janela no cursor, por 1 s ({ov.get('out_start')}..{ov.get('out_end')})")
+        check(abs(ov.get("x", 0) - 0.78) < 1e-6 and abs(ov.get("scale", 0) - 0.96) < 1e-3,
+              f"no canto de janela do quadro horizontal: x=0,78, escala 0,96 "
+              f"(40% de 960 / 400) — ({ov.get('x')}, {ov.get('scale')})")
+        fresco = svc.load(project.id)
+        check(any(o.media_id == m["id"] for o in fresco.plan.overlays),
+              "e a janela está gravada no plano do projeto")
+        check(any(x["id"] == m["id"] for x in svc.list_media(project.id)),
+              "e a imagem está na mídia do projeto")
+
+        r2 = svc.gerar_com_ia(project, Ctx(), {"tipo": "video", "prompt": "mãos digitando",
+                                               "out_start": 0.2})
+        m2 = r2["media"]
+        check(m2["kind"] == "video" and Path(m2["path"]).suffix == ".mp4"
+              and abs(float(m2["info"].get("duration", 0)) - 1.0) < 0.2,
+              f"o vídeo do Veo desceu como MP4 de 1 s ({m2['info'].get('duration')})")
+        caminho, corpo2 = next((c, b) for c, b in chamadas if "predictLongRunning" in c)
+        check("veo-3.1-generate-preview" in caminho
+              and corpo2["instances"][0]["prompt"] == "mãos digitando"
+              and corpo2["parameters"]["aspectRatio"] == "16:9"
+              and corpo2["parameters"]["durationSeconds"] == 8,
+              "o pedido ao Veo leva o texto, a proporção e 8 s")
+        ov2 = r2.get("overlay") or {}
+        check(abs((ov2.get("out_end", 0) - ov2.get("out_start", 0)) - 1.0) < 0.05,
+              f"a janela dura o que o clipe tem, 1 s ({ov2.get('out_end', 0) - ov2.get('out_start', 0):.2f})")
+        check(not any("chave-de-teste" in c for c, _ in chamadas),
+              "a chave nunca aparece no caminho da URL (vai só no cabeçalho)")
+    finally:
+        (gerar.listar_modelos, gerar._post, gerar._cliente, gerar._baixar,
+         gemini.chave_guardada, gerar.INTERVALO_VIDEO) = guardado
+        try:
+            svc.delete_project(project.id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

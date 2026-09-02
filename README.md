@@ -749,7 +749,7 @@ A trilha tem faixas separadas, e cada uma aceita itens:
 | trilho | o que entra |
 |---|---|
 | **Vídeo** | o take principal, já cortado |
-| **Sobreposição** | vídeo ou imagem por cima, por tempo determinado |
+| **Sobreposição** | vídeo ou imagem numa **janela** por cima do quadro (picture-in-picture), por tempo determinado — o vídeo entra sem o áudio dele, a fala continua |
 | **Desfoque** | proteção de rosto e documento |
 | **Trilha** | música de fundo, com ducking automático na fala |
 
@@ -1146,9 +1146,27 @@ bloco a bloco, e responde três coisas:
    programa posiciona sozinho: pelas palavras da sua descrição contra a fala
    e, na falta delas, espalhado no meio do vídeo, nunca no gancho. Isso vale
    até **sem chave da IA** — só o cartão de tópico precisa dela, porque é ela
-   quem escreve as palavras. Depois, em cima da própria prévia, você
-   **arrasta** a sobreposição, **redimensiona** pelo canto e **apaga** com
-   Delete; uma cobertura vira um chip com × no canto do vídeo.
+   quem escreve as palavras (e o cartão fica **desligado por padrão**: é
+   elemento que a IA inventa sozinha; quem quiser, liga na primeira tela).
+   **Tudo entra como janela** por cima do vídeo — imagem e vídeo — num canto
+   que não tapa quem fala: ~40% da largura no horizontal, ~80% no vertical. A
+   mídia só **cobre a tela inteira** quando a sua descrição pede ("tela
+   cheia"). Na prévia o elemento aparece de verdade dentro da caixa (o vídeo
+   tocando, mudo): você **arrasta**, **redimensiona** pelo canto e **apaga**
+   com Delete, como no Canva ou no CapCut — mouse só em cima da prévia, sem
+   campo de número. Duas janelas nunca nascem no mesmo instante.
+
+**Gerar com IA de dentro da edição.** Na aba Mídia, o card *Gerar com IA*
+pede uma imagem (Nano Banana, `gemini-*-image`) ou um vídeo (Veo) a partir
+do que você escreve, na proporção do seu vídeo. O arquivo desce para a pasta
+do projeto, vira mídia e entra como janela no ponto em que o cursor está —
+a fala principal continua por baixo, o vídeo gerado entra sem o áudio dele.
+Só o texto do pedido sai da máquina; o seu vídeo, nunca. O Veo leva alguns
+minutos e exige faturamento ligado na conta Google; sem modelo de imagem ou
+de vídeo na chave, o app diz isso com todas as letras em vez de falhar calado.
+Nenhuma dessas duas chamadas foi testada contra a API viva nesta máquina
+(não há chave aqui): as formas seguem a documentação e os testes cobrem o
+tratamento com HTTP simulado.
 
 O que ela **não** faz: escolher tempo de corte, valor de zoom, posição em
 pixels, ou mexer em qualquer coisa sozinha. Ela responde por *índice de bloco*

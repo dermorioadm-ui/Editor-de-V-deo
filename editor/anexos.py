@@ -53,10 +53,11 @@ def _duracao(midia: dict) -> float | None:
 def validar(midias: list[dict], media_id: str, kind_esperado: str) -> dict:
     """A mídia existe e serve para este trilho?
 
-    ``kind_esperado`` é "video" (cutaway) ou "image" (overlay). Imagem usada
-    como cutaway vira um quadro só; vídeo usado como overlay entra no ffmpeg
-    com ``-loop 1 -framerate``, que não é jeito de ler vídeo. Nenhum dos dois
-    dava erro — davam resultado errado.
+    ``kind_esperado`` é "video" (cutaway: cobre o quadro inteiro), "image"
+    (só imagem) ou "any" (sobreposição: imagem OU vídeo, como janela por
+    cima do quadro — o vídeo entra pelo ffmpeg com -ss/-t, sem áudio). Imagem
+    usada como cutaway vira um quadro só; áudio não entra em trilho visual.
+    Nada disso dava erro — dava resultado errado.
     """
     if not media_id:
         raise AnexoInvalido("faltou dizer qual mídia usar")
@@ -64,6 +65,10 @@ def validar(midias: list[dict], media_id: str, kind_esperado: str) -> dict:
     if m is None:
         raise AnexoInvalido("essa mídia não está no projeto (foi removida?)")
     kind = m.get("kind")
+    if kind not in ("video", "image"):
+        raise AnexoInvalido(
+            f"'{m.get('name') or media_id}' é {kind or 'de um tipo desconhecido'}: "
+            f"só imagem e vídeo entram por cima do quadro.")
     if kind_esperado == "video" and kind == "image":
         raise AnexoInvalido(
             f"'{m.get('name') or media_id}' é uma imagem. Imagem entra como "
@@ -71,14 +76,12 @@ def validar(midias: list[dict], media_id: str, kind_esperado: str) -> dict:
             f"vira um quadro congelado de um frame só.")
     if kind_esperado == "image" and kind == "video":
         raise AnexoInvalido(
-            f"'{m.get('name') or media_id}' é um vídeo. Vídeo entra como "
-            f"cobertura ou como inserção — como sobreposição ele é lido em "
-            f"laço de imagem parada e o resultado é imprevisível.")
-    if kind_esperado == "video" and not (m.get("info") or {}).get("duration"):
+            f"'{m.get('name') or media_id}' é um vídeo, e aqui só cabe imagem.")
+    if kind == "video" and not (m.get("info") or {}).get("duration"):
         raise AnexoInvalido(
             f"não consegui ler '{m.get('name') or media_id}' (o ffprobe não "
             f"devolveu duração). Sem saber quanto dura, não dá para garantir "
-            f"que a cobertura preenche a janela inteira.")
+            f"que ele preenche a janela inteira.")
     return m
 
 

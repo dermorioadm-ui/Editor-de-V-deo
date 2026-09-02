@@ -74,6 +74,34 @@ def export_project(
         pass
     width, height = target_size(main, plan.export)
 
+    # A LEGENDA NA RÉGUA DO FORMATO DE SAÍDA. As legendas eram montadas com o
+    # estilo da FONTE — 42 caracteres por linha no horizontal — e o vertical
+    # derivado só cabe 24: o ASS usa WrapStyle 2 (sem quebra automática) e a
+    # linha saía da tela pelos dois lados. Quem monta as legendas recebe o
+    # estilo do formato quando aceita; e, aceitando ou não, nenhuma linha
+    # passa da régua.
+    import inspect
+
+    from .renderer import regua_da_legenda
+    from ..subtitles.linebreak import requebrar
+
+    _pw, _ph, style_saida = regua_da_legenda(main, plan.export, plan.style)
+    derivado = style_saida is not plan.style
+    try:
+        aceita_estilo = len(inspect.signature(build_cues).parameters) >= 2
+    except (TypeError, ValueError):
+        aceita_estilo = False
+
+    def cues_no_formato(tl: Timeline) -> list[dict]:
+        lista = build_cues(tl, style_saida) if (derivado and aceita_estilo) else build_cues(tl)
+        if derivado:
+            chars = int(getattr(style_saida, "max_chars_per_line", 0) or 0)
+            linhas = int(getattr(style_saida, "max_lines", 2) or 2)
+            if chars > 0:
+                for c in lista:
+                    c["text"] = requebrar(c.get("text", ""), chars, linhas)
+        return lista
+
     def report(frac: float, msg: str, lo: float = 0.0, hi: float = 1.0):
         if on_progress:
             on_progress(lo + (hi - lo) * max(0.0, min(1.0, frac)), msg)
@@ -85,7 +113,7 @@ def export_project(
     # concat.
     fps_saida = fps_de_saida(main, plan.export)
     timeline = Timeline(plan.active_clips, fps_saida)
-    cues = build_cues(timeline)
+    cues = cues_no_formato(timeline)
 
     # 2) trechos de vídeo (cutaways já aplicados) — UM encode por trecho
     report(0.0, "planejando trechos")
@@ -127,7 +155,7 @@ def export_project(
 
     # 5) legendas refeitas sobre a linha do tempo REAL
     measured_timeline = Timeline(plan.active_clips, fps_saida)
-    cues_final = build_cues(measured_timeline)
+    cues_final = cues_no_formato(measured_timeline)
 
     # 6) áudio em PCM, cadeia aplicada uma vez, AAC só no mux
     #
@@ -174,8 +202,9 @@ def export_project(
     srt_path.write_text(ass_mod.build_srt(cues_final, plan.style.uppercase),
                         encoding="utf-8")
     # o .ass entregue ao lado do MP4 usa a MESMA régua do que foi queimado:
-    # a resolução da fonte, não a do render (ver renderer.py)
-    ass_mod.write_ass(ass_path, cues_final, plan.style, *main.display_size)
+    # a da fonte no formato da fonte, a do quadro derivado nos outros (ver
+    # regua_da_legenda em renderer.py)
+    ass_mod.write_ass(ass_path, cues_final, style_saida, _pw, _ph)
 
     warnings: list[str] = list(pre_warnings)
     src_bitrate = main.v_bitrate or main.bitrate

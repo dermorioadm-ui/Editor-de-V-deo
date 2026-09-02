@@ -1323,18 +1323,22 @@ def api_insert(pid: str, payload: dict = Body(...)) -> dict:
 def api_overlay(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     try:
+        # imagem OU vídeo: os dois entram como janela por cima do quadro
         midia = anexos.validar(svc.list_media(pid),
-                               str(payload.get("media_id") or ""), "image")
+                               str(payload.get("media_id") or ""), "any")
         janela = anexos.encaixar(midia, float(payload.get("out_start", 0.0)),
                                  float(payload.get("out_end", 3.0)),
+                                 float(payload.get("media_start", 0.0)),
                                  limite=svc.duracao_de_saida(project))
     except anexos.AnexoInvalido as exc:
         raise HTTPException(400, str(exc)) from exc
+    geo = svc.geometria_pip(project, midia)
     o = Overlay(media_id=midia["id"],
                 out_start=janela.out_start,
                 out_end=janela.out_end,
-                x=float(payload.get("x", 0.5)), y=float(payload.get("y", 0.2)),
-                scale=float(payload.get("scale", 1.0)),
+                media_start=janela.media_start,
+                x=float(payload.get("x", geo["x"])), y=float(payload.get("y", geo["y"])),
+                scale=float(payload.get("scale", geo["scale"])),
                 opacity=float(payload.get("opacity", 1.0)),
                 anim_in=payload.get("anim_in", "fade"),
                 anim_out=payload.get("anim_out", "fade"),
@@ -1353,6 +1357,7 @@ def api_overlay_update(pid: str, oid: str, payload: dict = Body(...)) -> dict:
             for k, cast in (("out_start", float), ("out_end", float), ("x", float),
                             ("y", float), ("scale", float), ("opacity", float),
                             ("dur_in", float), ("dur_out", float),
+                            ("media_start", float),
                             ("anim_in", str), ("anim_out", str),
                             ("enabled", bool)):
                 if k in payload:
@@ -1826,7 +1831,7 @@ def api_ia_config() -> dict:
         # chave; o usuário desliga aqui se quiser voltar à regra do programa
         "cortes": bool(db.get_setting("ai_cortes", True)),
         # os cartões de tópico que o programa desenha com o texto da IA
-        "cartoes": bool(db.get_setting("ia_cartoes", True)),
+        "cartoes": bool(db.get_setting("ia_cartoes", False)),
     }
 
 
@@ -1978,6 +1983,34 @@ def api_ia_apply(pid: str, payload: dict = Body(...)) -> dict:
         return svc.aplicar_plano_da_ia(project, payload.get("plano") or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/ai/gerar")
+def api_ia_gerar(pid: str, payload: dict = Body(...)) -> dict:
+    """Gera imagem (Nano Banana) ou vídeo (Veo) e põe como janela no cursor.
+
+    JOB, nunca dentro da rota: imagem leva segundos, vídeo leva minutos. O
+    resultado do job traz a mídia e a sobreposição criada; a tela recarrega o
+    projeto quando ele termina.
+    """
+    _project(pid)
+    _chave_ia()
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "escreva o que você quer que a IA gere")
+    tipo = "video" if str(payload.get("tipo", "")).lower() == "video" else "image"
+    pedido = {
+        "tipo": tipo, "prompt": prompt[:2000],
+        "proporcao": str(payload.get("proporcao") or ""),
+        "out_start": float(payload.get("out_start") or 0.0),
+        "duracao": float(payload.get("duracao") or 0.0),
+        "duracao_video": int(payload.get("duracao_video") or 8),
+        "colocar": bool(payload.get("colocar", True)),
+        "modelo": str(payload.get("modelo") or ""),
+    }
+    job = get_queue().submit("ia-video" if tipo == "video" else "ia-imagem", pid,
+                             lambda ctx: svc.gerar_com_ia(svc.load(pid), ctx, pedido))
+    return job.to_dict()
 
 
 @app.get("/{path:path}", response_class=HTMLResponse)

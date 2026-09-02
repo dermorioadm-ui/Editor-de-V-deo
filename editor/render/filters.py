@@ -142,10 +142,29 @@ def overlay_inputs(overlays: list, clip_out_start: float,
             if o.enabled and o.out_end > clip_out_start and o.out_start < clip_out_end]
 
 
+# extensões que entram no ffmpeg como VÍDEO (lidas com -ss/-t), e não em
+# laço de imagem parada. Tudo que não está aqui é tratado como imagem.
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm", ".mts", ".m2ts",
+             ".3gp", ".wmv", ".ts", ".mpg", ".mpeg", ".mxf"}
+
+
+def e_video(path: str) -> bool:
+    import os
+
+    return os.path.splitext(str(path))[1].lower() in VIDEO_EXT
+
+
 def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                   width: int, height: int, first_input_index: int,
-                  tag_in: str, tag_out: str, ref_height: int = 0) -> tuple[str, list[str]]:
-    """PNGs com entrada configurável (Parte 8).
+                  tag_in: str, tag_out: str, ref_height: int = 0) -> tuple[str, list[dict]]:
+    """PNGs — e vídeos, como janela (picture-in-picture) — por cima do quadro.
+
+    Devolve o grafo e a lista de ENTRADAS, uma por sobreposição, na ordem em
+    que devem ser adicionadas ao comando: ``{"path", "video", "ss", "t"}``.
+    Uma imagem entra em laço (``-loop 1``); um vídeo entra com ``-ss`` no ponto
+    da mídia que corresponde ao começo deste trecho e ``-t`` só até o fim da
+    janela. O áudio do vídeo sobreposto NUNCA entra: a fala principal continua
+    por baixo — é o que se quer de uma janela.
 
     ``ref_height`` é a altura do quadro para o qual a sobreposição foi
     AUTORADA — a da fonte. O tamanho de um overlay é ``iw*scale`` em pixels do
@@ -161,19 +180,31 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         return "", []
     fator = (height / float(ref_height)) if ref_height and ref_height > 0 else 1.0
     parts: list[str] = []
-    inputs: list[str] = []
+    inputs: list[dict] = []
     cur = tag_in
     for i, o in enumerate(overlays):
         path = media_paths.get(o.media_id)
         if not path:
             continue
         idx = first_input_index + len(inputs)
-        inputs.append(str(path))
         start = max(0.0, o.out_start - clip_out_start)
         end = max(start + 0.05, o.out_end - clip_out_start)
+        video = e_video(path)
+        # o trecho pode começar no MEIO da janela (a janela atravessa a
+        # fronteira de dois trechos): o vídeo sobreposto entra já adiantado
+        # do tanto que o trecho está à frente do começo da janela
+        ja_passou = max(0.0, clip_out_start - o.out_start)
+        inputs.append({
+            "path": str(path), "video": video,
+            "ss": round(max(0.0, float(getattr(o, "media_start", 0.0) or 0.0))
+                        + ja_passou, 4),
+            "t": round((end - start) + 0.5, 3),
+        })
         scaled = f"__ov{i}"
         scale_w = f"iw*{o.scale * fator:.4f}"
-        chain = [f"[{idx}:v]format=rgba,scale={scale_w}:-1"]
+        # largura par: o encoder yuv420p recusa dimensão ímpar, e um vídeo
+        # escalado para 731 px derrubava o trecho inteiro
+        chain = [f"[{idx}:v]format=rgba,scale=trunc(({scale_w})/2)*2:-2"]
         if o.opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={o.opacity:.3f}")
         if o.anim_in == "fade" and o.dur_in > 0:

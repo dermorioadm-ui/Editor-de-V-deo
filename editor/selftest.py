@@ -143,9 +143,9 @@ def run(verbose: bool = True) -> bool:
         plan = EditPlan(clips=clips, removed=plano["removed"])
         sources = {"main": {"path": str(src), "info": info}}
 
-        def cues(timeline: Timeline) -> list[dict]:
+        def cues(timeline: Timeline, style=None) -> list[dict]:
             vivas = [w for w in words if w["i"] not in removidas]
-            return build_cues(remap_words(vivas, timeline), plan.style,
+            return build_cues(remap_words(vivas, timeline), style or plan.style,
                               limit=timeline.duration)
 
         dest = tmp / "saida.mp4"

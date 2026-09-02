@@ -56,7 +56,9 @@ export default function Home() {
   // sabe a intenção.
   const [auxiliares, setAuxiliares] =
     useState<{ path: string; descricao: string }[]>([])
-  const [cartoes, setCartoes] = useState(true)
+  // DESLIGADO por padrão: cartão é elemento que a IA inventa sozinha, e o
+  // usuário não quer elemento que ele não pediu. Quem quiser, liga aqui.
+  const [cartoes, setCartoes] = useState(false)
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -667,7 +669,7 @@ export default function Home() {
                               cursor-pointer">
               <input type="checkbox" checked={cartoes}
                      onChange={(e) => setCartoes(e.target.checked)} />
-              cartões de tópico
+              cartões de tópico (a IA inventa os textos)
             </label>
           </div>
           {auxiliares.length > 0 && (

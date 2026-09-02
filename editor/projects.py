@@ -34,7 +34,7 @@ from .render.export import export_project
 from .render.validate import validate_export
 from .subtitles.corrections import apply_corrections
 from .subtitles.fillers import annotate as annotate_fillers
-from .subtitles.linebreak import build_cues, wrap
+from .subtitles.linebreak import build_cues, requebrar, wrap
 from .subtitles.remap import remap_words
 
 _envelope_cache: dict[str, Envelope] = {}
@@ -871,7 +871,9 @@ def enriquecer(project: Project, ctx) -> dict:
     midias = [m for m in list_media(project.id)
               if m.get("kind") in ("video", "image")
               and not str(m.get("id", "")).startswith("k_")]
-    quer_cartao = bool(db.get_setting("ia_cartoes", True))
+    # DESLIGADO por padrão: cartão é elemento que a IA inventa por conta
+    # própria, e o usuário foi claro que não quer elemento que ele não pediu.
+    quer_cartao = bool(db.get_setting("ia_cartoes", False))
     if not midias and not quer_cartao:
         return {"ok": False, "pulada": True, "motivo": "nada para posicionar"}
 
@@ -1035,9 +1037,16 @@ def corrected_words(project: Project) -> tuple[list[dict], list[dict]]:
     return apply_corrections(project.words, rules)
 
 
-def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> list[dict]:
-    """Palavras corrigidas -> remapeadas -> quebradas em legendas."""
+def rebuild_subtitles(project: Project, timeline: Timeline | None = None,
+                      style=None) -> list[dict]:
+    """Palavras corrigidas -> remapeadas -> quebradas em legendas.
+
+    ``style`` é o estilo do FORMATO que vai sair (vertical, quadrado…) quando
+    ele não é o da fonte: a quebra em linhas é feita na régua dele. Sem isso
+    a legenda do vertical nascia com linhas do horizontal e era cortada.
+    """
     plan = project.plan
+    st = style or plan.style
     words, log = corrected_words(project)
     removed = set(project.analysis.get("removed_word_ids", []))
     words = [w for w in words if w.get("src_i", w["i"]) not in removed]
@@ -1047,7 +1056,7 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> lis
     manual = [s for s in plan.subtitles
               if s.edited or getattr(s, "start_off", 0.0)
               or getattr(s, "end_off", 0.0)]
-    cues = build_cues(mapped, plan.style, limit=tl.duration)
+    cues = build_cues(mapped, st, limit=tl.duration)
     # word_ids em índices ORIGINAIS (src_i): os índices corrigidos renumeram
     # quando o dicionário de correções muda, e o casamento se perderia
     src_of = {w["i"]: w.get("src_i", w["i"]) for w in mapped}
@@ -1076,9 +1085,11 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None) -> lis
         if edited_olds:
             # merge de dois cues editados: concatena em ordem, nunca descarta
             text = " ".join(o.text.replace("\n", " ") for o in edited_olds)
-            lines = wrap(text, plan.style.max_chars_per_line,
-                         plan.style.max_lines)
-            sub.text = "\n".join(lines) if lines else text
+            lines = wrap(text, st.max_chars_per_line, st.max_lines)
+            # não coube nas linhas do estilo: ainda assim NUNCA uma linha
+            # maior que a régua — era isso que cortava a legenda editada
+            sub.text = "\n".join(lines) if lines else requebrar(
+                text, st.max_chars_per_line, st.max_lines)
             sub.edited = True
         s_off = float(getattr(olds[0], "start_off", 0.0) or 0.0)
         e_off = float(getattr(olds[-1], "end_off", 0.0) or 0.0)
@@ -1164,8 +1175,10 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
         # testado de verdade, não só anunciado pelo ffmpeg
         hw = hw_encoder_utilizavel()
 
-    def cues_builder(tl: Timeline) -> list[dict]:
-        rebuild_subtitles(project, tl)
+    def cues_builder(tl: Timeline, style=None) -> list[dict]:
+        # `style` chega quando o formato de saída não é o da fonte: a
+        # legenda é quebrada na régua DELE (ver export_project)
+        rebuild_subtitles(project, tl, style)
         return cue_list(project)
 
     ctx.stage("exportando", "encodando cada trecho uma única vez")
@@ -1279,11 +1292,13 @@ def build_tracks(project: "Project", blocks: list[dict],
     for o in plan.overlays:
         if not o.enabled:
             continue
+        e_video = (midias.get(o.media_id) or {}).get("kind") == "video"
         sobreposicoes.append({
             "id": o.id, "kind": "overlay", "label": nome(o.media_id),
             "out_start": round(o.out_start, 3), "out_end": round(o.out_end, 3),
             "media_id": o.media_id, "movable": True, "resizable": True,
-            "detail": "imagem/PNG por cima",
+            "detail": ("vídeo em janela por cima, sem o áudio dele" if e_video
+                       else "imagem em janela por cima"),
         })
     # fotos e insertos ocupam a faixa PRINCIPAL (empurram o vídeo), então
     # aparecem no trilho de vídeo, não aqui
@@ -1458,15 +1473,19 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
     relatorio = roteiro.aplicar(plan, plano, midias, duracao_de_saida(project),
                                 blocos=blocos, completar=so_anexos)
 
+    por_id = {m["id"]: m for m in midias}
     for a in relatorio["anexos"]:
         if a["tipo"] == "cobertura":
             plan.cutaways.append(Cutaway(media_id=a["media_id"],
                                          out_start=a["out_start"],
                                          out_end=a["out_end"]))
         else:
+            # JANELA por cima do vídeo, já num tamanho e canto que não tapam
+            # quem fala — o usuário ajusta arrastando na prévia
             plan.overlays.append(Overlay(media_id=a["media_id"],
                                          out_start=a["out_start"],
-                                         out_end=a["out_end"]))
+                                         out_end=a["out_end"],
+                                         **geometria_pip(project, por_id.get(a["media_id"]) or {})))
 
     relatorio["cartoes"] = desenhar_cartoes(project, relatorio.get("cartoes"))
 
@@ -1477,6 +1496,36 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
     project.save_plan()
     return {"ok": True, **relatorio, "zoom": resumo,
             "timeline": timeline_summary(project)}
+
+
+def geometria_pip(project: Project, midia: dict) -> dict:
+    """Tamanho e lugar de uma mídia que entra como JANELA (picture-in-picture).
+
+    A régua é a do render: ``scale`` multiplica a largura natural da mídia em
+    pixels do quadro da FONTE. A janela ocupa ~40% da largura num quadro
+    horizontal (canto superior direito, longe do rosto centrado e da faixa de
+    legenda), ~80% num vertical (terço de cima) e ~55% num quadrado. Nunca
+    passa de 55% da altura nem amplia uma imagem pequena além de 1,5x — em
+    vez de ficar borrada, ela fica menor.
+    """
+    try:
+        lw, lh = (int(x) for x in project.info.display_size)
+    except Exception:  # noqa: BLE001
+        lw, lh = 1920, 1080
+    info = midia.get("info") or {}
+    mw = int(info.get("display_width") or info.get("width") or 0)
+    mh = int(info.get("display_height") or info.get("height") or 0)
+    if mw <= 0 or mh <= 0:
+        mw, mh = 1280, 720
+    prop = lw / max(lh, 1)
+    if prop > 1.2:          # horizontal
+        frac_w, x, y = 0.40, 0.78, 0.32
+    elif prop < 0.85:       # vertical
+        frac_w, x, y = 0.80, 0.50, 0.24
+    else:                   # quadrado
+        frac_w, x, y = 0.55, 0.50, 0.25
+    escala = min(frac_w * lw / mw, 0.55 * lh / mh, 1.5)
+    return {"x": x, "y": y, "scale": round(max(0.05, escala), 4)}
 
 
 # Onde o cartão fica no quadro. NÃO é posição fixa: é calculada para o cartão
@@ -1570,6 +1619,82 @@ def desenhar_cartoes(project: Project, pedidos: list[dict] | None) -> list[dict]
             dur_in=CARTAO_FADE, dur_out=CARTAO_FADE))
         feitos.append({**c, "media_id": mid, "arquivo": destino.name})
     return feitos
+
+
+def gerar_com_ia(project: Project, ctx, pedido: dict) -> dict:
+    """Gera uma imagem (Nano Banana) ou um vídeo (Veo) e põe como JANELA.
+
+    Roda como job: é chamada de rede de segundos (imagem) a minutos (vídeo).
+    O arquivo gerado é gravado na pasta do projeto e vira mídia como qualquer
+    anexo — e, por padrão, entra como sobreposição no ponto onde o cursor
+    estava, no tamanho e canto de janela. A fala principal CONTINUA por
+    baixo: o vídeo gerado entra sem o áudio dele, a voz de quem fala não é
+    interrompida. O usuário depois arrasta, encolhe ou apaga na prévia.
+    """
+    import uuid
+
+    from . import anexos
+    from .ai import gemini, gerar
+    from .models import Overlay
+
+    chave = gemini.chave_guardada()
+    if not chave:
+        raise RuntimeError("sem chave do Gemini. Cole a sua na tela inicial "
+                           "(Ajustes > IA) — uma vez só; ela fica guardada.")
+    tipo = "video" if str(pedido.get("tipo", "")).lower() == "video" else "image"
+    prompt = str(pedido.get("prompt") or "").strip()[:2000]
+    if not prompt:
+        raise ValueError("escreva o que você quer que a IA gere")
+    try:
+        lw, lh = (int(x) for x in project.info.display_size)
+    except Exception:  # noqa: BLE001
+        lw, lh = 1920, 1080
+    proporcao = str(pedido.get("proporcao") or ("16:9" if lw >= lh else "9:16"))
+    pasta = project.dir / "gerado"
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = f"ia_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+    if tipo == "image":
+        ctx.stage("ia", "gerando a imagem com o Gemini")
+        r = gerar.gerar_imagem(chave, prompt, pasta / f"{nome}.png", proporcao,
+                               modelo=str(pedido.get("modelo") or ""),
+                               on_progress=ctx.scoped(0.05, 0.85, "ia"))
+    else:
+        ctx.stage("ia", "gerando o vídeo com o Veo — isso leva alguns minutos")
+        r = gerar.gerar_video(chave, prompt, pasta / f"{nome}.mp4", proporcao,
+                              duracao=int(pedido.get("duracao_video") or 8),
+                              modelo=str(pedido.get("modelo") or ""),
+                              on_progress=ctx.scoped(0.05, 0.85, "ia"),
+                              cancel=ctx.cancelled)
+    ctx.progress(0.9, "gravando na mídia do projeto")
+    midia = add_media(project.id, r["path"], tipo,
+                      name=f"IA: {prompt[:40]}", descricao=prompt)
+    saida: dict = {"media": midia, "modelo": r.get("modelo", "")}
+    if not pedido.get("colocar", True):
+        return saida
+
+    # RECARREGA antes de mexer: o job de vídeo leva minutos, e gravar o plano
+    # deste snapshot apagaria os retoques que o usuário fez enquanto esperava
+    fresco = load(project.id)
+    inicio = max(0.0, float(pedido.get("out_start") or 0.0))
+    dur_midia = float((midia.get("info") or {}).get("duration") or 0.0)
+    dur = float(pedido.get("duracao") or 0.0)
+    if dur <= 0:
+        dur = min(8.0, dur_midia) if (tipo == "video" and dur_midia > 0) else 4.0
+    try:
+        janela = anexos.encaixar(midia, inicio, inicio + dur,
+                                 limite=duracao_de_saida(fresco))
+    except anexos.AnexoInvalido as exc:
+        saida["aviso"] = (f"a mídia foi gerada e está na aba Mídia, mas não "
+                          f"entrou no vídeo: {exc}")
+        return saida
+    o = Overlay(media_id=midia["id"], out_start=janela.out_start,
+                out_end=janela.out_end, **geometria_pip(fresco, midia))
+    fresco.plan.overlays.append(o)
+    fresco.save_plan()
+    saida["overlay"] = o.to_dict()
+    saida["ajustes"] = janela.ajustes
+    return saida
 
 
 def recalcular_zoom(project: Project) -> dict:

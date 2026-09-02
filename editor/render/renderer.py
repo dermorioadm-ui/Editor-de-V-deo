@@ -499,12 +499,19 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
-            for p in ov_inputs:
+            for ent in ov_inputs:
+                if ent["video"]:
+                    # VÍDEO COMO JANELA: entra pelo ponto certo da mídia e só
+                    # até o fim da janela; -an porque a fala principal
+                    # continua por baixo — o áudio dele nunca entra.
+                    pre += ["-ss", f"{ent['ss']:.6f}", "-t", f"{ent['t']:.3f}",
+                            "-an", "-i", ent["path"]]
+                    continue
                 # -loop 1: um PNG entra como UM quadro em t=0; o fade avaliava
                 # o alpha nesse único quadro (0) e a sobreposição com fade —
                 # o padrão — saía 100% invisível no export
                 pre += ["-loop", "1", "-framerate", f"{fps}",
-                        "-t", f"{seg.nominal + 1.0:.3f}", "-i", p]
+                        "-t", f"{seg.nominal + 1.0:.3f}", "-i", ent["path"]]
 
     tail = []
     # Look de cinema: vale para o vídeo inteiro, entra ANTES da legenda —
