@@ -122,11 +122,38 @@ pasta `C:\ffmpeg\bin`, que o editor acha sozinho.
 ### 2.3 — Instalar o editor
 
 1. Baixe este projeto e extraia numa pasta, por exemplo
-   `C:\Users\SeuNome\editor-de-video`.
-2. Abra a pasta no Explorador de Arquivos.
-3. Clique com o botão direito num espaço vazio → **Abrir no Terminal**
-   (ou **Abrir janela do PowerShell aqui**).
-4. Dê um duplo clique em **`instalar.bat`** — ou, no terminal, cole:
+   `C:\Users\SeuNome\sharkcut`.
+2. Dê um duplo clique em **`instalar.bat`**.
+
+Abre uma **janela de instalação**: ela confere Python, espaço em disco e
+ffmpeg, mostra a instalação acontecendo linha a linha e, no fim, cria os
+atalhos. As caixinhas já vêm marcadas:
+
+| | |
+|---|---|
+| Ícone na Área de Trabalho | atalho com o tubarão |
+| Ícone no Menu Iniciar | mais um para o `limpar.bat` |
+| Fixar na barra de tarefas | tenta fixar sozinho — veja abaixo |
+| Abrir o Sharkcut ao terminar | |
+
+**Sobre o ícone.** Um `.bat` não carrega ícone: o Windows desenha o do
+`cmd.exe` e não há como mudar isso. Quem carrega ícone é o **atalho** — e a
+janela preta aberta por ele herda esse ícone, então é o tubarão que aparece na
+barra de tarefas enquanto o editor roda. Por isso o instalador cria um
+`Sharkcut.lnk` até dentro da própria pasta do programa: é nele que você clica,
+não no `iniciar.bat`.
+
+**Sobre fixar na barra.** A Microsoft bloqueou fixar por script do Windows 10
+1803 em diante. O instalador tenta (ainda funciona em máquina mais antiga) e
+**confere se pegou** em vez de mentir. Se não pegar, o caminho é um clique:
+abra o Sharkcut, clique com o botão direito no ícone dele na barra e escolha
+*Fixar na barra de tarefas*.
+
+> Se o PowerShell estiver bloqueado na sua máquina, o `instalar.bat` cai
+> sozinho no instalador de texto (`instalar-console.bat`), que faz exatamente
+> a mesma coisa sem janela — só sem os atalhos.
+
+Prefere fazer na mão? No terminal, dentro da pasta:
 
 ```powershell
 python -m venv .venv

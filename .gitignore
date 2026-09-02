@@ -19,3 +19,6 @@ Thumbs.db
 *.sqlite3-shm
 .pytest_cache/
 frontend/tsconfig.tsbuildinfo
+
+# atalhos gerados pelo instalador
+*.lnk
