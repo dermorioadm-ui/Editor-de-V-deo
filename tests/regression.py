@@ -308,6 +308,7 @@ def main() -> int:
     testar_corte_de_copy()
     testar_controles_antes_de_gerar()
     testar_presets_atualizam()
+    testar_corte_nao_reencoda_o_resto()
 
     print()
     if FALHAS:
@@ -2624,6 +2625,70 @@ def testar_presets_atualizam() -> None:
         importlib.reload(_cfg)
         importlib.reload(_db)
         _db.connect()
+
+
+def testar_corte_nao_reencoda_o_resto() -> None:
+    """Um corte no bloco 2 só reencoda o bloco 2 — o resto acha o próprio arquivo.
+
+    O manifesto do cache era indexado pela POSIÇÃO do trecho. Um corte parte
+    um clipe em dois e empurra todos os índices seguintes: o trecho 7 passava
+    a ser comparado com o que ANTES era o 7 (outro conteúdo), chave diferente,
+    reencoda — e ainda apagava o arquivo bom no caminho. Medido: 15 de 16
+    trechos refeitos por um corte de 1 s, com a chave já relativa ao trecho.
+    Agora a identidade é a chave de conteúdo, em qualquer posição; e a faxina
+    guarda a geração anterior, então desfazer o último retoque também não
+    custa encode nenhum.
+    """
+    from editor.config import ExportParams
+    from editor.edit import ops
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    tmp = Path(tempfile.mkdtemp(prefix="corte_cache_"))
+    dur = 6.0
+    video = write_video(tmp / "fonte.mp4", build([], dur), dur, 180, 320, 30)
+    info = probe(video)
+    plan = EditPlan()
+    plan.export = ExportParams(scale="240", burn_subtitles=False,
+                               preset="ultrafast", crf=30)
+    blocos = lambda: [Clip(src_start=float(k), src_end=float(k + 1))  # noqa: E731
+                      for k in range(6)]
+    plan.clips = blocos()
+    sources = {"main": {"path": str(video), "info": info, "kind": "video"}}
+    work = tmp / "segs"
+
+    def render() -> set[str]:
+        tl = Timeline(plan.active_clips, 30.0)
+        segs = plan_segments(plan, tl, sources, info)
+        render_video_segments(segs, plan, info, [], work, {"main": str(video)}, None)
+        return {f.name for f in work.glob("seg_*.mp4")}
+
+    antes = render()
+    check(len(antes) == 6, f"seis blocos, seis trechos encodados ({len(antes)})")
+
+    # corta 0,3 s no MEIO do bloco 2: ele vira dois e empurra os quatro seguintes
+    plan.clips, _ = ops.cut_source_range(plan.clips, 1.3, 1.6)
+    check(len(plan.active_clips) == 7, "o corte partiu o bloco em dois")
+    depois = render()
+    novos = depois - antes
+    check(len(novos) == 2,
+          f"o corte reencoda SÓ as duas metades do bloco cortado ({len(novos)} novos)")
+    check(antes <= depois,
+          "os trechos da geração anterior ficam guardados")
+
+    # desfaz o corte: os seis blocos originais voltam — e nenhum encode acontece
+    plan.clips = blocos()
+    desfeito = render()
+    check(not (desfeito - depois), "desfazer o corte não reencoda nada")
+
+    # duas gerações sem usar as metades: a faxina as leva
+    render()
+    final = render()
+    check(final == antes,
+          f"a faxina joga fora o que ficou duas gerações para trás ({len(final)} trechos)")
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -652,6 +652,53 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     return key, seg_cues, seg_blurs, seg_overlays
 
 
+def _ler_manifesto(path: Path) -> dict:
+    """O manifesto do cache: chave de conteúdo -> {file, measured, geracao}.
+
+    Aceita o formato antigo (número do trecho -> {key, ...}) e o converte na
+    hora, para ninguém perder o cache que já tinha ao atualizar.
+    """
+    if not path.exists():
+        return {}
+    try:
+        bruto = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(bruto, dict):
+        return {}
+    manifest: dict = {}
+    for k, ent in bruto.items():
+        if not isinstance(ent, dict) or "file" not in ent:
+            continue
+        chave = str(ent.get("key") or k)
+        manifest[chave] = {"file": ent["file"],
+                           "measured": float(ent.get("measured", 0.0)),
+                           "geracao": int(ent.get("geracao", 0))}
+    return manifest
+
+
+def _gravar_manifesto(path: Path, manifest: dict) -> None:
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _faxina(work: Path, manifest_path: Path, manifest: dict, geracao: int) -> None:
+    """Guarda esta geração e a anterior; o resto — e todo órfão — vai embora."""
+    vivos: set[str] = set()
+    for key in list(manifest):
+        ent = manifest[key]
+        if int(ent.get("geracao", 0)) < geracao - 1:
+            Path(ent["file"]).unlink(missing_ok=True)
+            del manifest[key]
+        else:
+            vivos.add(Path(ent["file"]).name)
+    for f in work.glob("seg_*.mp4"):
+        if f.name not in vivos:
+            f.unlink(missing_ok=True)
+    _gravar_manifesto(manifest_path, manifest)
+
+
 def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
                           main: MediaInfo, cues: list[dict], work: Path,
                           media_paths: dict, hw: str | None,
@@ -671,63 +718,81 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
     ass_dir = work / "ass"
     ass_dir.mkdir(exist_ok=True)
     manifest_path = work / "manifest.json"
-    manifest = {}
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {}
+    manifest = _ler_manifesto(manifest_path)
+    # Cada render é uma GERAÇÃO. Quem é usado agora recebe o número desta; a
+    # faxina no fim guarda esta e a anterior — desfazer o último retoque não
+    # custa encode nenhum — e joga fora o que ficou para trás.
+    geracao = 1 + max((int(e.get("geracao", 0)) for e in manifest.values()),
+                      default=0)
 
     total_out = sum(s.out_theoretical for s in segs) or 1.0
 
-    # 1) quem já está pronto e quem precisa encodar (barato, sequencial)
-    pendentes: list[tuple[VideoSegment, str, Path]] = []
+    # 1) quem já está pronto e quem precisa encodar (barato, sequencial).
+    #
+    # O MANIFESTO É PELA CHAVE DE CONTEÚDO, NUNCA PELA POSIÇÃO. Indexado pelo
+    # número do trecho, um corte no bloco 2 — que parte o clipe em dois e
+    # empurra todos os índices seguintes em um — fazia o trecho 7 ser comparado
+    # com o que ANTES era o 7 (outro conteúdo): chave diferente, reencoda, e
+    # ainda apagava o arquivo bom no caminho. Medido: 15 de 16 trechos
+    # refeitos por um corte de 1 s. Pela chave, o trecho que não mudou um
+    # pixel acha o próprio arquivo, esteja em que posição estiver.
+    pendentes: dict[str, tuple[Path, list[VideoSegment]]] = {}
     for seg in segs:
         key, _c, _b, _o = _chave_do_trecho(seg, plan, main, cues, hw)
-        cached = manifest.get(str(seg.index))
-        if cached and cached.get("key") == key and Path(cached["file"]).exists():
+        cached = manifest.get(key)
+        if cached and Path(cached["file"]).exists():
             seg.file = cached["file"]
             seg.measured = float(cached["measured"])
+            cached["geracao"] = geracao
             continue
-        pendentes.append((seg, key, work / f"seg_{seg.index:04d}_{key}.mp4"))
+        if key in pendentes:
+            # o mesmo conteúdo duas vezes na linha do tempo: um encode só
+            pendentes[key][1].append(seg)
+        else:
+            pendentes[key] = (work / f"seg_{key}.mp4", [seg])
 
     # 2) encoda os que faltam, vários ao mesmo tempo
     if pendentes:
-        feito_out = sum(s.out_theoretical for s in segs
-                        if not any(s is p[0] for p in pendentes))
+        a_fazer = {id(s) for _d, grupo in pendentes.values() for s in grupo}
+        feito_out = sum(s.out_theoretical for s in segs if id(s) not in a_fazer)
         trava = threading.Lock()
         estado = {"out": feito_out, "n": 0}
 
-        def encoda(item: tuple[VideoSegment, str, Path]) -> None:
-            seg, key, dest = item
+        def encoda(item: tuple[str, Path, list[VideoSegment]]) -> None:
+            key, dest, grupo = item
+            seg = grupo[0]
             if cancel and cancel():
                 raise KeyboardInterrupt("exportação cancelada")
             args, _ = _build_video_command(seg, plan, main, cues, ass_dir,
                                            media_paths, hw)
-            for old in work.glob(f"seg_{seg.index:04d}_*.mp4"):
-                old.unlink(missing_ok=True)
-            run_with_progress([*args, str(dest)], seg.out_theoretical, None, cancel)
-            seg.file = str(dest)
-            seg.measured = probe(dest).duration
+            # escreve ao lado e só então assume o nome: um encode cancelado
+            # no meio nunca deixa um arquivo pela metade com cara de pronto
+            parcial = dest.with_name(dest.stem + ".parcial.mp4")
+            run_with_progress([*args, str(parcial)], seg.out_theoretical, None, cancel)
+            os.replace(parcial, dest)
+            medido = probe(dest).duration
+            for s in grupo:
+                s.file = str(dest)
+                s.measured = medido
             # o manifesto é compartilhado: uma escrita de cada vez
             with trava:
-                manifest[str(seg.index)] = {"key": key, "file": seg.file,
-                                            "measured": seg.measured}
-                manifest_path.write_text(json.dumps(manifest, indent=1),
-                                         encoding="utf-8")
-                estado["out"] += seg.out_theoretical
+                manifest[key] = {"file": str(dest), "measured": medido,
+                                 "geracao": geracao}
+                _gravar_manifesto(manifest_path, manifest)
+                estado["out"] += sum(s.out_theoretical for s in grupo)
                 estado["n"] += 1
                 if on_progress:
                     on_progress(min(0.999, estado["out"] / total_out),
                                 f"encodando trecho {estado['n']}/{len(pendentes)}")
 
-        n_workers = min(workers_de_encode(), len(pendentes))
+        itens = [(k, d, g) for k, (d, g) in pendentes.items()]
+        n_workers = min(workers_de_encode(), len(itens))
         if n_workers <= 1:
-            for item in pendentes:
+            for item in itens:
                 encoda(item)
         else:
             with ThreadPoolExecutor(max_workers=n_workers) as pool:
-                futuros = [pool.submit(encoda, item) for item in pendentes]
+                futuros = [pool.submit(encoda, item) for item in itens]
                 erro: BaseException | None = None
                 for fut in futuros:
                     try:
@@ -738,6 +803,8 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
                         erro = erro or exc
                 if erro is not None:
                     raise erro
+
+    _faxina(work, manifest_path, manifest, geracao)
 
     # 3) a linha do tempo, em ordem, com as durações que saíram de verdade
     cursor = 0.0
