@@ -1,9 +1,9 @@
 @echo off
-title Instalar o Bisturi
+title Instalar o Shark Play
 cd /d "%~dp0"
 echo.
 echo  ============================================================
-echo   Instalando o Bisturi
+echo   Instalando o Shark Play
 echo  ============================================================
 echo.
 

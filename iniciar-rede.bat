@@ -22,7 +22,7 @@ if not exist "%PY%" (
     )
 )
 
-title Bisturi (modo rede)
+title Shark Play (modo rede)
 cd /d "%~dp0"
 
 REM Abre o editor tambem para outros aparelhos da MESMA rede (celular,

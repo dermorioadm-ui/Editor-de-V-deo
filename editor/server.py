@@ -29,7 +29,7 @@ from .jobs import get_queue, hub
 from .models import BlurRegion, Clip, Cutaway, Overlay
 from .subtitles import ass as ass_mod
 
-app = FastAPI(title="Bisturi", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="Shark Play", docs_url="/api/docs", redoc_url=None)
 CHUNK = 1024 * 512
 
 
@@ -1684,7 +1684,7 @@ def index() -> HTMLResponse:
     if index_file.exists():
         return HTMLResponse(index_file.read_text(encoding="utf-8"))
     return HTMLResponse(
-        "<h1>Bisturi</h1><p>O frontend não foi compilado. "
+        "<h1>Shark Play</h1><p>O frontend não foi compilado. "
         "Rode <code>npm install &amp;&amp; npm run build</code> dentro de "
         "<code>frontend/</code>.</p>", status_code=200)
 

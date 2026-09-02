@@ -52,7 +52,7 @@ def main() -> int:
 
     ok, detail = ffmpeg_available()
     print("=" * 62)
-    print(" Bisturi — tudo roda na sua máquina")
+    print(" Shark Play — tudo roda na sua máquina")
     print("=" * 62)
     if ok:
         print(f" ffmpeg .......... OK  ({detail})")

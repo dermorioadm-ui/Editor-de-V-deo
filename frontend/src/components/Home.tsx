@@ -292,7 +292,7 @@ export default function Home() {
           <div className="flex items-center gap-3">
             <img src="/logo-mark.svg" alt="" className="w-9 h-9 shrink-0" />
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight">Bisturi</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">Shark Play</h1>
               <p className="text-xs text-slate-500 -mt-0.5">editor de vídeo local</p>
             </div>
           </div>
