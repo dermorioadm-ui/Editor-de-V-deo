@@ -412,6 +412,7 @@ export default function Editor() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <header className="flex items-center gap-3 px-4 h-12 border-b border-line bg-ink-800">
+        <img src="/logo-mark.svg" alt="Bisturi" className="w-5 h-5 shrink-0" />
         <button className="btn btn-xs"
                 onClick={() => setState({ view: 'home', project: null })}>
           ← projetos

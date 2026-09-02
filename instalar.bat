@@ -1,9 +1,9 @@
 @echo off
-title Instalar o Editor de Video
+title Instalar o Bisturi
 cd /d "%~dp0"
 echo.
 echo  ============================================================
-echo   Instalando o Editor de Video
+echo   Instalando o Bisturi
 echo  ============================================================
 echo.
 

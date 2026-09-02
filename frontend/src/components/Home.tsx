@@ -289,8 +289,14 @@ export default function Home() {
     <div className="flex-1 overflow-auto">
       <div className="max-w-5xl mx-auto px-6 py-10">
         <header className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight">Editor de Vídeo</h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <div className="flex items-center gap-3">
+            <img src="/logo-mark.svg" alt="" className="w-9 h-9 shrink-0" />
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">Bisturi</h1>
+              <p className="text-xs text-slate-500 -mt-0.5">editor de vídeo local</p>
+            </div>
+          </div>
+          <p className="text-sm text-slate-400 mt-3">
             Monta a receita aqui embaixo e aperta uma vez. O vídeo volta
             cortado, acelerado, com câmera, filtro e legenda — pronto para
             baixar. O arquivo não sai da sua máquina.

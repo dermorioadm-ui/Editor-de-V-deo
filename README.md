@@ -1,8 +1,9 @@
-# Editor de Vídeo
+# Bisturi
 
-Você joga o vídeo bruto na página, escolhe um preset, aperta **EDITAR** e recebe
-o vídeo cortado, acelerado e legendado. Depois revisa e ajusta o que ficou fora
-do lugar.
+**Bisturi** é o editor de vídeo local deste repositório: você joga o vídeo
+bruto na página, escolhe um preset, aperta **EDITAR** e recebe o vídeo
+cortado, acelerado e legendado. Depois revisa e ajusta o que ficou fora do
+lugar.
 
 **O arquivo nunca sai da sua máquina.** Não existe upload, não existe nuvem, não
 existe limite de tamanho. O programa roda no seu computador e lê o vídeo direto

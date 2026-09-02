@@ -1,5 +1,5 @@
 @echo off
-title Liberar espaco - Editor de Video
+title Liberar espaco - Bisturi
 cd /d "%~dp0"
 echo.
 echo  ============================================================

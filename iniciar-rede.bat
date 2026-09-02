@@ -22,7 +22,7 @@ if not exist "%PY%" (
     )
 )
 
-title Editor de Video (modo rede)
+title Bisturi (modo rede)
 cd /d "%~dp0"
 
 REM Abre o editor tambem para outros aparelhos da MESMA rede (celular,
