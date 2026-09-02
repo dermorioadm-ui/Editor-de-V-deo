@@ -22,7 +22,7 @@ if not exist "%PY%" (
     )
 )
 
-title Shark Play (modo rede)
+title Sharkcut (modo rede)
 cd /d "%~dp0"
 
 REM Abre o editor tambem para outros aparelhos da MESMA rede (celular,

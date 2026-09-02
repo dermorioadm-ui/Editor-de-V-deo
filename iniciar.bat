@@ -22,7 +22,7 @@ if not exist "%PY%" (
     )
 )
 
-title Shark Play
+title Sharkcut
 cd /d "%~dp0"
 
 REM Para trocar o modelo de transcricao, tire o REM da linha abaixo:

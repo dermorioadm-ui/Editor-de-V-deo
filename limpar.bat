@@ -1,5 +1,5 @@
 @echo off
-title Liberar espaco - Shark Play
+title Liberar espaco - Sharkcut
 cd /d "%~dp0"
 echo.
 echo  ============================================================

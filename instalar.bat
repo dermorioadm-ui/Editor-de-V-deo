@@ -1,9 +1,9 @@
 @echo off
-title Instalar o Shark Play
+title Instalar o Sharkcut
 cd /d "%~dp0"
 echo.
 echo  ============================================================
-echo   Instalando o Shark Play
+echo   Instalando o Sharkcut
 echo  ============================================================
 echo.
 
