@@ -66,7 +66,7 @@ function Fonte($tamanho, $estilo = [System.Drawing.FontStyle]::Regular) {
 # -------------------------------------------------------------------- janela
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Instalar o Sharkcut'
-$form.ClientSize = New-Object System.Drawing.Size(620, 524)
+$form.ClientSize = New-Object System.Drawing.Size(620, 576)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -139,7 +139,7 @@ $form.Controls.Add($barra)
 $lblStatus = NovoRotulo 26 332 568 'Pronto para instalar.' $corMarca
 
 $log = New-Object System.Windows.Forms.TextBox
-$log.SetBounds(26, 356, 568, 96)
+$log.SetBounds(26, 356, 568, 148)
 $log.Multiline = $true
 $log.ReadOnly = $true
 $log.ScrollBars = 'Vertical'
@@ -150,7 +150,7 @@ $log.BorderStyle = 'FixedSingle'
 $form.Controls.Add($log)
 
 $btSair = New-Object System.Windows.Forms.Button
-$btSair.SetBounds(26, 468, 120, 40)
+$btSair.SetBounds(26, 520, 120, 40)
 $btSair.Text = 'Sair'
 $btSair.FlatStyle = 'Flat'
 $btSair.BackColor = $corPainel
@@ -160,7 +160,7 @@ $btSair.Add_Click({ $form.Close() })
 $form.Controls.Add($btSair)
 
 $btInstalar = New-Object System.Windows.Forms.Button
-$btInstalar.SetBounds(374, 468, 220, 40)
+$btInstalar.SetBounds(374, 520, 220, 40)
 $btInstalar.Text = 'INSTALAR'
 $btInstalar.FlatStyle = 'Flat'
 $btInstalar.BackColor = $corMarca
@@ -170,9 +170,15 @@ $btInstalar.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btInstalar)
 
 # ------------------------------------------------------------------ auxílios
+$script:arquivoLog = Join-Path $env:TEMP 'sharkcut-instalacao.log'
+
 function Escrever($texto) {
     if (-not $texto) { return }
-    $log.AppendText(($texto.TrimEnd() + "`r`n"))
+    $limpo = $texto.TrimEnd()
+    $log.AppendText(($limpo + "`r`n"))
+    # a caixa de log mostra umas dez linhas; o arquivo guarda tudo, que é o
+    # que dá para mandar para alguém quando a instalação falha
+    try { Add-Content -Path $script:arquivoLog -Value $limpo -Encoding UTF8 } catch { }
     [System.Windows.Forms.Application]::DoEvents()
 }
 
@@ -246,7 +252,28 @@ function Rodar($programa, $argumentos, $titulo) {
     $a = Derramar $saida $a
     $b = Derramar $erros $b
     Remove-Item $saida, $erros -Force -ErrorAction SilentlyContinue
-    return $p.ExitCode
+    # LER O CÓDIGO DE SAÍDA PODE FALHAR. O objeto que o Start-Process devolve
+    # nem sempre mantém o identificador do processo no Windows, e aí a
+    # propriedade estoura e o PowerShell entrega $null — que é diferente de
+    # zero, então um comando que deu certo passaria por erro. Foi exatamente
+    # o que aconteceu: pip dizendo "Requirement already satisfied" em tudo e
+    # o instalador anunciando falha. Aqui a leitura é protegida, e quem
+    # decide se deu certo é a conferência de verdade, logo abaixo.
+    $codigo = -1
+    try { $codigo = $p.ExitCode } catch { $codigo = -1 }
+    if ($null -eq $codigo) { $codigo = -1 }
+    Escrever "(terminou com código $codigo)"
+    return [int]$codigo
+}
+
+# A VERDADE sobre a instalação não é o código do pip: é se o Python consegue
+# importar as bibliotecas. Isso não tem como dar falso positivo nem falso
+# negativo — ou o editor tem o que precisa para rodar, ou não tem.
+function BibliotecasProntas {
+    $codigo = Rodar $pyVenv `
+        @('-c', '"import fastapi, uvicorn, numpy, faster_whisper, httpx; print(''bibliotecas ok'')"') `
+        'conferindo as bibliotecas'
+    return ($codigo -eq 0)
 }
 
 # Só a saída, sem janela e sem enfeite — para perguntar a versão de alguém.
@@ -334,10 +361,10 @@ function Conferir {
         $livre = [int]((New-Object System.IO.DriveInfo($unidade)).AvailableFreeSpace / 1GB)
     } catch { }
     if ($livre -ge $precisa) {
-        $lblDisco.Text = "✓  $livre GB livres"
+        $lblDisco.Text = "✓  espaço em disco: você tem $livre GB livres (precisa de $precisa)"
         $lblDisco.ForeColor = $corOk
     } else {
-        $lblDisco.Text = "✗  $livre GB livres, precisa de ~$precisa GB — rode o limpar.bat"
+        $lblDisco.Text = "✗  espaço em disco: só $livre GB livres, precisa de ~$precisa GB — rode o limpar.bat"
         $lblDisco.ForeColor = $corErro
         $ok = $false
     }
@@ -391,8 +418,11 @@ function Instalar {
         Escrever "criando o ambiente em $venv"
         $r = Rodar $script:python ($script:pythonArgs + @('-m', 'venv', ('"{0}"' -f $venv))) `
                    'criando o ambiente (alguns minutos)'
-        if ($r -ne 0 -or -not (Test-Path $pyVenv)) {
-            Status 'Não consegui criar o ambiente. O motivo está no log acima.' $corErro
+        # Quem diz se o ambiente nasceu é o python.exe existir no lugar certo,
+        # não o código de saída — pelo mesmo motivo do passo do pip.
+        if (-not (Test-Path $pyVenv)) {
+            Escrever "o comando terminou com código $r e o python do ambiente não apareceu"
+            Status "Não consegui criar o ambiente. O log inteiro está em $($script:arquivoLog)" $corErro
             $btInstalar.Text = 'FECHAR'
             $btInstalar.Enabled = $true
             $btInstalar.BackColor = $corPainel
@@ -411,7 +441,10 @@ function Instalar {
     $r = Rodar $pyVenv @('-m', 'pip', 'install', '-r', ('"{0}"' -f $req)) `
                'instalando as bibliotecas (a parte demorada)'
     if ($r -ne 0) {
-        Status 'A instalação das bibliotecas falhou — o motivo está no log.' $corErro
+        Escrever "o pip terminou com código $r — conferindo se as bibliotecas ficaram prontas assim mesmo"
+    }
+    if (-not (BibliotecasProntas)) {
+        Status "As bibliotecas não ficaram prontas. O log inteiro está em $($script:arquivoLog)" $corErro
         $btInstalar.Text = 'FECHAR'
         $btInstalar.Enabled = $true
         $btInstalar.BackColor = $corPainel
