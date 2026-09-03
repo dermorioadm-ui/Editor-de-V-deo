@@ -312,6 +312,12 @@ def add_media(pid: str, path: str, kind: str = "video",
           "descricao, created_at) VALUES (?,?,?,?,?,?,?,?)",
           (mid, pid, str(src.resolve()), kind, name or src.name,
            db.jdumps(info), str(descricao or "")[:400], time.time()))
+    if kind == "audio":
+        # toda música que entra num projeto vai para a BIBLIOTECA e fica lá
+        try:
+            guardar_musica(str(src), name or src.name)
+        except Exception:  # noqa: BLE001 — a biblioteca não pode impedir a trilha
+            pass
     return {"id": mid, "path": str(src.resolve()), "kind": kind,
             "name": name or src.name, "info": info,
             "descricao": str(descricao or "")[:400]}
@@ -872,10 +878,10 @@ def enriquecer(project: Project, ctx) -> dict:
     midias = [m for m in list_media(project.id)
               if m.get("kind") in ("video", "image")
               and not str(m.get("id", "")).startswith("k_")]
-    # DESLIGADO por padrão: cartão é elemento que a IA inventa por conta
-    # própria, e o usuário foi claro que não quer elemento que ele não pediu.
-    quer_cartao = bool(db.get_setting("ia_cartoes", False))
-    if not midias and not quer_cartao:
+    # Cartão NÃO nasce aqui: a IA inventava painéis por conta própria e o
+    # usuário não quer elemento que não pediu. Cartão só existe por pedido
+    # escrito na edição (cartoes_por_pedido). Sem mídia anexada, nada a fazer.
+    if not midias:
         return {"ok": False, "pulada": True, "motivo": "nada para posicionar"}
 
     # SEM IA, O ANEXO ENTRA ASSIM MESMO. O usuário anexou a mídia na primeira
@@ -1416,7 +1422,8 @@ def plano_da_ia(project: Project, ctx, com_anexos: bool = True) -> dict:
     if com_anexos:
         ctx.stage("anexos", "olhando as mídias que você anexou")
         midias = [m for m in list_media(project.id)
-                  if m.get("kind") in ("video", "image")]
+                  if m.get("kind") in ("video", "image")
+                  and not str(m.get("id", "")).startswith("k_")]
         midias = midias[:roteiro.MAX_QUADROS]
         for m in midias:
             try:
@@ -1462,8 +1469,12 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
     if not plano:
         raise ValueError("nada para aplicar")
     plan = project.plan
+    # o cartão (k_) é elemento DO PROGRAMA, não mídia que o usuário anexou:
+    # sem este filtro o plano seguinte o tratava como anexo e o reinseria
+    # encolhido no canto, como janela
     midias = [m for m in list_media(project.id)
-              if m.get("kind") in ("video", "image")]
+              if m.get("kind") in ("video", "image")
+              and not str(m.get("id", "")).startswith("k_")]
     if so_anexos:
         plano = {k: v for k, v in plano.items() if k != "blocos"}
     palavras = project.analysis.get("words") or []
@@ -1488,7 +1499,14 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
                                          out_end=a["out_end"],
                                          **geometria_pip(project, por_id.get(a["media_id"]) or {})))
 
-    relatorio["cartoes"] = desenhar_cartoes(project, relatorio.get("cartoes"))
+    # cartões só quando este plano trouxe algum (o pedido explícito do
+    # usuário); o plano automático não traz — e não pode apagar os que
+    # ele já pediu antes
+    if relatorio.get("cartoes"):
+        relatorio["cartoes"] = desenhar_cartoes(project, relatorio.get("cartoes"),
+                                                substituir=False)
+    else:
+        relatorio["cartoes"] = []
 
     # a etapa e a ênfase só viram imagem depois disto — e é aqui que TODAS as
     # invariantes do enquadramento são impostas, exatamente como quando quem
@@ -1615,24 +1633,51 @@ def posicao_do_cartao(plan, largura: int, altura: int,
     return max(0.0, min(0.92, centro)), round(escala, 4)
 
 
-def desenhar_cartoes(project: Project, pedidos: list[dict] | None) -> list[dict]:
+def limpar_cartoes(project: Project) -> int:
+    """Tira todos os cartões do projeto — as sobreposições E as linhas de mídia.
+
+    Os ids vêm das DUAS pontas: apagar o cartão na prévia tira só a
+    sobreposição, e a linha `k_` ficava no banco para sempre — o painel
+    continuava contando um cartão que não existia mais no vídeo, e "limpar"
+    devolvia zero para sempre.
+    """
+    plan = project.plan
+    antigos = {o.media_id for o in plan.overlays if str(o.media_id).startswith("k_")}
+    antigos |= {m["id"] for m in list_media(project.id)
+                if str(m["id"]).startswith("k_")}
+    plan.overlays = [o for o in plan.overlays
+                     if not str(o.media_id).startswith("k_")]
+    for mid in antigos:
+        db.ex("DELETE FROM media WHERE id=? AND project_id=?", (mid, project.id))
+    return len(antigos)
+
+
+def esquecer_cartao_orfao(project: Project, media_id: str) -> None:
+    """Apagou a sobreposição de um cartão: a mídia dele vai junto."""
+    mid = str(media_id or "")
+    if not mid.startswith("k_"):
+        return
+    if any(o.media_id == mid for o in project.plan.overlays):
+        return
+    db.ex("DELETE FROM media WHERE id=? AND project_id=?", (mid, project.id))
+
+
+def desenhar_cartoes(project: Project, pedidos: list[dict] | None,
+                     substituir: bool = True) -> list[dict]:
     """Desenha cada cartão e o põe na linha do tempo como sobreposição.
 
     O PNG é nomeado pelo CONTEÚDO, então refazer a edição com o mesmo texto
     reaproveita o arquivo — e o cache de trechos do render não é invalidado à
-    toa. Os cartões da rodada anterior saem antes: quem escreveu foi a IA, e
-    se ela mudou de ideia o painel velho não pode ficar.
+    toa. Com ``substituir`` os cartões da rodada anterior saem antes; sem, os
+    novos se somam aos que o usuário já pediu.
     """
     from .models import Overlay
     from .render import cartao as cartao_mod
 
     dir_cartoes = project.dir / "cartoes"
     plan = project.plan
-    antigos = {o.media_id for o in plan.overlays if str(o.media_id).startswith("k_")}
-    plan.overlays = [o for o in plan.overlays
-                     if not str(o.media_id).startswith("k_")]
-    for mid in antigos:
-        db.ex("DELETE FROM media WHERE id=? AND project_id=?", (mid, project.id))
+    if substituir:
+        limpar_cartoes(project)
     if not pedidos:
         return []
 
@@ -1670,6 +1715,154 @@ def desenhar_cartoes(project: Project, pedidos: list[dict] | None) -> list[dict]
             dur_in=CARTAO_FADE, dur_out=CARTAO_FADE))
         feitos.append({**c, "media_id": mid, "arquivo": destino.name})
     return feitos
+
+
+def cartoes_por_pedido(project: Project, ctx, pedido: str) -> dict:
+    """Cartões (frase de hook, tópicos, número) escritos pela IA A PEDIDO.
+
+    É o único jeito de um cartão existir: o usuário escreve o que quer na
+    edição ("um hook de abertura com a promessa", "os três passos em cartão",
+    "o número de clientes em destaque") e a IA escreve só isso. O programa
+    desenha e põe em cima da fala certa; os cartões se SOMAM aos que já
+    existem — apagar é um clique na prévia, ou 'limpar cartões'.
+    """
+    from .ai import gemini, roteiro
+
+    chave = gemini.chave_guardada()
+    if not chave:
+        raise RuntimeError("sem chave do Gemini. Cole a sua na tela inicial "
+                           "(Ajustes > IA) — uma vez só; ela fica guardada.")
+    pedido = str(pedido or "").strip()
+    if not pedido:
+        raise ValueError("escreva o que você quer nos cartões")
+    plan = project.plan
+    palavras = project.analysis.get("words") or []
+    if not palavras:
+        raise ValueError("rode a edição automática antes: sem transcrição a IA "
+                         "não tem o que ler")
+    ctx.stage("ia", "lendo a fala e escrevendo os cartões que você pediu")
+    blocos = roteiro.blocos_do_plano(plan, palavras)
+    if not blocos:
+        raise ValueError("nenhum bloco com fala para a IA olhar")
+    duracao = duracao_de_saida(project)
+    resposta = roteiro.pedir_cartoes(chave, db.get_setting("gemini_model", "") or "",
+                                     blocos, duracao, pedido)
+    porindice = {i: c for i, c in enumerate(plan.active_clips)}
+    recusados: list[dict] = []
+    # quem pediu decide quantos: o teto é o que a IA escreveu, sem o ritmo
+    # de "um a cada 20 s" do plano automático
+    quantos = len(resposta.get("cartoes") or [])
+    ja_no_video = [(o.out_start, o.out_end) for o in plan.overlays
+                   if str(o.media_id).startswith("k_") and o.enabled]
+    cartoes = roteiro._cartoes_pedidos(resposta, plan, porindice, duracao,
+                                       recusados, teto=max(1, quantos),
+                                       ocupados=ja_no_video)
+    ctx.progress(0.8, f"desenhando {len(cartoes)} cartão(ões)")
+    feitos = desenhar_cartoes(project, cartoes, substituir=False)
+    # um cartão que não pôde ser desenhado NÃO é um cartão no vídeo: ele volta
+    # como recusa, senão a tela dizia "1 cartão" e não havia nenhum
+    ok = [c for c in feitos if not c.get("erro")]
+    for c in feitos:
+        if c.get("erro"):
+            recusados.append({"o_que": f"cartão “{c.get('titulo', '')}”",
+                              "motivo": f"não consegui desenhar: {c['erro']}"})
+    project.save_plan()
+    return {"ok": True, "leitura": str(resposta.get("leitura", ""))[:300],
+            "modelo": resposta.get("_modelo", ""), "cartoes": ok,
+            "recusados": recusados, "timeline": timeline_summary(project)}
+
+
+# ------------------------------------------------------------ músicas guardadas
+def listar_musicas() -> list[dict]:
+    saida = []
+    for r in db.q("SELECT * FROM musicas ORDER BY created_at DESC"):
+        saida.append({"id": r["id"], "path": r["path"], "name": r["name"],
+                      "info": db.jloads(r["info_json"], {}),
+                      "existe": Path(r["path"]).exists()})
+    return saida
+
+
+def guardar_musica(path: str, name: str = "") -> dict:
+    """Guarda uma música de fundo na BIBLIOTECA — copiada para a pasta de dados.
+
+    Copiada, não referenciada: o arquivo original vive em Downloads, num
+    pendrive, numa pasta que muda de nome; a biblioteca tem que sobreviver a
+    isso.
+
+    A identidade é o CONTEÚDO (sha1), não o nome nem o tamanho. Nome e
+    tamanho enganam: dois MP3 do mesmo tempo e bitrate têm exatamente os
+    mesmos bytes de tamanho, e "trilha.mp3" se repete a cada download — a
+    biblioteca passaria a entregar a música errada. E o arquivo guardado leva
+    o digest no nome, o que dispensa procurar um nome livre: procurar era um
+    laço que, com um nome tipo "01. Intro.mp3", nunca terminava (o
+    ``with_suffix`` comia o "(2)" no ponto do meio) e travava o servidor.
+    """
+    import hashlib
+    import shutil
+
+    from .config import MEDIA_DIR
+
+    src = Path(path).expanduser()
+    if not src.exists():
+        raise FileNotFoundError(f"arquivo não encontrado: {src}")
+    tamanho = src.stat().st_size
+    nome = name or src.name
+    h = hashlib.sha1()
+    with open(src, "rb") as fh:
+        for pedaco in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(pedaco)
+    digest = h.hexdigest()
+    for r in db.q("SELECT * FROM musicas WHERE sha1=?", (digest,)):
+        if Path(r["path"]).exists():
+            return {"id": r["id"], "path": r["path"], "name": r["name"],
+                    "info": db.jloads(r["info_json"], {}), "existe": True,
+                    "repetida": True}
+        db.ex("DELETE FROM musicas WHERE id=?", (r["id"],))   # sumiu do disco
+    pasta = MEDIA_DIR / "musicas"
+    pasta.mkdir(parents=True, exist_ok=True)
+    # o digest no nome: o mesmo conteúdo cai sempre no mesmo arquivo, e dois
+    # conteúdos diferentes com o mesmo nome nunca colidem
+    # não usa _nome_de_arquivo: aquele é para o vídeo exportado e acrescenta
+    # "_editado" ao nome — a música guardada mantém o nome que ela tem
+    limpo = "".join(c for c in Path(nome).stem
+                    if c not in '\\/:*?"<>|').strip()[:60] or "musica"
+    destino = pasta / f"{limpo} [{digest[:8]}]{src.suffix.lower()}"
+    if destino.resolve() != src.resolve() and not destino.exists():
+        shutil.copy2(src, destino)
+    try:
+        info = probe(destino).to_dict()
+    except Exception:  # noqa: BLE001
+        info = {}
+    mid = uuid.uuid4().hex[:10]
+    db.ex("INSERT INTO musicas(id, path, name, info_json, size_bytes, sha1, "
+          "created_at) VALUES (?,?,?,?,?,?,?)",
+          (mid, str(destino.resolve()), nome, db.jdumps(info), tamanho, digest,
+           time.time()))
+    return {"id": mid, "path": str(destino.resolve()), "name": nome, "info": info,
+            "existe": True, "repetida": False}
+
+
+def apagar_musica(mid: str) -> bool:
+    from .config import MEDIA_DIR
+
+    r = db.q1("SELECT * FROM musicas WHERE id=?", (mid,))
+    if not r:
+        return False
+    db.ex("DELETE FROM musicas WHERE id=?", (mid,))
+    p = Path(r["path"])
+    try:
+        alvo = p.resolve()
+        # o caminho gravado em `media` passou por resolve(); comparar a string
+        # crua deixava passar o mesmo arquivo escrito de outro jeito e o
+        # arquivo de uma trilha EM USO era apagado
+        usada = any(Path(m["path"]).resolve() == alvo
+                    for m in db.q("SELECT path FROM media WHERE kind='audio'"))
+        if p.exists() and (MEDIA_DIR / "musicas").resolve() in alvo.parents \
+                and not usada:
+            p.unlink()
+    except OSError:
+        pass
+    return True
 
 
 def gerar_com_ia(project: Project, ctx, pedido: dict) -> dict:

@@ -318,6 +318,10 @@ def main() -> int:
     testar_geracao_com_ia_mockada()
     testar_quadro_encaixado()
     testar_quadro_pela_rota_e_janela_na_trilha()
+    testar_cartoes_so_por_pedido()
+    testar_biblioteca_de_musicas()
+    testar_corte_na_primeira_tela()
+    testar_armadilhas_de_musica_e_cartao()
 
     print()
     if FALHAS:
@@ -3490,6 +3494,441 @@ def testar_quadro_pela_rota_e_janela_na_trilha() -> None:
             svc.delete_project(project.id)
         except Exception:  # noqa: BLE001
             pass
+
+
+def testar_cartoes_so_por_pedido() -> None:
+    """Cartão só existe quando o usuário PEDE, na edição.
+
+    "A IA tá criando elementos por conta própria e não tá legal." O plano
+    automático não pede mais cartão nenhum (nem no esquema); a única porta é
+    o pedido escrito — um hook de abertura, os passos, o número — e a IA
+    escreve só isso. Os pedidos se somam; refazer a edição não apaga o que
+    ele pediu.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.ai import gemini, roteiro
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.server import app
+
+    check("cartoes" not in roteiro._esquema(True)["properties"]
+          and "cartoes" not in roteiro._esquema(False)["properties"],
+          "o esquema do plano automático não tem mais cartões")
+    check("CARTÕES" not in roteiro.INSTRUCAO and "cartão" not in roteiro.INSTRUCAO.lower(),
+          "e a instrução do plano automático não fala em cartão")
+    check("frase" in str(roteiro.ESQUEMA_CARTOES) and "hook" in roteiro.INSTRUCAO_CARTOES.lower(),
+          "o pedido de cartões tem o tipo 'frase' (o hook) e fala dele")
+
+    tmp = Path(tempfile.mkdtemp(prefix="cartoes_pedido_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=30:d=12",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    project = svc.create(str(fonte), "cartoes", "VSL")
+    project.plan.clips = [Clip(src_start=float(k * 3), src_end=float(k * 3 + 3)) for k in range(4)]
+    project.analysis["words"] = [
+        {"i": k, "start": k * 3.0 + 0.2, "end": k * 3.0 + 2.8, "text": f"fala{k}"}
+        for k in range(4)]
+    project.save_plan()
+    svc.save_analysis(project) if hasattr(svc, "save_analysis") else None
+    try:
+        from editor import db
+        db.ex("UPDATE projects SET analysis_json=? WHERE id=?",
+              (db.jdumps(project.analysis), project.id))
+    except Exception:  # noqa: BLE001
+        pass
+
+    pedidos: list[str] = []
+
+    def fake_gerar_json(chave, modelo, instrucao, pedido, esquema, **kw):
+        pedidos.append(pedido)
+        check(instrucao is roteiro.INSTRUCAO_CARTOES and esquema is roteiro.ESQUEMA_CARTOES,
+              "o pedido de cartões vai com a instrução e o esquema DELE")
+        if "hook" in pedido.lower():
+            return {"leitura": "um hook", "cartoes": [
+                {"bloco": 0, "tipo": "frase", "titulo": "Você perde cliente todo dia",
+                 "segundos": 3.0}]}
+        return {"leitura": "os passos", "cartoes": [
+            {"bloco": 2, "tipo": "topicos", "titulo": "3 passos",
+             "topicos": ["Criar a conta", "Escolher o plano", "Publicar"], "segundos": 4.0}]}
+
+    class Ctx:
+        def stage(self, n, m=""): pass
+        def progress(self, f, m="", s=""): pass
+        def cancelled(self): return False
+
+    guardado = (gemini.gerar_json, gemini.escolher_modelo, gemini.chave_guardada)
+    try:
+        gemini.gerar_json = fake_gerar_json
+        gemini.escolher_modelo = lambda chave, pedido="": {"id": "gemini-2.5-flash", "saida": 4096}
+        gemini.chave_guardada = lambda: "chave-de-teste"
+
+        r = svc.cartoes_por_pedido(project, Ctx(), "um hook de abertura com a promessa")
+        check(len(r["cartoes"]) == 1 and r["cartoes"][0].get("media_id", "").startswith("k_"),
+              f"o pedido de hook virou UM cartão desenhado ({len(r['cartoes'])})")
+        check("PEDIDO DO USUÁRIO" in pedidos[-1] and "hook de abertura" in pedidos[-1]
+              and "fala2" in pedidos[-1],
+              "o pedido leva a fala em blocos e as palavras do usuário")
+        fresco = svc.load(project.id)
+        k1 = [o for o in fresco.plan.overlays if str(o.media_id).startswith("k_")]
+        check(len(k1) == 1 and abs(k1[0].out_start - 0.0) < 0.01,
+              f"o hook está no plano, no bloco 0 ({[o.out_start for o in k1]})")
+
+        r2 = svc.cartoes_por_pedido(fresco, Ctx(), "os três passos em cartão de tópicos")
+        fresco = svc.load(project.id)
+        k2 = [o for o in fresco.plan.overlays if str(o.media_id).startswith("k_")]
+        check(len(k2) == 2 and len(r2["cartoes"]) == 1,
+              f"o segundo pedido SOMA ao primeiro, não substitui ({len(k2)} cartões)")
+
+        # o plano automático (anexos) NÃO apaga os cartões pedidos
+        rel = svc.aplicar_plano_da_ia(fresco, {"leitura": "", "blocos": [], "anexos": []},
+                                      so_anexos=True)
+        fresco = svc.load(project.id)
+        k3 = [o for o in fresco.plan.overlays if str(o.media_id).startswith("k_")]
+        check(len(k3) == 2 and rel.get("cartoes") == [],
+              f"refazer o plano automático deixa os cartões pedidos em paz ({len(k3)})")
+
+        cliente = TestClient(app)
+        rr = cliente.delete(f"/api/projects/{project.id}/cartoes")
+        check(rr.status_code == 200 and rr.json()["removidos"] == 2
+              and not [o for o in svc.load(project.id).plan.overlays
+                       if str(o.media_id).startswith("k_")],
+              "'limpar cartões' tira os dois")
+        cfg = cliente.get("/api/ai/config").json()
+        check("cartoes" not in cfg, "a config da IA não tem mais o interruptor de cartões")
+    finally:
+        gemini.gerar_json, gemini.escolher_modelo, gemini.chave_guardada = guardado
+        try:
+            svc.delete_project(project.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def testar_biblioteca_de_musicas() -> None:
+    """Toda música de fundo que entra fica GUARDADA, e a biblioteca acumula."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG, MEDIA_DIR
+    from editor.server import app
+
+    tmp = Path(tempfile.mkdtemp(prefix="musicas_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x303030:s=320x180:r=30:d=2",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    mp3a, mp3b = tmp / "trilha calma.mp3", tmp / "trilha forte.mp3"
+    for f, hz in ((mp3a, 220), (mp3b, 440)):
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", f"sine=frequency={hz}:duration=2", "-c:a", "libmp3lame",
+                        str(f)], check=True)
+    cliente = TestClient(app)
+    antes = {m["id"] for m in cliente.get("/api/musicas").json()}
+    project = svc.create(str(fonte), "musicas", "VSL")
+    try:
+        m1 = svc.add_media(project.id, str(mp3a), "audio")
+        lista = [m for m in cliente.get("/api/musicas").json() if m["id"] not in antes]
+        check(len(lista) == 1 and lista[0]["name"] == "trilha calma.mp3",
+              "a música que entrou no projeto foi para a biblioteca")
+        check(Path(lista[0]["path"]).exists() and (MEDIA_DIR / "musicas") in Path(lista[0]["path"]).parents,
+              "copiada para a pasta de dados (sobrevive ao arquivo original sumir)")
+        check(m1["path"] == str(mp3a.resolve()), "o projeto continua apontando o arquivo que o usuário deu")
+        svc.add_media(project.id, str(mp3a), "audio")
+        lista = [m for m in cliente.get("/api/musicas").json() if m["id"] not in antes]
+        check(len(lista) == 1, "a mesma música não entra duas vezes na biblioteca")
+        r = cliente.post("/api/musicas", json={"path": str(mp3b)})
+        lista = [m for m in cliente.get("/api/musicas").json() if m["id"] not in antes]
+        check(r.status_code == 200 and len(lista) == 2,
+              f"guardar direto pela rota acumula ({len(lista)})")
+        # usar uma guardada num projeto NOVO: o caminho da biblioteca serve
+        guardada = next(m for m in lista if m["name"] == "trilha forte.mp3")
+        m2 = svc.add_media(project.id, guardada["path"], "audio")
+        check(m2["kind"] == "audio" and float(m2["info"].get("duration") or 0) > 1.5,
+              "a música guardada entra num projeto como qualquer outra")
+        rid = guardada["id"]
+        r = cliente.delete(f"/api/musicas/{rid}")
+        lista = [m for m in cliente.get("/api/musicas").json() if m["id"] not in antes]
+        check(r.status_code == 200 and all(m["id"] != rid for m in lista),
+              "apagar tira da biblioteca")
+        check(cliente.delete("/api/musicas/nao-existe").status_code == 404,
+              "apagar o que não existe dá 404")
+        for m in lista:
+            cliente.delete(f"/api/musicas/{m['id']}")
+    finally:
+        try:
+            svc.delete_project(project.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def testar_corte_na_primeira_tela() -> None:
+    """A borda do corte de silêncio vem na RECEITA da primeira tela."""
+    from editor.models import EditPlan
+    from editor.server import aplicar_receita
+
+    class P:
+        plan = EditPlan()
+        info = None
+
+    p = P()
+    aplicar_receita(p, {"cut": {"aggressiveness": 0.85}, "speed": {"global_multiplier": 1.0}})
+    check(abs(p.plan.cut.aggressiveness - 0.85) < 1e-9,
+          "o slider 'corte do silêncio' da primeira tela grava a agressividade do corte")
+    aplicar_receita(p, {"speed": {"global_multiplier": 1.1}})
+    check(abs(p.plan.cut.aggressiveness - 0.85) < 1e-9,
+          "e uma receita sem ele não mexe no que já estava")
+
+
+def testar_armadilhas_de_musica_e_cartao() -> None:
+    """Os seis defeitos que a revisão adversarial achou nas features novas.
+
+    Todos são de correção, nenhum de estilo: um deles TRAVAVA o servidor.
+    """
+    import subprocess
+    import tempfile
+    import threading
+    from pathlib import Path
+
+    from editor import db, projects as svc
+    from editor.config import FFMPEG, MEDIA_DIR
+    from editor.models import Clip, Overlay
+    from editor.render import cartao as K
+    from editor.server import app
+
+    tmp = Path(tempfile.mkdtemp(prefix="armadilhas_"))
+
+    def audio(nome: str, dur: float, freq: int) -> Path:
+        dest = tmp / nome
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", f"sine=frequency={freq}:duration={dur}",
+                        "-c:a", "libmp3lame", str(dest)], check=True)
+        return dest
+
+    # 1) NOME COM PONTO NO MEIO NÃO TRAVA. "01. Intro.mp3" é o formato padrão
+    #    de export de álbum: o laço que procurava um nome livre colapsava o
+    #    nome ("01.mp3") a cada volta e girava para sempre, dentro da rota.
+    a1 = audio("01. Intro.mp3", 1.0, 440)
+    (tmp / "b").mkdir(exist_ok=True)
+    a2 = tmp / "b" / "01. Intro.mp3"
+    audio("tmp_a2.mp3", 2.0, 660).replace(a2)
+    a3 = tmp / "c"
+    a3.mkdir(exist_ok=True)
+    a3 = a3 / "01. Intro.mp3"
+    audio("tmp_a3.mp3", 3.0, 880).replace(a3)
+
+    resultado: dict = {}
+
+    def guardar_tres():
+        try:
+            resultado["r"] = [svc.guardar_musica(str(x)) for x in (a1, a2, a3)]
+        except Exception as exc:  # noqa: BLE001
+            resultado["erro"] = exc
+
+    t = threading.Thread(target=guardar_tres, daemon=True)
+    t.start()
+    t.join(60)
+    check(not t.is_alive(),
+          "três músicas com o MESMO nome '01. Intro.mp3' e tamanhos diferentes "
+          "são guardadas sem travar (o laço de nome não existe mais)")
+    if t.is_alive():
+        return
+    check("erro" not in resultado, f"e sem erro ({resultado.get('erro')})")
+    tres = resultado.get("r") or []
+    check(len({r["path"] for r in tres}) == 3,
+          f"cada uma foi para o seu arquivo ({[Path(r['path']).name for r in tres]})")
+
+    # 2) A IDENTIDADE É O CONTEÚDO. Nome e tamanho iguais não são a mesma
+    #    música: dois MP3 do mesmo tempo e bitrate têm os mesmos bytes.
+    for r, origem in zip(tres, (a1, a2, a3)):
+        check(Path(r["path"]).read_bytes() == origem.read_bytes(),
+              f"a guardada '{Path(r['path']).name}' tem o conteúdo do arquivo certo")
+    de_novo = svc.guardar_musica(str(a2))
+    check(de_novo.get("repetida") and de_novo["path"] == tres[1]["path"],
+          "o MESMO arquivo, guardado de novo, é reconhecido e não duplica")
+    copia = tmp / "outro nome.mp3"
+    copia.write_bytes(a2.read_bytes())
+    igual = svc.guardar_musica(str(copia))
+    check(igual.get("repetida"),
+          "o mesmo conteúdo com outro nome também não duplica (é o mesmo som)")
+
+    # 3) APAGAR NÃO PODE LEVAR O ARQUIVO DE UMA TRILHA EM USO. O caminho em
+    #    `media` passa por resolve(); comparar a string crua deixava passar.
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=2",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    projeto = svc.create(str(fonte), "armadilhas", "VSL")
+    try:
+        guardada = tres[0]
+        svc.add_media(projeto.id, guardada["path"], "audio")   # usa a guardada
+        svc.apagar_musica(guardada["id"])
+        check(Path(guardada["path"]).exists(),
+              "apagar da biblioteca NÃO apaga o arquivo que um projeto usa")
+        livre = tres[2]
+        svc.apagar_musica(livre["id"])
+        check(not Path(livre["path"]).exists(),
+              "e apaga o arquivo que ninguém usa")
+
+        # 4) O CARTÃO NÃO É MÍDIA ANEXADA. Sem o filtro, o plano seguinte o
+        #    tratava como anexo do usuário e o reinseria como janela no canto.
+        projeto = svc.load(projeto.id)
+        projeto.plan.clips = [Clip(src_start=float(k), src_end=float(k + 1))
+                              for k in range(2)]
+        png = tmp / "cartao.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=white:s=400x200", "-frames:v", "1",
+                        str(png)], check=True)
+        db.ex("INSERT INTO media(id, project_id, path, kind, name, info_json, "
+              "descricao, created_at) VALUES (?,?,?,?,?,?,?,?)",
+              ("k_teste123", projeto.id, str(png), "image", "cartão: teste",
+               db.jdumps({"width": 400, "height": 200}), "", time.time()))
+        projeto.plan.overlays.append(Overlay(media_id="k_teste123",
+                                             out_start=0.0, out_end=1.0))
+        projeto.save_plan()
+        rel = svc.aplicar_plano_da_ia(svc.load(projeto.id),
+                                      {"leitura": "", "blocos": [], "anexos": []},
+                                      so_anexos=True)
+        fresco = svc.load(projeto.id)
+        janelas = [o for o in fresco.plan.overlays
+                   if o.media_id == "k_teste123" and o.out_start > 0.001]
+        check(not janelas and not any(a["media_id"] == "k_teste123"
+                                      for a in rel.get("anexos", [])),
+              f"o cartão não é reinserido como janela pelo plano seguinte "
+              f"({[(o.media_id, o.out_start) for o in fresco.plan.overlays]})")
+
+        # 5) APAGAR O CARTÃO NA PRÉVIA LEVA A LINHA DE MÍDIA JUNTO
+        cliente = TestClient(app)
+        oid = next(o.id for o in fresco.plan.overlays if o.media_id == "k_teste123")
+        rr = cliente.delete(f"/api/projects/{projeto.id}/overlays/{oid}")
+        check(rr.status_code == 200, "a rota de apagar sobreposição respondeu")
+        ks = [m for m in svc.list_media(projeto.id) if m["id"].startswith("k_")]
+        check(not ks,
+              f"apagar o cartão na prévia não deixa linha órfã no banco ({ks})")
+    finally:
+        try:
+            svc.delete_project(projeto.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 6) O CARTÃO DE FRASE (O HOOK) NÃO SAI CORTADO. Ele leva a frase inteira
+    #    no título, o ASS é WrapStyle 2 (sem quebra) e a linha saía cortada no
+    #    meio da palavra, calada.
+    frase = "Você está perdendo cliente todo santo dia por isso"
+    linhas = K.cabe_na_largura(1080, 1920, frase)
+    check(linhas >= 2, f"uma frase de hook longa ocupa mais de uma linha ({linhas})")
+    r = K.desenhar(tmp / "hook.png", 1080, 1920, titulo=frase)
+    import numpy as np
+    cru = subprocess.run([FFMPEG, "-v", "error", "-i", r["path"], "-frames:v", "1",
+                          "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                         capture_output=True, check=True).stdout
+    img = np.frombuffer(cru, np.uint8)[: r["width"] * r["height"]] \
+        .reshape(r["height"], r["width"])
+    # a tinta do texto é clara sobre o fundo escuro do painel
+    colunas = np.flatnonzero((img > 200).sum(axis=0) > 0)
+    check(colunas.size > 0 and int(colunas[-1]) <= r["width"] - 6,
+          f"o texto do hook cabe no painel, sem encostar na borda "
+          f"(última coluna com tinta {int(colunas[-1]) if colunas.size else '?'} "
+          f"de {r['width']})")
+    linhas_com_tinta = np.flatnonzero((img > 200).sum(axis=1) > 0)
+    check(linhas_com_tinta.size > 0
+          and int(linhas_com_tinta[-1]) <= r["height"] - 4,
+          "e não vaza pelo pé do painel")
+
+    # 7) DOIS PEDIDOS NÃO PODEM PÔR CARTÃO EM CIMA DE CARTÃO. Eles se acumulam
+    #    agora; a trava antiga só olhava o lote da vez, e dois pedidos de
+    #    abertura caíam ambos no bloco 0, um imprimindo por cima do outro.
+    from editor.ai import roteiro as R
+    from editor.models import EditPlan
+
+    plano = EditPlan()
+    plano.clips = [Clip(src_start=float(k * 3), src_end=float(k * 3 + 3))
+                   for k in range(4)]
+    porindice = {i: c for i, c in enumerate(plano.active_clips)}
+    resp = {"cartoes": [{"bloco": 0, "tipo": "frase", "titulo": "Outra frase",
+                         "segundos": 3.0}]}
+    recusados: list = []
+    segundos = R._cartoes_pedidos(resp, plano, porindice, 12.0, recusados,
+                                  teto=1, ocupados=[(0.0, 3.0)])
+    check(not segundos and any("já está no vídeo" in x["motivo"] for x in recusados),
+          f"um segundo cartão em cima de um que já está no vídeo é recusado, "
+          f"com motivo ({[x['motivo'] for x in recusados]})")
+    livre: list = []
+    ok2 = R._cartoes_pedidos({"cartoes": [{"bloco": 2, "tipo": "frase",
+                                           "titulo": "No fim", "segundos": 3.0}]},
+                             plano, porindice, 12.0, livre, teto=1,
+                             ocupados=[(0.0, 3.0)])
+    check(len(ok2) == 1 and not livre,
+          "e num instante livre ele entra normalmente")
+
+    # 8) CARTÃO QUE NÃO PÔDE SER DESENHADO NÃO É "CARTÃO NO VÍDEO"
+    projeto2 = svc.create(str(fonte), "cartao que falha", "VSL")
+    try:
+        projeto2.plan.clips = [Clip(src_start=0.0, src_end=2.0)]
+        projeto2.analysis["words"] = [{"i": 0, "start": 0.2, "end": 1.8,
+                                       "text": "fala"}]
+        projeto2.save_plan()
+        projeto2.save_analysis()
+
+        from editor.ai import gemini as G
+        from editor.render import cartao as KK
+
+        guardado = (R.pedir_cartoes, G.chave_guardada, KK.desenhar)
+        try:
+            G.chave_guardada = lambda: "chave-de-teste"
+            R.pedir_cartoes = lambda *a, **k: {"leitura": "", "_modelo": "x",
+                                               "cartoes": [{"bloco": 0, "tipo": "frase",
+                                                            "titulo": "Vai falhar",
+                                                            "segundos": 2.0}]}
+
+            def quebra(*a, **k):
+                raise RuntimeError("ffmpeg não desenhou")
+            KK.desenhar = quebra
+
+            class Ctx2:
+                def stage(self, n, m=""): pass
+                def progress(self, f, m="", s=""): pass
+                def cancelled(self): return False
+
+            r2 = svc.cartoes_por_pedido(projeto2, Ctx2(), "um hook")
+            check(not r2["cartoes"],
+                  f"o cartão que falhou NÃO é contado como cartão no vídeo "
+                  f"({r2['cartoes']})")
+            check(any("não consegui desenhar" in x["motivo"] for x in r2["recusados"]),
+                  f"e a falha volta escrita, não em silêncio ({r2['recusados']})")
+        finally:
+            R.pedir_cartoes, G.chave_guardada, KK.desenhar = guardado
+
+        # 9) DESFAZER NÃO DEVOLVE SOBREPOSIÇÃO SEM MÍDIA (fantasma na trilha)
+        fresco2 = svc.load(projeto2.id)
+        fresco2.plan.overlays.append(Overlay(media_id="k_sumiu", out_start=0.0,
+                                             out_end=1.0))
+        plano_com_fantasma = fresco2.plan.to_dict()
+        cliente2 = TestClient(app)
+        rr = cliente2.post(f"/api/projects/{projeto2.id}/plan",
+                           json={"plan": plano_com_fantasma})
+        check(rr.status_code == 200, "a rota de desfazer respondeu")
+        depois = svc.load(projeto2.id)
+        check(not any(o.media_id == "k_sumiu" for o in depois.plan.overlays),
+              "desfazer NÃO devolve a sobreposição cuja mídia já foi apagada")
+    finally:
+        try:
+            svc.delete_project(projeto2.id)
+        except Exception:  # noqa: BLE001
+            pass
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

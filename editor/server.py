@@ -656,6 +656,14 @@ def api_replace_plan(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     project.plan = EditPlan.from_dict(payload.get("plan", {}))
     project.plan.project_id = pid
+    # SOBREPOSIÇÃO SEM MÍDIA NÃO VOLTA. Desfazer um "limpar cartões" devolvia
+    # os overlays k_ enquanto as linhas de mídia deles já tinham sido
+    # apagadas: fantasmas na trilha que o render ignora em silêncio.
+    existentes = {m["id"] for m in svc.list_media(pid)}
+    project.plan.overlays = [o for o in project.plan.overlays
+                             if o.media_id in existentes]
+    project.plan.cutaways = [c for c in project.plan.cutaways
+                             if c.media_id in existentes]
     # o plano e a lista de palavras removidas andam JUNTOS no histórico:
     # restaurar só o plano deixava a palavra de volta no vídeo mas ainda
     # riscada no texto e fora da legenda
@@ -935,6 +943,7 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
             plan.music = None
         else:
             colecoes[kind][:] = [i for i in colecoes[kind] if i.id != iid]
+            svc.esquecer_cartao_orfao(project, getattr(alvo, "media_id", ""))
         project.save_plan()
         return {"ok": True, "timeline": svc.timeline_summary(project)}
 
@@ -1423,7 +1432,12 @@ def api_overlay_update(pid: str, oid: str, payload: dict = Body(...)) -> dict:
 @app.delete("/api/projects/{pid}/overlays/{oid}")
 def api_overlay_delete(pid: str, oid: str) -> dict:
     project = _project(pid)
+    alvo = next((o for o in project.plan.overlays if o.id == oid), None)
     project.plan.overlays = [o for o in project.plan.overlays if o.id != oid]
+    if alvo is not None:
+        # cartão apagado na prévia: a linha de mídia dele vai junto, senão o
+        # painel segue contando um cartão que não está mais no vídeo
+        svc.esquecer_cartao_orfao(project, alvo.media_id)
     project.save_plan()
     return {"ok": True}
 
@@ -1883,8 +1897,6 @@ def api_ia_config() -> dict:
         # a IA decidindo os cortes no EDITAR — ligada por padrão quando há
         # chave; o usuário desliga aqui se quiser voltar à regra do programa
         "cortes": bool(db.get_setting("ai_cortes", True)),
-        # os cartões de tópico que o programa desenha com o texto da IA
-        "cartoes": bool(db.get_setting("ia_cartoes", False)),
     }
 
 
@@ -1913,8 +1925,6 @@ def api_ia_config_set(payload: dict = Body(...)) -> dict:
             db.set_setting("gemini_model", "")
     if "cortes" in payload:
         db.set_setting("ai_cortes", bool(payload["cortes"]))
-    if "cartoes" in payload:
-        db.set_setting("ia_cartoes", bool(payload["cartoes"]))
 
     chave = gem.chave_guardada()
     pedido = str(payload.get("modelo") or "").strip() if "modelo" in payload else ""
@@ -2080,6 +2090,49 @@ def api_ia_apply(pid: str, payload: dict = Body(...)) -> dict:
         return svc.aplicar_plano_da_ia(project, payload.get("plano") or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/ai/cartoes")
+def api_ia_cartoes(pid: str, payload: dict = Body(...)) -> dict:
+    """Cartões a PEDIDO (hook, tópicos, número): a IA escreve só o que foi
+    pedido, o programa desenha e põe em cima da fala. JOB."""
+    _project(pid)
+    _chave_ia()
+    pedido = str(payload.get("pedido") or "").strip()
+    if not pedido:
+        raise HTTPException(400, "escreva o que você quer nos cartões")
+    return _run("ia-cartoes", pid,
+                lambda ctx: svc.cartoes_por_pedido(svc.load(pid), ctx, pedido[:1500]))
+
+
+@app.delete("/api/projects/{pid}/cartoes")
+def api_limpar_cartoes(pid: str) -> dict:
+    project = _project(pid)
+    n = svc.limpar_cartoes(project)
+    project.save_plan()
+    return {"ok": True, "removidos": n, "timeline": svc.timeline_summary(project)}
+
+
+@app.get("/api/musicas")
+def api_musicas() -> list[dict]:
+    """A biblioteca de músicas de fundo — tudo que já entrou em algum projeto."""
+    return svc.listar_musicas()
+
+
+@app.post("/api/musicas")
+def api_musica_guardar(payload: dict = Body(...)) -> dict:
+    try:
+        return svc.guardar_musica(str(payload.get("path") or ""),
+                                  str(payload.get("name") or ""))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.delete("/api/musicas/{mid}")
+def api_musica_apagar(mid: str) -> dict:
+    if not svc.apagar_musica(mid):
+        raise HTTPException(404, "música não encontrada")
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/ai/gerar")

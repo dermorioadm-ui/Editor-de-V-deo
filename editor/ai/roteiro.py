@@ -56,30 +56,6 @@ Depois de fechar, abrir dá alívio e faz o próximo fechamento valer.
 - "normal" no resto. NÃO marque tudo como fechado: se tudo é ponto alto, nada é. \
 Use "fechado" em no máximo um terço dos blocos, e evite dois "fechado" seguidos.
 
-=== CARTÕES ===
-Você também escreve os CARTÕES: um painel de texto que aparece por cima do
-vídeo. Quem desenha é o programa, com a fonte e o traço dele — você escreve as
-palavras e diz em que bloco entra.
-
-Dois tipos, e só dois:
-- "topicos": um título curto e de 2 a 4 linhas. Para quando a pessoa ENUMERA
-  ("são três coisas", "primeiro... segundo..."), lista o que está incluído, ou
-  explica um passo a passo. As linhas saem da FALA dela, encurtadas — nunca
-  invente item que ela não disse.
-- "numero": um número grande com uma legenda curta embaixo. Para quando ela diz
-  um número que importa: preço, quantidade de clientes, porcentagem, prazo.
-  Em "numero" vai só o número ("347", "97", "82%", "30 dias") e em "titulo" o
-  que ele é ("clientes atendidos").
-
-Regras que valem mais que sua vontade de enfeitar:
-- No máximo UM cartão a cada 20 segundos de vídeo, e no máximo 5 no total.
-  Cartão demais vira apresentação de slides e a pessoa some do próprio anúncio.
-- Título de no máximo 6 palavras. Tópico de no máximo 5 palavras. Se não cabe
-  em 5 palavras, não é tópico de cartão, é fala.
-- O cartão entra EM CIMA da fala que ele resume, não antes nem depois.
-- Se o vídeo não enumera nada e não diz número nenhum, devolva a lista vazia.
-  Nenhum cartão é melhor que um cartão genérico.
-
 === ANEXOS ===
 Quando o usuário anexou mídias (vídeos e imagens), TODAS entram no vídeo,
 cada uma exatamente uma vez — ele anexou de propósito, para valorizar o
@@ -144,22 +120,65 @@ def _esquema(com_anexos: bool) -> dict:
         }}
         esquema["required"].append("anexos")
         esquema["propertyOrdering"].append("anexos")
-    esquema["properties"]["cartoes"] = {"type": "ARRAY", "items": {
-        "type": "OBJECT",
-        "properties": {
-            "bloco": {"type": "INTEGER", "description": "índice do bloco onde entra"},
-            "tipo": {"type": "STRING", "enum": ["topicos", "numero"]},
-            "titulo": {"type": "STRING"},
-            "topicos": {"type": "ARRAY", "items": {"type": "STRING"}},
-            "numero": {"type": "STRING"},
-            "segundos": {"type": "NUMBER"},
-        },
-        "required": ["bloco", "tipo", "titulo", "segundos"],
-        "propertyOrdering": ["bloco", "tipo", "titulo", "topicos", "numero",
-                             "segundos"],
-    }}
-    esquema["propertyOrdering"].append("cartoes")
+    # CARTÃO NÃO ENTRA NO PLANO AUTOMÁTICO. A IA inventava painéis por conta
+    # própria e o usuário não quer elemento que não pediu: cartão só existe
+    # quando ele escreve um pedido na edição (ver pedir_cartoes).
     return esquema
+
+
+ESQUEMA_CARTOES = {
+    "type": "OBJECT",
+    "properties": {
+        "leitura": {"type": "STRING",
+                    "description": "em uma frase, o que você entendeu do pedido"},
+        "cartoes": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "bloco": {"type": "INTEGER", "description": "índice do bloco onde entra"},
+                "tipo": {"type": "STRING", "enum": ["frase", "topicos", "numero"]},
+                "titulo": {"type": "STRING"},
+                "topicos": {"type": "ARRAY", "items": {"type": "STRING"}},
+                "numero": {"type": "STRING"},
+                "segundos": {"type": "NUMBER"},
+            },
+            "required": ["bloco", "tipo", "titulo", "segundos"],
+            "propertyOrdering": ["bloco", "tipo", "titulo", "topicos", "numero",
+                                 "segundos"],
+        }},
+    },
+    "required": ["leitura", "cartoes"],
+    "propertyOrdering": ["leitura", "cartoes"],
+}
+
+INSTRUCAO_CARTOES = """Você escreve CARTÕES para um anúncio em vídeo, A PEDIDO de quem editou.
+Um cartão é um painel de texto que aparece por cima do vídeo; quem desenha é
+o programa, com a fonte e o traço dele — você escreve as palavras e diz em
+que bloco de fala cada um entra.
+
+Você recebe a transcrição em blocos numerados e o PEDIDO do usuário. Faça
+SOMENTE o que o pedido diz: se ele pede um hook, escreva o hook; se pede os
+três passos, escreva os três passos; se pede um cartão, devolva um. Nunca
+acrescente cartão que ele não pediu. Se o pedido não cabe em cartão nenhum,
+devolva a lista vazia e explique na leitura.
+
+Três tipos:
+- "frase": uma frase de impacto, curta (até 8 palavras), em "titulo". É o
+  tipo do HOOK — a promessa ou a provocação que segura quem está rolando o
+  feed. Entra em cima do bloco em que a fala diz aquilo (ou no primeiro
+  bloco, se o pedido é de abertura).
+- "topicos": um título curto e de 2 a 4 linhas de até 5 palavras, em
+  "topicos". Para lista, passo a passo, o que está incluído.
+- "numero": um número grande ("347", "97", "82%", "30 dias") em "numero" e o
+  que ele é em "titulo" ("clientes atendidos").
+
+Regras:
+- As palavras saem da FALA e do PEDIDO — não invente número nem promessa que
+  ele não disse.
+- O cartão entra EM CIMA da fala que ele resume, não antes nem depois.
+- Título de no máximo 8 palavras. Tópico de no máximo 5.
+- "segundos" entre 2 e 5 (o programa apara fora disso).
+
+Responda somente o JSON do esquema."""
 
 
 def montar_pedido(blocos: list[Bloco], midias: list[dict],
@@ -499,14 +518,22 @@ DUR_CARTAO_MAX = 5.0
 
 
 def _cartoes_pedidos(resposta: dict, plan, porindice: dict,
-                     duracao_saida: float, recusados: list[dict]) -> list[dict]:
+                     duracao_saida: float, recusados: list[dict],
+                     teto: int | None = None,
+                     ocupados: list[tuple] | None = None) -> list[dict]:
     """Os cartões que a IA escreveu, validados — ainda sem desenhar.
 
     Desenhar é do render; aqui só se decide O QUE e QUANDO. As travas são de
     ritmo, não de estética: cartão demais vira apresentação de slides e a
-    pessoa some do próprio anúncio.
+    pessoa some do próprio anúncio. ``teto`` vem do pedido do usuário: quem
+    pediu dez cartões recebe dez.
     """
-    teto = min(MAX_CARTOES, max(1, int(duracao_saida // INTERVALO_CARTAO)))
+    if teto is None:
+        teto = min(MAX_CARTOES, max(1, int(duracao_saida // INTERVALO_CARTAO)))
+    # os cartões que JÁ estão no vídeo (de pedidos anteriores) contam como
+    # ocupados: eles se acumulam agora, e dois no mesmo instante é um
+    # piscando por baixo do outro
+    janelas = list(ocupados or [])
     saida: list[dict] = []
     for item in (resposta.get("cartoes") or []):
         try:
@@ -527,6 +554,12 @@ def _cartoes_pedidos(resposta: dict, plan, porindice: dict,
             recusados.append({"o_que": f"cartão “{titulo}”",
                               "motivo": "cartão de número sem número"})
             continue
+        if tipo == "frase":
+            if not titulo:
+                recusados.append({"o_que": "cartão de frase",
+                                  "motivo": "frase vazia"})
+                continue
+            topicos, numero = [], ""
         if tipo == "topicos" and len(topicos) < 2:
             recusados.append({"o_que": f"cartão “{titulo}”",
                               "motivo": "menos de dois tópicos — isso é uma "
@@ -547,14 +580,38 @@ def _cartoes_pedidos(resposta: dict, plan, porindice: dict,
                               "motivo": "não sobra vídeo para ele aparecer"})
             continue
         # dois cartões em cima um do outro é um piscando por baixo do outro
-        if saida and inicio < saida[-1]["out_end"] + 0.3:
+        if any(min(fim, b) - max(inicio, a) > -0.3 for a, b in janelas):
             recusados.append({"o_que": f"cartão “{titulo}”",
-                              "motivo": "cai em cima do cartão anterior"})
+                              "motivo": "cai em cima de um cartão que já está "
+                                        "no vídeo"})
             continue
-        saida.append({"tipo": "numero" if tipo == "numero" else "topicos",
+        janelas.append((inicio, fim))
+        saida.append({"tipo": tipo if tipo in ("numero", "frase") else "topicos",
                       "titulo": titulo, "topicos": topicos, "numero": numero,
                       "out_start": round(inicio, 3), "out_end": round(fim, 3)})
     return saida
+
+
+def pedir_cartoes(chave: str, modelo: str, blocos: list[Bloco], duracao: float,
+                  pedido: str) -> dict:
+    """Cartões A PEDIDO: o usuário escreve o que quer (um hook, os passos, o
+    número) e a IA só escreve isso. Devolve o JSON validado contra o esquema."""
+    if not blocos:
+        raise gemini.ErroDaIA("não há bloco nenhum para a IA olhar — rode a "
+                              "edição automática primeiro.")
+    if len(blocos) > MAX_BLOCOS:
+        blocos = blocos[:MAX_BLOCOS]
+    linhas = [f"Vídeo de {duracao:.0f} s, em {len(blocos)} blocos de fala:", ""]
+    for b in blocos:
+        linhas.append(f"[{b.i}] {b.inicio:.1f}-{b.fim:.1f}s: {b.texto}")
+    linhas += ["", "PEDIDO DO USUÁRIO:", pedido.strip()[:1500], "",
+               "Faça somente o que o pedido diz. Responda o JSON do esquema."]
+    escolhido = gemini.escolher_modelo(chave, modelo)
+    resposta = gemini.gerar_json(
+        chave, escolhido["id"], INSTRUCAO_CARTOES, "\n".join(linhas),
+        ESQUEMA_CARTOES, maximo=min(escolhido.get("saida") or 4096, 4096))
+    resposta["_modelo"] = escolhido["id"]
+    return resposta
 
 
 def _inicio_na_saida(plan, indice: int) -> float:

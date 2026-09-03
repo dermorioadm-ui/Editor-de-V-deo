@@ -218,6 +218,14 @@ export const api = {
                                    colocar?: boolean }) =>
     post<Job>(`/api/projects/${id}/ai/gerar`, payload),
   mediaFileUrl: (id: string, mid: string) => `/api/projects/${id}/media/${mid}/file`,
+  // cartões A PEDIDO (hook, tópicos, número) — JOB
+  cartoesIa: (id: string, pedido: string) =>
+    post<Job>(`/api/projects/${id}/ai/cartoes`, { pedido }),
+  limparCartoes: (id: string) => del<any>(`/api/projects/${id}/cartoes`),
+  // a biblioteca de músicas de fundo, que acumula a cada uma que entra
+  musicas: () => req<any[]>('/api/musicas'),
+  guardarMusica: (path: string) => post<any>('/api/musicas', { path }),
+  apagarMusica: (mid: string) => del<any>(`/api/musicas/${mid}`),
 
   frameUrl: (id: string, t: number, source = 'main', width = 360, look = '') =>
     `/api/projects/${id}/frame?t=${t.toFixed(3)}&source=${source}&width=${width}`

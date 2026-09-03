@@ -56,9 +56,12 @@ export default function Home() {
   // sabe a intenção.
   const [auxiliares, setAuxiliares] =
     useState<{ path: string; descricao: string }[]>([])
-  // DESLIGADO por padrão: cartão é elemento que a IA inventa sozinha, e o
-  // usuário não quer elemento que ele não pediu. Quem quiser, liga aqui.
-  const [cartoes, setCartoes] = useState(false)
+  // A BORDA DO CORTE DE SILÊNCIO, já na primeira tela: para a direita a
+  // pausa que vira corte fica menor e sobra menos ar nas pontas (fala mais
+  // colada); para a esquerda, respira. -1 = como o preset manda.
+  const [corte, setCorte] = useState(-1)
+  // as músicas de fundo que já entraram em algum projeto, para escolher de novo
+  const [musicas, setMusicas] = useState<any[]>([])
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -168,6 +171,7 @@ export default function Home() {
    *  DEPOIS do preset e a ordem para de depender de quem gravou primeiro. */
   function receita() {
     return {
+      ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       speed: { global_multiplier: velocidade },
       zoom: { intensity: zoomForca },
       style: { fontsize_scale: legenda },
@@ -197,9 +201,6 @@ export default function Home() {
             .includes(ext) ? 'image' : 'video'
           await api.addMedia(project.id, aux.path, kind, aux.descricao)
         } catch { /* um anexo que não sobe não pode impedir o vídeo */ }
-      }
-      if (cartoes !== (ia?.cartoes !== false)) {
-        await api.setAiConfig({ cartoes }).catch(() => {})
       }
       if (musica) {
         try {
@@ -304,6 +305,10 @@ export default function Home() {
 
   const ffmpegOk = health?.ffmpeg?.ok
   const whisperOk = health?.faster_whisper
+
+  useEffect(() => {
+    api.musicas().then(setMusicas).catch(() => setMusicas([]))
+  }, [])
 
   return (
     <div className="flex-1 overflow-auto">
@@ -536,6 +541,16 @@ export default function Home() {
               </>
             ) : (
               <>
+                {musicas.length > 0 && (
+                  <select className="field w-full py-1.5 text-xs mb-1" value=""
+                          title="músicas que já entraram em outros vídeos — ficam guardadas"
+                          onChange={(e) => { if (e.target.value) setMusica(e.target.value) }}>
+                    <option value="">guardadas ({musicas.length})…</option>
+                    {musicas.filter((m) => m.existe !== false).map((m) => (
+                      <option key={m.id} value={m.path}>{m.name}</option>
+                    ))}
+                  </select>
+                )}
                 <button className="btn w-full py-1.5 text-xs"
                         onClick={async () => {
                           try {
@@ -549,7 +564,7 @@ export default function Home() {
                   escolher MP3…
                 </button>
                 <p className="text-[10px] text-slate-600 leading-tight">
-                  opcional
+                  opcional · fica guardada para os próximos
                 </p>
               </>
             )}
@@ -614,6 +629,29 @@ export default function Home() {
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">
               uma geração de encode só
+            </p>
+          </div>
+
+          <div className="w-44">
+            <label className="label flex justify-between">
+              <span>Corte do silêncio</span>
+              <span className="font-mono text-slate-300">
+                {corte < 0 ? 'do preset'
+                  : corte < 0.3 ? 'respira'
+                  : corte < 0.45 ? 'com ar'
+                  : corte < 0.7 ? 'no meio' : 'colado'}
+              </span>
+            </label>
+            <input type="range" min={0} max={1} step={0.05} className="w-full"
+                   value={corte < 0 ? 0.5 : corte}
+                   /* "do preset" é um sentinela (-1) desenhado no meio: sem
+                      isto, arrastar a alavanca ATÉ o meio não muda o valor do
+                      input e o onChange nunca dispara — o usuário mexia e o
+                      vídeo saía com o corte do preset. Encostar já adota. */
+                   onPointerDown={() => { if (corte < 0) setCorte(0.5) }}
+                   onChange={(e) => setCorte(+e.target.value)} />
+            <p className="text-[10px] text-slate-600 leading-tight">
+              esquerda afasta as falas (mais ar); direita aproxima (corte em cima)
             </p>
           </div>
 
@@ -688,12 +726,6 @@ export default function Home() {
                     }}>
               + anexar arquivo
             </button>
-            <label className="flex items-center gap-1.5 text-xs text-slate-400
-                              cursor-pointer">
-              <input type="checkbox" checked={cartoes}
-                     onChange={(e) => setCartoes(e.target.checked)} />
-              cartões de tópico (a IA inventa os textos)
-            </label>
           </div>
           {auxiliares.length > 0 && (
             <div className="mt-2 space-y-1.5">

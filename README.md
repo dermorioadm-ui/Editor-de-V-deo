@@ -1158,9 +1158,12 @@ bloco a bloco, e responde três coisas:
    de propósito. A IA diz o bloco; o que ela deixar de fora (ou errar) o
    programa posiciona sozinho: pelas palavras da sua descrição contra a fala
    e, na falta delas, espalhado no meio do vídeo, nunca no gancho. Isso vale
-   até **sem chave da IA** — só o cartão de tópico precisa dela, porque é ela
-   quem escreve as palavras (e o cartão fica **desligado por padrão**: é
-   elemento que a IA inventa sozinha; quem quiser, liga na primeira tela).
+   até **sem chave da IA**. **Cartão nenhum nasce sozinho**: a IA não inventa
+   mais painel por conta própria. Cartão (hook de abertura, tópicos, número
+   em destaque) só existe quando você escreve o pedido na aba Mídia, em
+   *Cartões e hooks por pedido* — ela lê a sua fala, escreve só o que foi
+   pedido, e o programa desenha e põe em cima do trecho certo. Os pedidos se
+   somam; *limpar cartões* tira todos.
    **Tudo entra como janela** por cima do vídeo — imagem e vídeo — num canto
    que não tapa quem fala: ~40% da largura no horizontal, ~80% no vertical. A
    mídia só **cobre a tela inteira** quando a sua descrição pede ("tela
@@ -1168,6 +1171,15 @@ bloco a bloco, e responde três coisas:
    tocando, mudo): você **arrasta**, **redimensiona** pelo canto e **apaga**
    com Delete, como no Canva ou no CapCut — mouse só em cima da prévia, sem
    campo de número. Duas janelas nunca nascem no mesmo instante.
+
+**Música de fundo que fica guardada.** Toda música que entra em qualquer
+vídeo vai para a biblioteca (copiada para a pasta de dados do app, com o
+conteúdo — não o nome — como identidade: "trilha.mp3" se repete a cada
+download, e duas faixas do mesmo tempo e bitrate têm o mesmo tamanho) e se
+acumula: na primeira tela e na aba Mídia há a lista *guardadas* para usar de
+novo sem procurar o arquivo. **Corte do silêncio na primeira tela**: o mesmo
+controle *respira ↔ cola* do editor está na receita — esquerda afasta as
+falas (mais ar nas pontas), direita aproxima (corte em cima).
 
 **Gerar com IA de dentro da edição.** Na aba Mídia, o card *Gerar com IA*
 pede uma imagem (Nano Banana, `gemini-*-image`) ou um vídeo (Veo) a partir

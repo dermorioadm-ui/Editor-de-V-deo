@@ -4,6 +4,7 @@ import TonemapCompare from './TonemapCompare'
 import PhotoPanel from './PhotoPanel'
 import Positioner from './Positioner'
 import GerarIA from './GerarIA'
+import CartoesIA from './CartoesIA'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { getPlayhead, toast, useStore } from '../state/store'
@@ -23,6 +24,11 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
   const view = useStore((s) => s.timeline)
   const [picking, setPicking] = useState<null | 'video' | 'image' | 'audio'>(null)
   const [busy, setBusy] = useState(false)
+  // a biblioteca de músicas: tudo que já entrou em algum vídeo
+  const [musicas, setMusicas] = useState<any[]>([])
+  useEffect(() => {
+    api.musicas().then(setMusicas).catch(() => setMusicas([]))
+  }, [project?.media?.length])
 
   if (!project || !view) return null
   const media = project.media ?? []
@@ -64,6 +70,13 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
 
   return (
     <div className="p-4 space-y-5 max-w-5xl">
+      <CartoesIA projectId={project.id} onChanged={onChanged} snapshot={snapshot}
+                 cartoes={(view.overlays ?? [])
+                   .filter((o: any) => String(o.media_id).startsWith('k_'))
+                   .map((o: any) => ({
+                     id: o.id,
+                     name: media.find((m) => m.id === o.media_id)?.name ?? 'cartão',
+                   }))} />
       <GerarIA projectId={project.id}
                horizontal={(project.info?.display_width ?? 0) >= (project.info?.display_height ?? 1)}
                onChanged={onChanged} snapshot={snapshot} />
@@ -80,6 +93,19 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
               + foto/PNG</button>
             <button className="btn btn-xs btn-primary"
                     onClick={() => abrirJanela('audio')}>+ música</button>
+            {musicas.length > 0 && (
+              <select className="field py-0.5 text-xs w-44" value=""
+                      title="músicas que já entraram em outros vídeos — ficam guardadas"
+                      onChange={async (e) => {
+                        const m = musicas.find((x) => x.id === e.target.value)
+                        if (m) await addMedia(m.path, 'audio')
+                      }}>
+                <option value="">guardadas ({musicas.length})…</option>
+                {musicas.filter((m) => m.existe !== false).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
         {!media.length && <p className="hint">Nada importado ainda.</p>}

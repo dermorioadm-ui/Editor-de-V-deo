@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY, value TEXT
 );
+-- BIBLIOTECA DE MÚSICAS: toda música de fundo que entrou em qualquer projeto
+-- fica guardada aqui (copiada para a pasta de dados), e vai se acumulando —
+-- a próxima vez ela está na lista, sem procurar o arquivo de novo.
+CREATE TABLE IF NOT EXISTS musicas (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    name TEXT,
+    info_json TEXT DEFAULT '{}',
+    size_bytes INTEGER DEFAULT 0,
+    -- a identidade é o CONTEÚDO: nome e tamanho se repetem entre downloads
+    sha1 TEXT DEFAULT '',
+    created_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_media_project ON media(project_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id);
 """
@@ -101,6 +114,7 @@ def _migrar(conn: sqlite3.Connection) -> None:
     """
     novas = {
         "media": [("descricao", "TEXT DEFAULT ''")],
+        "musicas": [("sha1", "TEXT DEFAULT ''")],
     }
     for tabela, colunas in novas.items():
         try:

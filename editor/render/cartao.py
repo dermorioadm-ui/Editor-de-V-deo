@@ -58,6 +58,31 @@ def _estilo(nome: str, fonte: str, corpo: int, cor: str, negrito: bool) -> str:
             f"{-1 if negrito else 0},0,0,0,100,100,0,0,1,0,0,7,0,0,0,1")
 
 
+def _quebrar(texto: str, largura_px: float, corpo: float) -> list[str]:
+    """Quebra o texto no que CABE na largura do painel.
+
+    O ASS do cartão usa ``WrapStyle: 2`` (sem quebra automática) e uma linha
+    só com ``\pos`` fixo: um título que não coubesse saía cortado no meio da
+    palavra, silenciosamente. É o caso do cartão de FRASE (o hook), que leva
+    a frase inteira no título. Medido no libass com Arial negrito, o avanço
+    médio de um caractere é ~0,52 do corpo; 0,55 dá a folga do contorno.
+    """
+    cabe = max(8, int(largura_px / max(1.0, corpo * 0.55)))
+    palavras = str(texto).split()
+    linhas: list[str] = []
+    atual = ""
+    for p in palavras:
+        cand = f"{atual} {p}".strip()
+        if len(cand) <= cabe or not atual:
+            atual = cand
+        else:
+            linhas.append(atual)
+            atual = p
+    if atual:
+        linhas.append(atual)
+    return linhas or [""]
+
+
 def _layout(largura_video: int, altura_video: int, titulo: str,
             topicos: list[str], numero: str) -> tuple[int, int, list[tuple]]:
     """A planta do cartão: painel e linhas saem do MESMO cálculo.
@@ -83,11 +108,17 @@ def _layout(largura_video: int, altura_video: int, titulo: str,
             y += c_topico * 1.25
     else:
         if titulo:
-            linhas.append(("T", margem, y, titulo))
-            y += c_titulo * DEPOIS_DO_TITULO
+            partes = _quebrar(titulo, pw - 2 * margem, c_titulo)
+            for k, parte in enumerate(partes):
+                linhas.append(("T", margem, y, parte))
+                y += c_titulo * (DEPOIS_DO_TITULO if k == len(partes) - 1 else 1.18)
         for k, t in enumerate(topicos):
-            linhas.append(("B", margem + c_topico * 0.35, y, t))
-            y += c_topico * (1.25 if k == len(topicos) - 1 else ENTRELINHA)
+            partes = _quebrar(t, pw - 2 * margem - c_topico * 0.35, c_topico)
+            for j, parte in enumerate(partes):
+                linhas.append(("B", margem + c_topico * 0.35, y, parte))
+                ultimo = (k == len(topicos) - 1 and j == len(partes) - 1)
+                y += c_topico * (1.25 if ultimo
+                                 else (1.12 if j < len(partes) - 1 else ENTRELINHA))
     ph = int(round(min(y + margem, h * 0.45)))
     return pw - (pw % 2), max(80, ph - (ph % 2)), linhas
 
@@ -98,6 +129,15 @@ def medir(largura_video: int, altura_video: int, topicos: int,
     pw, ph, _l = _layout(largura_video, altura_video, "titulo",
                          ["x"] * max(0, topicos), "0" if numero else "")
     return pw, ph
+
+
+def cabe_na_largura(largura_video: int, altura_video: int, texto: str,
+                    corpo_do_titulo: bool = True) -> int:
+    """Quantas linhas este texto ocupa no painel (1 = coube numa linha)."""
+    pw, _ph, _l = _layout(largura_video, altura_video, "x", [], "")
+    h = altura_video
+    corpo = h * (TITULO if corpo_do_titulo else TOPICO)
+    return len(_quebrar(texto, pw - 2 * (h * MARGEM), corpo))
 
 
 def desenhar(dest: Path, largura_video: int, altura_video: int,
