@@ -248,6 +248,13 @@ class EditPlan:
     zoom: ZoomParams = field(default_factory=ZoomParams)
     look: str = "nenhum"                # filtro de cinema do vídeo inteiro
     look_vignette: float | None = None  # None = a vinheta que o look define
+    # O QUADRO de cada formato de saída, por proporção ("9:16", "1:1",
+    # "16:9"): {"modo": "encaixe"|"recorte", "escala", "x", "y", "fundo"}.
+    # "encaixe" põe o vídeo INTEIRO numa tela (preta ou desfocada) do formato
+    # pedido, no tamanho e lugar que o usuário arrasta na prévia; "recorte" é
+    # o recorte concêntrico no rosto. O que não está aqui usa o padrão do
+    # programa (ver projects.quadro_padrao).
+    enquadramento: dict = field(default_factory=dict)
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -284,6 +291,7 @@ class EditPlan:
             "audit_fixed": self.audit_fixed,
             "zoom_audit": self.zoom_audit,
             "repeats": self.repeats,
+            "enquadramento": self.enquadramento,
             "version": self.version,
         }
 
@@ -320,6 +328,9 @@ class EditPlan:
         plan.audit_fixed = list(data.get("audit_fixed", []))
         plan.zoom_audit = list(data.get("zoom_audit", []))
         plan.repeats = list(data.get("repeats", []))
+        plan.enquadramento = {str(k): dict(v) for k, v in
+                              dict(data.get("enquadramento") or {}).items()
+                              if isinstance(v, dict)}
         plan.version = int(data.get("version", 1))
         return plan
 

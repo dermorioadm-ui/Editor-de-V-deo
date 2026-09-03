@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Clip, SubtitleCue } from '../types'
+import type { Clip, Quadro, SubtitleCue } from '../types'
+import { PROPORCOES, QUADRO_PADRAO, estiloDoFormato, quebrar, recorte,
+         rotuloFormato, tamanhoDerivado } from '../lib/formato'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
@@ -47,6 +49,17 @@ interface Props {
   onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
   onOverlayDelete?: (id: string) => void
   onCutawayDelete?: (id: string) => void
+  // O FORMATO QUE A PRÉVIA MOSTRA. 'fonte' é a gravação; um derivado
+  // ('9:16', '1:1', '16:9') vira uma TELA daquele formato com o vídeo
+  // encaixado dentro (ou recortado no rosto) — exatamente como o arquivo
+  // daquele formato sai. Sem isto a prévia ficava horizontal enquanto o
+  // arquivo baixava vertical, e não havia como saber o que estava sendo
+  // entregue.
+  formato?: string
+  formatos?: string[]
+  onFormato?: (f: string) => void
+  quadro?: Quadro | null
+  onQuadroChange?: (patch: Partial<Quadro> & { padrao?: boolean }) => void
 }
 
 /**
@@ -59,7 +72,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                                  previewUrl, onRequestPreview, previewBusy,
                                  proxyUrl, onDeleteSelection, onCutCue,
                                  overlays, cutaways, media,
-                                 onOverlayChange, onOverlayDelete, onCutawayDelete }: Props) {
+                                 onOverlayChange, onOverlayDelete, onCutawayDelete,
+                                 formato, formatos, onFormato, quadro, onQuadroChange }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -94,6 +108,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                           x0: number; y0: number; s0: number; cx: number; cy: number } | null>(null)
   const fonteW = sourceSize?.[0] || 1080
   const fonteH = sourceSize?.[1] || 1920
+  const derivado = !!formato && formato !== 'fonte' && (formato in PROPORCOES)
+  const quadroBase: Quadro = quadro ?? QUADRO_PADRAO
   const ovAtivos = (overlays ?? []).filter((o: any) => o.enabled !== false
     && playhead >= o.out_start - 0.001 && playhead <= o.out_end + 0.001)
   const cutAtivo = (cutaways ?? []).find((c: any) => c.enabled !== false
@@ -104,13 +120,17 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     // display_*: um vídeo gravado em pé tem width/height trocados pela rotação
     const mw = Number(m?.info?.display_width || m?.info?.width) || 400
     const mh = Number(m?.info?.display_height || m?.info?.height) || 200
-    const fw = (mw * p.scale) / fonteW
-    const fh = (mh * p.scale) / fonteH
+    // a régua do render (overlay_chain): a sobreposição mantém a mesma
+    // fração de ÁREA do quadro em qualquer formato — média geométrica das
+    // razões de altura e largura, que no formato da fonte é a razão simples
+    const fator = Math.sqrt((box.height / fonteH) * (box.width / fonteW))
+    const wpx = Math.max(8, mw * p.scale * fator)
+    const hpx = Math.max(8, mh * p.scale * fator)
     return {
-      left: box.left + (p.x - fw / 2) * box.width,
-      top: box.top + (p.y - fh / 2) * box.height,
-      width: Math.max(8, fw * box.width),
-      height: Math.max(8, fh * box.height),
+      left: box.left + p.x * box.width - wpx / 2,
+      top: box.top + p.y * box.height - hpx / 2,
+      width: wpx,
+      height: hpx,
       nome: m?.name ?? 'sobreposição', x: p.x, y: p.y, scale: p.scale,
       video: m?.kind === 'video',
     }
@@ -185,6 +205,67 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     }
   }
 
+  // O QUADRO DO FORMATO DERIVADO. Em 'encaixe' o vídeo inteiro vive numa
+  // tela do formato, e o usuário o arrasta e redimensiona AQUI, na prévia —
+  // é a "tela preta atrás do vídeo" em que ele encaixa a gravação.
+  const [qPend, setQPend] = useState<{ x: number; y: number; escala: number } | null>(null)
+  const qPendRef = useRef<typeof qPend>(null)
+  const qDrag = useRef<{ modo: 'move' | 'scale'; mx: number; my: number
+                         x0: number; y0: number; s0: number; cx: number; cy: number } | null>(null)
+  const quadroVivo: Quadro = { ...quadroBase, ...(qPend ?? {}) }
+  useEffect(() => {
+    if (!qPend || !quadro) return
+    if (Math.abs(quadro.x - qPend.x) < 1e-3 && Math.abs(quadro.y - qPend.y) < 1e-3
+        && Math.abs(quadro.escala - qPend.escala) < 1e-3) { setQPend(null); qPendRef.current = null }
+  }, [quadro, qPend])
+  useEffect(() => { setQPend(null); qPendRef.current = null }, [formato])
+  const iniciarArrastoQuadro = (e: React.MouseEvent, modo: 'move' | 'scale') => {
+    if (!derivado || quadroVivo.modo !== 'encaixe' || box.width <= 0) return
+    e.preventDefault(); e.stopPropagation()
+    setSelOverlay(null)
+    setState({ selection: null, selectedClip: null })
+    palco.current?.focus()
+    const rc = palco.current?.getBoundingClientRect()
+    qDrag.current = { modo, mx: e.clientX, my: e.clientY,
+                      x0: quadroVivo.x, y0: quadroVivo.y, s0: quadroVivo.escala,
+                      cx: box.left + quadroVivo.x * box.width,
+                      cy: box.top + quadroVivo.y * box.height }
+    const onMove = (ev: MouseEvent) => {
+      const d = qDrag.current
+      if (!d || !rc) return
+      let novo: typeof qPend
+      if (d.modo === 'move') {
+        const nx = Math.min(1.5, Math.max(-0.5, d.x0 + (ev.clientX - d.mx) / box.width))
+        const ny = Math.min(1.5, Math.max(-0.5, d.y0 + (ev.clientY - d.my) / box.height))
+        novo = { x: Number(nx.toFixed(4)), y: Number(ny.toFixed(4)), escala: d.s0 }
+      } else {
+        const d0 = Math.hypot(d.mx - rc.left - d.cx, d.my - rc.top - d.cy) || 1
+        const d1 = Math.hypot(ev.clientX - rc.left - d.cx, ev.clientY - rc.top - d.cy)
+        novo = { x: d.x0, y: d.y0,
+                 escala: Number(Math.min(4, Math.max(0.1, d.s0 * (d1 / d0))).toFixed(4)) }
+      }
+      qPendRef.current = novo
+      setQPend(novo)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      const d = qDrag.current
+      qDrag.current = null
+      const p = qPendRef.current
+      if (!d || !p) return
+      if (Math.abs(p.x - d.x0) > 1e-4 || Math.abs(p.y - d.y0) > 1e-4
+          || Math.abs(p.escala - d.s0) > 1e-4) {
+        onQuadroChange?.({ x: p.x, y: p.y, escala: p.escala })
+      } else {
+        qPendRef.current = null
+        setQPend(null)
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   const enterStill = useCallback((clip: Clip, offset: number) => {
     stillRef.current = { clip, perfStart: performance.now(), offset0: offset }
     setStillClip(clip)
@@ -204,8 +285,12 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       if (!cont) return
       // a proporção vem da FONTE quando o metadata ainda não chegou: assim o
       // quadro já nasce no lugar certo em vez de pular quando o vídeo carrega
-      const vw = el.videoWidth || sourceSize?.[0] || 1080
-      const vh = el.videoHeight || sourceSize?.[1] || 1920
+      // no formato derivado a moldura é a TELA daquele formato, não o vídeo
+      const alvo = derivado
+        ? tamanhoDerivado(sourceSize?.[0] || 1080, sourceSize?.[1] || 1920, formato!)
+        : null
+      const vw = alvo ? alvo[0] : (el.videoWidth || sourceSize?.[0] || 1080)
+      const vh = alvo ? alvo[1] : (el.videoHeight || sourceSize?.[1] || 1920)
       const rc = cont.getBoundingClientRect()
       // 'contain' calculado a partir do PALCO, não do elemento: o vídeo agora
       // vive dentro de uma moldura com overflow escondido (é ela que faz o
@@ -234,9 +319,11 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       el.removeEventListener('loadedmetadata', medir)
       el.removeEventListener('resize', medir)
     }
-  }, [previewUrl, proxyUrl, projectId, sourceSize?.[0], sourceSize?.[1]])
+  }, [previewUrl, proxyUrl, projectId, sourceSize?.[0], sourceSize?.[1], derivado, formato])
 
-  const linear = !!previewUrl
+  // a prévia RENDERIZADA é do formato da gravação; num formato derivado o
+  // player compõe ao vivo (cópia leve + tela + zoom), como quando se edita
+  const linear = !!previewUrl && !derivado
 
   // A POSIÇÃO SOBREVIVE À TROCA DE PRÉVIA. Cada retoque refaz a prévia, e a
   // prévia nova troca o `src` do <video> — que remonta e volta para 0:00. O
@@ -251,7 +338,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   useEffect(() => {
     // a limpeza roda ANTES do remount: é o último instante com o vídeo velho
     return () => { retomar.current = { ...ultimaPosicao.current } }
-  }, [previewUrl, proxyUrl])
+  }, [previewUrl, proxyUrl, formato])
   const aoCarregarMetadata = useCallback(() => {
     const el = video.current
     const r = retomar.current
@@ -497,8 +584,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   return (
     <div className="flex flex-col gap-2 h-full min-h-0">
       <div ref={palco} tabIndex={0}
-           className="relative flex-1 min-h-0 bg-black rounded-lg
-                      overflow-hidden border border-line focus:outline-none"
+           className={`relative flex-1 min-h-0 rounded-lg overflow-hidden border
+                       border-line focus:outline-none ${derivado ? 'bg-ink-900' : 'bg-black'}`}
            onKeyDown={aoTeclarNoPalco}
            onMouseDown={(e) => {
              if (!(e.target as HTMLElement).closest?.('[data-ov]')) setSelOverlay(null)
@@ -507,18 +594,73 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             overflow escondido. É ela que transforma o scale do zoom em
             RECORTE — sem ela o vídeo parecia crescer sobre as tarjas em vez
             de fechar o plano. */}
-        <div className="absolute overflow-hidden"
+        <div className={`absolute overflow-hidden ${derivado
+               ? 'outline outline-1 outline-white/25 shadow-[0_0_0_1px_rgba(0,0,0,.6)]' : ''}`}
+             data-tela={derivado ? formato : undefined}
              style={box.width > 0
                ? { left: box.left, top: box.top,
-                   width: box.width, height: box.height }
+                   width: box.width, height: box.height,
+                   background: derivado
+                     ? (quadroVivo.modo === 'encaixe' && quadroVivo.fundo === 'desfoque'
+                        ? 'radial-gradient(#334155, #0b1220)' : '#000')
+                     : undefined }
                : { inset: 0 }}>
-          <video ref={video} className="w-full h-full object-contain" playsInline
-                 muted={muted}
-                 style={zoomCss}
-                 key={previewUrl ?? proxyUrl ?? 'source'}
-                 src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
-                 onLoadedMetadata={aoCarregarMetadata}
-                 onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+          {derivado && quadroVivo.modo === 'encaixe' && box.width > 0 ? (() => {
+            // ENCAIXE: o vídeo inteiro, na largura escolhida, onde o usuário
+            // pôs. O zoom do bloco continua valendo DENTRO do vídeo — é o
+            // que geometria_do_encaixe faz no render.
+            const fw = box.width * quadroVivo.escala
+            const fh = fw * (fonteH / fonteW)
+            const left = quadroVivo.x * box.width - fw / 2
+            const top = quadroVivo.y * box.height - fh / 2
+            return (
+              <div data-quadro="1"
+                   className="absolute overflow-hidden outline outline-1 outline-white/25
+                              hover:outline-accent/70"
+                   style={{ left, top, width: fw, height: fh,
+                            cursor: qDrag.current ? 'grabbing' : 'grab' }}
+                   title="arraste para mover o vídeo na tela · o canto redimensiona"
+                   onMouseDown={(e) => iniciarArrastoQuadro(e, 'move')}>
+                <video ref={video} className="w-full h-full object-fill" playsInline
+                       muted={muted}
+                       style={zoomCss}
+                       key={proxyUrl ?? 'source'}
+                       src={proxyUrl ?? `/api/projects/${projectId}/source`}
+                       onLoadedMetadata={aoCarregarMetadata}
+                       onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+                <div data-quadro="1"
+                     className="absolute -right-1 -bottom-1 w-3 h-3 bg-accent rounded-sm
+                                cursor-nwse-resize"
+                     title="redimensiona o vídeo dentro da tela"
+                     onMouseDown={(e) => iniciarArrastoQuadro(e, 'scale')} />
+              </div>
+            )
+          })() : derivado && box.width > 0 ? (() => {
+            // RECORTE concêntrico no rosto, o mesmo do render
+            const z = !stillClip ? (block?.zoom ?? 1.0) : 1.0
+            const [rx, ry, rw, rh] = recorte(z, fonteW, fonteH,
+              zoomAnchor?.x ?? 0.5, zoomAnchor?.y ?? 0.4, PROPORCOES[formato!] ?? 0)
+            const kx = box.width / Math.max(rw, 1)
+            const ky = box.height / Math.max(rh, 1)
+            return (
+              <video ref={video} className="absolute object-fill max-w-none" playsInline
+                     muted={muted}
+                     style={{ left: -rx * kx, top: -ry * ky,
+                              width: fonteW * kx, height: fonteH * ky }}
+                     key={proxyUrl ?? 'source'}
+                     src={proxyUrl ?? `/api/projects/${projectId}/source`}
+                     onLoadedMetadata={aoCarregarMetadata}
+                     onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+            )
+          })() : (
+            <video ref={video} className="w-full h-full object-contain" playsInline
+                   muted={muted}
+                   style={zoomCss}
+                   key={previewUrl ?? proxyUrl ?? 'source'}
+                   src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
+                   onLoadedMetadata={aoCarregarMetadata}
+                   onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+          )}
         </div>
         {stillClip && !linear && (
           <div className="absolute inset-0 bg-black grid place-items-center">
@@ -542,6 +684,42 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             o que vai baixar
           </span>
         )}
+        {(formatos ?? []).length > 1 && (
+          <div className="absolute top-1.5 right-1.5 flex items-center gap-1" data-formatos="1">
+            {(formatos ?? []).map((f) => (
+              <button key={f}
+                      className={`chip text-[10px] ${f === (formato ?? 'fonte')
+                        ? 'border-accent text-accent bg-ink-900/90'
+                        : 'border-line text-slate-400 bg-ink-900/80 hover:text-slate-200'}`}
+                      title={f === 'fonte' ? 'a prévia no formato da gravação'
+                                           : `ver como o ${f} vai sair`}
+                      onClick={() => onFormato?.(f)}>{rotuloFormato(f)}</button>
+            ))}
+          </div>
+        )}
+        {derivado && (
+          <div className="absolute top-8 right-1.5 flex items-center gap-1" data-quadro-modo="1">
+            <button className={`chip text-[10px] bg-ink-900/90 ${quadroVivo.modo === 'encaixe'
+                      ? 'border-accent text-accent' : 'border-line text-slate-400'}`}
+                    title="o vídeo inteiro numa tela deste formato — arraste e redimensione na prévia"
+                    onClick={() => onQuadroChange?.({ modo: 'encaixe' })}>encaixar</button>
+            <button className={`chip text-[10px] bg-ink-900/90 ${quadroVivo.modo === 'recorte'
+                      ? 'border-accent text-accent' : 'border-line text-slate-400'}`}
+                    title="recorte concêntrico no rosto, preenchendo o quadro"
+                    onClick={() => onQuadroChange?.({ modo: 'recorte' })}>recortar</button>
+            {quadroVivo.modo === 'encaixe' && (
+              <button className="chip text-[10px] bg-ink-900/90 border-line text-slate-400"
+                      title="o fundo atrás do vídeo: preto, ou o próprio vídeo desfocado"
+                      onClick={() => onQuadroChange?.({
+                        fundo: quadroVivo.fundo === 'preto' ? 'desfoque' : 'preto' })}>
+                fundo: {quadroVivo.fundo === 'preto' ? 'preto' : 'desfocado'}
+              </button>
+            )}
+            <button className="chip text-[10px] bg-ink-900/90 border-line text-slate-500"
+                    title="volta ao padrão do programa para este formato"
+                    onClick={() => onQuadroChange?.({ padrao: true })}>padrão</button>
+          </div>
+        )}
         {!linear && previaVelha && (
           <span className="absolute top-1.5 left-1.5 chip border-amber-800/70
                            text-amber-300 bg-ink-900/80"
@@ -559,7 +737,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             prévia leve
           </span>
         )}
-        {safeZone && box.height > 0 && (
+        {safeZone && !derivado && box.height > 0 && (
           <div className="absolute border-y border-dashed
                           border-amber-500/50 bg-amber-500/5 pointer-events-none"
                style={{ left: box.left, width: box.width,
@@ -576,9 +754,10 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           // Usar a altura do ELEMENTO era o bug: com a prévia leve tocando, o
           // elemento tem 854 de altura contra 1920 da fonte, e a legenda saía
           // 2,25x maior que na exportação.
-          const playH = sourceSize?.[1] || box.vh || 1920
+          const st = derivado ? estiloDoFormato(style, fonteW, fonteH, formato!) : style
+          const playH = derivado ? (st?._quadro?.[1] ?? box.vh) : (sourceSize?.[1] || box.vh || 1920)
           const k = box.height / Math.max(playH, 1)
-          const fs = style?.fontsize ?? 35
+          const fs = st?.fontsize ?? 35
 
           // Medido com o filtro ass do próprio ffmpeg, Arial/Liberation:
           //
@@ -596,13 +775,13 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           return (
             <div className="absolute pointer-events-none text-center"
                  style={{
-                   left: box.left + (style?.margin_l ?? 60) * k,
+                   left: box.left + (st?.margin_l ?? 60) * k,
                    width: Math.max(
-                     10, box.width - ((style?.margin_l ?? 60) + (style?.margin_r ?? 60)) * k),
+                     10, box.width - ((st?.margin_l ?? 60) + (st?.margin_r ?? 60)) * k),
                    // margin_v é medido do fundo do quadro até a base da CAIXA
                    // DE LINHA; a tinta para 0,172 x fontsize acima disso
                    bottom: `calc(100% - ${box.top + box.height}px + ${
-                     ((style?.margin_v ?? 220) + fs * DESCIDA) * k}px)`,
+                     ((st?.margin_v ?? 220) + fs * DESCIDA) * k}px)`,
                  }}>
               <span className="inline-block"
                     style={{
@@ -610,27 +789,27 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                       // sozinho. Quem decide a quebra é o linebreak.py; o CSS
                       // não pode inventar mais nenhuma.
                       whiteSpace: 'pre',
-                      fontFamily: `"${style?.font ?? 'Arial'}", Arial, Helvetica, sans-serif`,
+                      fontFamily: `"${st?.font ?? 'Arial'}", Arial, Helvetica, sans-serif`,
                       fontSize: `${Math.max(6, fs * ASS_PARA_CSS * k)}px`,
                       // o avanço de linha do ASS é o fontsize cravado; usar
                       // leading-tight (1,25) esticava a legenda de 2 linhas 12%
                       lineHeight: `${Math.max(7, fs * k)}px`,
-                      fontWeight: style?.bold ? 700 : 400,
-                      color: style?.primary ?? '#fff',
+                      fontWeight: st?.bold ? 700 : 400,
+                      color: st?.primary ?? '#fff',
                       // -webkit-text-stroke é CENTRADO (metade entra no glifo);
                       // o contorno do ASS cresce inteiro para fora. Daí o 2x.
                       WebkitTextStroke: `${Math.max(
-                        0.5, (style?.outline ?? 4) * 2 * k)}px ${
-                        style?.outline_color ?? '#000'}`,
+                        0.5, (st?.outline ?? 4) * 2 * k)}px ${
+                        st?.outline_color ?? '#000'}`,
                       paintOrder: 'stroke fill',
                       // sombra: deslocamento de S px para a direita e para
                       // baixo, que a prévia simplesmente não desenhava
-                      textShadow: (style?.shadow ?? 0) > 0
-                        ? `${(style.shadow ?? 0) * k}px ${(style.shadow ?? 0) * k}px 0 rgba(0,0,0,.75)`
+                      textShadow: (st?.shadow ?? 0) > 0
+                        ? `${(st.shadow ?? 0) * k}px ${(st.shadow ?? 0) * k}px 0 rgba(0,0,0,.75)`
                         : undefined,
-                      textTransform: style?.uppercase ? 'uppercase' : 'none',
+                      textTransform: st?.uppercase ? 'uppercase' : 'none',
                     }}>
-                {cue.text}
+                {derivado ? quebrar(cue.text, st?.max_chars_per_line ?? 24, st?.max_lines ?? 2) : cue.text}
               </span>
             </div>
           )
@@ -690,7 +869,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           )
         })}
         {cutAtivo && !stillClip && (
-          <span className="absolute top-1.5 right-1.5 chip border-violet-700/70
+          <span className="absolute bottom-1.5 right-1.5 chip border-violet-700/70
                            text-violet-200 bg-ink-900/90 flex items-center gap-1">
             cobertura: {(media ?? []).find((m) => m.id === cutAtivo.media_id)?.name ?? 'vídeo'}
             <button className="text-red-300 hover:text-red-200 font-bold px-1"

@@ -25,6 +25,22 @@ export function sourceToOutput(t: number, blocks: Clip[], source = 'main'): numb
   return null
 }
 
+/** Tempo na fonte -> posição de saída, caindo no bloco mantido MAIS PERTO
+ *  quando o instante está num trecho removido (soltar um item em cima de um
+ *  corte não pode simplesmente não fazer nada). */
+export function sourceToOutputNearest(t: number, blocks: Clip[], source = 'main'): number | null {
+  const direto = sourceToOutput(t, blocks, source)
+  if (direto != null) return direto
+  let melhor: { d: number; out: number } | null = null
+  for (const b of blocks) {
+    if (b.source !== source) continue
+    const d = t < b.src_start ? b.src_start - t : t - b.src_end
+    const out = t < b.src_start ? (b.out_start ?? 0) : (b.out_end ?? 0)
+    if (!melhor || d < melhor.d) melhor = { d, out }
+  }
+  return melhor ? melhor.out : null
+}
+
 export function blockAtOutput(t: number, blocks: Clip[]): Clip | null {
   for (const b of blocks) {
     if (t >= (b.out_start ?? 0) - 1e-6 && t < (b.out_end ?? 0) + 1e-6) return b

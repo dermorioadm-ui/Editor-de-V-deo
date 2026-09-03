@@ -943,6 +943,7 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
         limite = float(project.info.duration or 0.0)
     a = ler(alvo, "out_start")
     b = ler(alvo, "out_end", limite)
+    aviso = ""
     if acao == "move":
         delta = float(payload.get("delta", 0.0))
         dur = max(0.05, b - a)
@@ -959,8 +960,60 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
             gravar(alvo, "out_start", min(t, b - 0.2))
         else:
             gravar(alvo, "out_end", max(t, a + 0.2))
+        # ESTICAR ATÉ O FIM DA MÍDIA, NUNCA ALÉM. Um vídeo em janela ou em
+        # cobertura tem um fim: passar dele congelava o último quadro (ou,
+        # na cobertura, comia o fim da frase). O teto é dito, não escondido.
+        if kind in ("overlay", "cutaway"):
+            midia = next((m for m in svc.list_media(pid)
+                          if m["id"] == getattr(alvo, "media_id", "")), None)
+            dur = float(((midia or {}).get("info") or {}).get("duration") or 0.0)
+            if midia and midia.get("kind") == "video" and dur > 0:
+                ms = ler(alvo, "media_start")
+                vel = ler(alvo, "speed", 1.0) or 1.0
+                teto = max(0.2, (dur - ms) / vel)
+                na, nb = ler(alvo, "out_start"), ler(alvo, "out_end")
+                if nb - na > teto + 0.02:
+                    if side == "start":
+                        gravar(alvo, "out_start", nb - teto)
+                    else:
+                        gravar(alvo, "out_end", na + teto)
+                    aviso = (f"'{midia.get('name', '')}' tem {dur:.1f} s: a janela "
+                             f"vai até o fim dele e para ali")
     project.save_plan()
-    return {"ok": True, "timeline": svc.timeline_summary(project)}
+    return {"ok": True, "timeline": svc.timeline_summary(project), "aviso": aviso}
+
+
+@app.post("/api/projects/{pid}/ops/quadro")
+def api_quadro(pid: str, payload: dict = Body(...)) -> dict:
+    """O quadro de um formato de saída: encaixar o vídeo numa tela do formato
+    (e onde/quanto), ou recortar no rosto. É o que a prévia mostra quando o
+    usuário escolhe ver o 9:16 — e o que a exportação daquele formato faz."""
+    from .render.renderer import PROPORCOES
+
+    project = _project(pid)
+    aspecto = str(payload.get("aspecto") or "")
+    if aspecto not in PROPORCOES or aspecto == "fonte":
+        raise HTTPException(400, f"formato desconhecido: {aspecto!r}")
+    atual = svc.quadro_do_formato(project.plan, project.info, aspecto)
+    novo = dict(atual)
+    if "modo" in payload:
+        novo["modo"] = str(payload["modo"])
+    if "fundo" in payload:
+        novo["fundo"] = str(payload["fundo"])
+    for k in ("escala", "x", "y"):
+        if k in payload:
+            novo[k] = float(payload[k])
+    if payload.get("padrao"):
+        project.plan.enquadramento.pop(aspecto, None)
+    else:
+        project.plan.enquadramento[aspecto] = novo
+    # normaliza pelo mesmo caminho que o render lê
+    efetivo = svc.quadro_do_formato(project.plan, project.info, aspecto)
+    if not payload.get("padrao"):
+        project.plan.enquadramento[aspecto] = efetivo
+    project.save_plan()
+    return {"ok": True, "aspecto": aspecto, "quadro": efetivo,
+            "quadros": svc.quadros_efetivos(project)}
 
 
 @app.post("/api/projects/{pid}/ops/zoom")

@@ -156,7 +156,8 @@ def e_video(path: str) -> bool:
 
 def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                   width: int, height: int, first_input_index: int,
-                  tag_in: str, tag_out: str, ref_height: int = 0) -> tuple[str, list[dict]]:
+                  tag_in: str, tag_out: str, ref_height: int = 0,
+                  ref_width: int = 0) -> tuple[str, list[dict]]:
     """PNGs — e vídeos, como janela (picture-in-picture) — por cima do quadro.
 
     Devolve o grafo e a lista de ENTRADAS, uma por sobreposição, na ordem em
@@ -178,7 +179,17 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
     """
     if not overlays:
         return "", []
-    fator = (height / float(ref_height)) if ref_height and ref_height > 0 else 1.0
+    # A RÉGUA ENTRE FORMATOS. Na saída com a proporção da fonte (a prévia
+    # menor, a exportação em 720) o fator é a razão das alturas — e das
+    # larguras, que é a mesma. Num formato DERIVADO as duas diferem: pela
+    # altura sozinha, uma janela de 17% da largura no horizontal virava 55%
+    # da largura no vertical e tapava o vídeo encaixado. A média geométrica
+    # das duas razões mantém a mesma fração de ÁREA do quadro — o mesmo peso
+    # visual — em qualquer formato, e continua idêntica ao caso antigo quando
+    # a proporção não muda.
+    fh = (height / float(ref_height)) if ref_height and ref_height > 0 else 1.0
+    fw = (width / float(ref_width)) if ref_width and ref_width > 0 else fh
+    fator = (fh * fw) ** 0.5
     parts: list[str] = []
     inputs: list[dict] = []
     cur = tag_in

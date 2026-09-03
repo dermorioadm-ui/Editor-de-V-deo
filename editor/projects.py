@@ -141,6 +141,7 @@ class Project:
             out["analysis"] = self.analysis
             out["plan"] = self.plan.to_dict()
             out["timeline"] = timeline_summary(self)
+            out["quadros"] = quadros_efetivos(self)
         return out
 
 
@@ -1496,6 +1497,56 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
     project.save_plan()
     return {"ok": True, **relatorio, "zoom": resumo,
             "timeline": timeline_summary(project)}
+
+
+# ---------------------------------------------------------- quadro/formato
+QUADRO_MODOS = ("encaixe", "recorte")
+QUADRO_FUNDOS = ("preto", "desfoque")
+
+
+def quadro_padrao(prop_fonte: float, aspecto: str) -> dict:
+    """Como um formato derivado nasce: o vídeo INTEIRO encaixado numa tela
+    preta quando o quadro pedido é mais estreito que a gravação (horizontal
+    -> vertical ou quadrado), e recorte concêntrico no rosto quando é mais
+    largo (vertical -> horizontal), onde encaixar deixaria duas tarjas
+    enormes. O usuário troca e arrasta na prévia."""
+    from .render.renderer import PROPORCOES
+
+    prop = PROPORCOES.get(aspecto, 0.0)
+    if aspecto == "fonte" or prop <= 0 or prop_fonte <= 0 \
+            or abs(prop - prop_fonte) <= 0.01:
+        return {"modo": "recorte", "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"}
+    modo = "encaixe" if prop < prop_fonte else "recorte"
+    return {"modo": modo, "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"}
+
+
+def quadro_do_formato(plan: EditPlan, info, aspecto: str) -> dict:
+    """O quadro EFETIVO de um formato: o que o usuário gravou por cima do padrão."""
+    try:
+        lw, lh = (int(x) for x in info.display_size)
+        prop_fonte = lw / max(lh, 1e-9)
+    except Exception:  # noqa: BLE001
+        prop_fonte = 16 / 9
+    base = quadro_padrao(prop_fonte, aspecto)
+    gravado = dict((plan.enquadramento or {}).get(aspecto) or {})
+    q = {**base, **{k: v for k, v in gravado.items() if k in base}}
+    q["modo"] = q["modo"] if q["modo"] in QUADRO_MODOS else base["modo"]
+    q["fundo"] = q["fundo"] if q["fundo"] in QUADRO_FUNDOS else "preto"
+    q["escala"] = round(max(0.1, min(4.0, float(q["escala"]))), 4)
+    q["x"] = round(max(-0.5, min(1.5, float(q["x"]))), 4)
+    q["y"] = round(max(-0.5, min(1.5, float(q["y"]))), 4)
+    return q
+
+
+def quadros_efetivos(project: Project) -> dict:
+    """Um quadro por formato que este projeto entrega (fonte + extras)."""
+    from .render.renderer import PROPORCOES
+
+    plan = project.plan
+    formatos = ["fonte"] + [e for e in (plan.export.extras or ()) if e in PROPORCOES]
+    if plan.export.aspect and plan.export.aspect not in formatos:
+        formatos.append(plan.export.aspect)
+    return {a: quadro_do_formato(plan, project.info, a) for a in formatos}
 
 
 def geometria_pip(project: Project, midia: dict) -> dict:

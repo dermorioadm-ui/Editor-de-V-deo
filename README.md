@@ -755,7 +755,20 @@ A trilha tem faixas separadas, e cada uma aceita itens:
 
 Arraste um item para movê-lo, arraste a borda para mudar a duração,
 **Shift+clique** apaga. Os botões **+ sobreposição** e **+ trilha** na barra da
-timeline levam para a aba onde se importa o arquivo.
+timeline levam para a aba onde se importa o arquivo. Uma janela de vídeo
+estica até o fim da mídia dela e para ali, avisando — nunca congela o último
+quadro. Soltar um item em cima de um trecho cortado o encosta no bloco mantido
+mais perto (antes soltar num corte simplesmente não fazia nada).
+
+**Ver o formato que vai sair.** Em cima da prévia há um seletor: *como
+gravado* e cada formato extra que o projeto entrega (9:16, 1:1, 16:9). Num
+formato derivado a prévia vira a **tela daquele formato** com o vídeo dentro,
+exatamente como o arquivo sai. Dois modos: **encaixar** (o vídeo inteiro numa
+tela preta — ou no próprio vídeo desfocado — no tamanho e lugar que você
+arrasta e redimensiona ali mesmo) e **recortar** (recorte concêntrico no
+rosto, preenchendo o quadro). De uma gravação horizontal o vertical e o
+quadrado nascem encaixados; de uma vertical, o horizontal nasce recortado.
+*Padrão* volta ao que o programa faria.
 
 **A agulha** atravessa todas as camadas. Pegue nela e arraste para qualquer
 lugar; o **▶ tocar** fica na própria barra da timeline, ao lado do zoom.

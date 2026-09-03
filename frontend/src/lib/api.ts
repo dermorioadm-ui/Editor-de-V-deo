@@ -143,6 +143,9 @@ export const api = {
   setRepeat: (id: string, repeat_id: string, restored: boolean) =>
     post(`/api/projects/${id}/ops/repeat`, { repeat_id, restored }),
 
+  // o quadro de um formato derivado (encaixe/recorte, tamanho, lugar, fundo)
+  setQuadro: (id: string, aspecto: string, patch: any) =>
+    post<any>(`/api/projects/${id}/ops/quadro`, { aspecto, ...patch }),
   setZoom: (id: string, clip_id: string, zoom: number) =>
     post(`/api/projects/${id}/ops/zoom`, { clip_id, zoom }),
 

@@ -286,6 +286,38 @@ def regua_da_legenda(main: MediaInfo, export: ExportParams,
     return tw, th, novo
 
 
+def quadro_de_saida(plan: EditPlan, main: MediaInfo, width: int, height: int) -> dict | None:
+    """O quadro de ENCAIXE deste formato, ou None (formato da fonte, ou recorte).
+
+    Encaixe: o vídeo INTEIRO (com o zoom do bloco por dentro) numa tela do
+    formato pedido — preta ou o próprio vídeo desfocado — no tamanho e lugar
+    que o usuário arrastou na prévia. É o que ele vê na prévia do 9:16 e o
+    que o arquivo 9:16 traz.
+    """
+    aspecto = aspecto_do_export(plan.export)
+    if aspecto == "fonte":
+        return None
+    sw, sh = main.display_size
+    if sw <= 0 or sh <= 0 or abs(sw / sh - width / max(height, 1e-9)) <= 0.01:
+        return None
+    from ..projects import quadro_do_formato
+
+    q = quadro_do_formato(plan, main, aspecto)
+    return q if q.get("modo") == "encaixe" else None
+
+
+def geometria_do_encaixe(quadro: dict, sw: int, sh: int, width: int,
+                         height: int) -> tuple[int, int, int, int]:
+    """(largura, altura, x, y) do vídeo dentro da tela, em pixels pares."""
+    fw = max(2, int(round(width * float(quadro.get("escala", 1.0)))))
+    fw -= fw % 2
+    fh = max(2, int(round(fw * sh / max(sw, 1))))
+    fh -= fh % 2
+    px = int(round(float(quadro.get("x", 0.5)) * width - fw / 2))
+    py = int(round(float(quadro.get("y", 0.5)) * height - fh / 2))
+    return fw, fh, px, py
+
+
 def _hash(payload: dict) -> str:
     return hashlib.sha1(json.dumps(payload, sort_keys=True,
                                    default=str).encode()).hexdigest()[:16]
@@ -467,20 +499,56 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         # esticadas amolece a imagem. Aqui o zoom é reduzido ao que a janela
         # daquele formato ainda aguenta — muitas vezes nada.
         z = float(seg.zoom or 1.0)
-        jw, _jh = janela_derivada(sw, sh, width / max(height, 1e-9))
-        if jw > 0 and jw < sw - 1:
-            z = min(z, zoom_maximo(jw, width, plan.zoom.max_zoom))
-        zc = zoom_chain(z, sw, sh, width, height,
-                        plan.zoom.anchor_x, plan.zoom.anchor_y, plan.zoom.unsharp)
-        if zc:
-            chain.append(zc)
-        elif needs_fit:
-            chain.append(F.fit_chain(width, height))
-        elif seg.kind != "main":
-            chain.append(f"scale={width}:{height}")
+        quadro = quadro_de_saida(plan, main, width, height) if seg.kind == "main" else None
+        if quadro:
+            # ENCAIXE: o vídeo inteiro, na proporção dele, escalado para a
+            # largura que o usuário escolheu; o zoom do bloco continua valendo
+            # DENTRO do vídeo. A tela do formato entra logo abaixo.
+            fw, fh, _px, _py = geometria_do_encaixe(quadro, sw, sh, width, height)
+            zc = zoom_chain(z, sw, sh, fw, fh,
+                            plan.zoom.anchor_x, plan.zoom.anchor_y, plan.zoom.unsharp)
+            if zc:
+                chain.append(zc)
+            elif (sw, sh) != (fw, fh):
+                chain.append(f"scale={fw}:{fh}:flags=lanczos")
+        else:
+            jw, _jh = janela_derivada(sw, sh, width / max(height, 1e-9))
+            if jw > 0 and jw < sw - 1:
+                z = min(z, zoom_maximo(jw, width, plan.zoom.max_zoom))
+            zc = zoom_chain(z, sw, sh, width, height,
+                            plan.zoom.anchor_x, plan.zoom.anchor_y, plan.zoom.unsharp)
+            if zc:
+                chain.append(zc)
+            elif needs_fit:
+                chain.append(F.fit_chain(width, height))
+            elif seg.kind != "main":
+                chain.append(f"scale={width}:{height}")
 
     graph_parts.append(f"[{cur_tag}]" + ",".join(chain) + "[__v0]")
     cur_tag = "__v0"
+
+    if seg.kind != "photo" and seg.kind == "main":
+        quadro = quadro_de_saida(plan, main, width, height)
+        if quadro:
+            # A TELA DO FORMATO. Preta: pad até uma tela que contenha o quadro
+            # e o vídeo (o vídeo pode estar parcialmente fora) e crop no
+            # quadro — dois filtros que não mudam a contagem de quadros.
+            # Desfocada: o próprio vídeo ampliado e borrado por baixo.
+            sw0, sh0 = (seg.info.display_size if seg.info else (width, height))
+            fw, fh, px, py = geometria_do_encaixe(quadro, sw0, sh0, width, height)
+            if quadro.get("fundo") == "desfoque":
+                graph_parts.append(
+                    f"[__v0]split=2[__qa][__qb];"
+                    f"[__qa]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                    f"crop={width}:{height},gblur=sigma=28[__qbg];"
+                    f"[__qbg][__qb]overlay=x={px}:y={py}:format=auto[__q]")
+            else:
+                x0, y0 = min(0, px), min(0, py)
+                x1, y1 = max(width, px + fw), max(height, py + fh)
+                graph_parts.append(
+                    f"[__v0]pad=w={x1 - x0}:h={y1 - y0}:x={px - x0}:y={py - y0}:color=black,"
+                    f"crop=w={width}:h={height}:x={-x0}:y={-y0}[__q]")
+            cur_tag = "__q"
 
     blur_graph, has_blur = F.blur_chain(
         plan.blurs, seg.t_start, seg.t_start + seg.nominal,
@@ -495,7 +563,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         ov_graph, ov_inputs = F.overlay_chain(
             overlays, media_paths, seg.t_start, width, height,
             first_input_index=1, tag_in=cur_tag, tag_out="__vo",
-            ref_height=main.display_size[1])
+            ref_height=main.display_size[1], ref_width=main.display_size[0])
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
@@ -652,11 +720,12 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "nominal": round(seg.nominal, 4),
         "style": plan.style.__dict__ if seg_cues else None,
         "aspect": aspecto_do_export(plan.export),
+        "quadro": quadro_de_saida(plan, main, *target_size(main, plan.export)),
         "export": plan.export.__dict__,
         "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
         # a régua do tamanho das sobreposições (altura da fonte): entrou na
         # chave quando a fórmula passou a escalar pela altura da saída
-        "ov_ref": main.display_size[1] if seg_overlays else None,
+        "ov_ref": tuple(main.display_size) if seg_overlays else None,
         "hw": hw, "size": target_size(main, plan.export),
         "fps": fps_de_saida(main, plan.export),
     })

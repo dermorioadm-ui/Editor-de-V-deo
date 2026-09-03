@@ -316,6 +316,8 @@ def main() -> int:
     testar_janela_de_video()
     testar_legenda_vertical_nao_corta()
     testar_geracao_com_ia_mockada()
+    testar_quadro_encaixado()
+    testar_quadro_pela_rota_e_janela_na_trilha()
 
     print()
     if FALHAS:
@@ -1701,7 +1703,7 @@ def testar_janela_do_sistema() -> None:
     """A janela de escolher arquivo é a DO SISTEMA, não uma imitação em HTML."""
     from editor import nativo
 
-    check(set(nativo.FILTROS) == {"video", "audio", "image", "media"},
+    check(set(nativo.FILTROS) == {"video", "audio", "image", "media", "texto"},
           "todo tipo que o editor aceita tem filtro, inclusive o 'media' do "
           "material auxiliar (vídeo e imagem na MESMA janela: separar obriga a "
           "abrir duas vezes para anexar uma gravação de tela e um print)")
@@ -2907,6 +2909,13 @@ def testar_sobreposicao_no_tamanho_da_previa() -> None:
           "na prévia de 240 o scale encolhe junto (0,8 × 240/1920 = 0,1)")
     antigo, _ = overlay_chain([o], {"m": "/x.png"}, 0.0, 135, 240, 1, "a", "b")
     check("iw*0.8000" in antigo, "sem a régua, o comportamento antigo continua")
+    # num formato DERIVADO (9:16 de uma fonte horizontal) a razão das alturas
+    # sozinha inflava a janela: 1,78x — a média geométrica com a razão das
+    # larguras (0,56x) mantém a mesma fração de ÁREA do quadro (1,0x)
+    vertical, _ = overlay_chain([o], {"m": "/x.png"}, 0.0, 540, 960, 1, "a", "b",
+                                ref_height=540, ref_width=960)
+    check("iw*0.8000" in vertical,
+          "no 9:16 tirado do horizontal a janela mantém o mesmo peso visual (fração de área)")
 
     # 2) a prova no pixel: renderiza a mesma sobreposição em dois tamanhos e
     #    mede quanto do quadro ela ocupa
@@ -3284,6 +3293,199 @@ def testar_geracao_com_ia_mockada() -> None:
     finally:
         (gerar.listar_modelos, gerar._post, gerar._cliente, gerar._baixar,
          gemini.chave_guardada, gerar.INTERVALO_VIDEO) = guardado
+        try:
+            svc.delete_project(project.id)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def testar_quadro_encaixado() -> None:
+    """O 9:16 tirado de uma gravação horizontal: o vídeo INTEIRO numa tela.
+
+    "Eu pedi vertical, baixou vertical, mas na prévia continua horizontal.
+    Eu tenho que ter a opção de pegar o vídeo, diminuir e aumentar ele numa
+    tela preta atrás dele." O quadro de um formato derivado agora tem dois
+    modos: encaixe (o vídeo inteiro numa tela do formato, no tamanho e lugar
+    que o usuário arrasta na prévia) e recorte (concêntrico no rosto). O
+    padrão para horizontal -> vertical é encaixe. Conferido no pixel.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import MediaInfo, probe
+    from editor.models import Clip, EditPlan
+    from editor.projects import quadro_do_formato, quadro_padrao
+    from editor.render.renderer import (geometria_do_encaixe, plan_segments,
+                                        quadro_de_saida, render_video_segments,
+                                        target_size)
+
+    # 1) o padrão: horizontal -> vertical/quadrado encaixa; vertical -> horizontal recorta
+    check(quadro_padrao(16 / 9, "9:16")["modo"] == "encaixe",
+          "de uma gravação horizontal o 9:16 nasce ENCAIXADO (vídeo inteiro numa tela)")
+    check(quadro_padrao(16 / 9, "1:1")["modo"] == "encaixe", "e o 1:1 também")
+    check(quadro_padrao(9 / 16, "16:9")["modo"] == "recorte",
+          "de uma gravação vertical o 16:9 nasce recortado (encaixar deixaria duas tarjas enormes)")
+    check(quadro_padrao(16 / 9, "16:9")["modo"] == "recorte", "o próprio formato da fonte não encaixa nada")
+
+    # 2) o que o usuário gravou vale por cima do padrão, saneado
+    main = MediaInfo(path="x.mp4", duration=10.0, width=1920, height=1080)
+    plan = EditPlan()
+    plan.enquadramento["9:16"] = {"modo": "encaixe", "escala": 9.0, "x": 0.5, "y": 0.72,
+                                  "fundo": "roxo"}
+    q = quadro_do_formato(plan, main, "9:16")
+    check(q["escala"] == 4.0 and q["fundo"] == "preto" and abs(q["y"] - 0.72) < 1e-9,
+          f"escala e fundo fora da régua são saneados; a posição vale ({q})")
+    export = ExportParams(aspect="9:16")
+    plan.export = export
+    tw, th = target_size(main, export)
+    check(quadro_de_saida(plan, main, tw, th) is not None,
+          "o render enxerga o encaixe do 9:16")
+    check(quadro_de_saida(plan, main, 1920, 1080) is None,
+          "e não há encaixe quando a saída tem a proporção da fonte")
+    fw, fh, px, py = geometria_do_encaixe({"escala": 1.0, "x": 0.5, "y": 0.5}, 1920, 1080, tw, th)
+    check(fw == tw and abs(fh - tw * 1080 / 1920) <= 2 and px == 0 and abs(py - (th - fh) / 2) <= 1,
+          f"com escala 1 o vídeo ocupa a largura toda, centrado ({fw}x{fh} em {px},{py} de {tw}x{th})")
+
+    # 3) no pixel: uma gravação horizontal cinza com um risco branco no meio
+    tmp = Path(tempfile.mkdtemp(prefix="encaixe_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x808080:s=640x360:r=30:d=2",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-vf", "drawbox=x=0:y=170:w=640:h=20:color=white:t=fill",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    info = probe(fonte)
+
+    def quadro_9x16(enquadramento: dict | None) -> np.ndarray:
+        plan = EditPlan()
+        plan.export = ExportParams(aspect="9:16", burn_subtitles=False,
+                                   preset="ultrafast", crf=30)
+        plan.clips = [Clip(src_start=0.0, src_end=2.0)]
+        if enquadramento:
+            plan.enquadramento["9:16"] = enquadramento
+        tl = Timeline(plan.active_clips, 30.0)
+        segs = plan_segments(plan, tl, {"main": {"path": str(fonte), "info": info, "kind": "video"}}, info)
+        segs = render_video_segments(segs, plan, info, [], tmp / f"segs-{hash(str(enquadramento))}",
+                                     {"main": str(fonte)}, None)
+        w, h = probe(segs[0].file).display_size
+        cru = subprocess.run([FFMPEG, "-v", "error", "-ss", "1.0", "-i", segs[0].file,
+                              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, check=True).stdout
+        return np.frombuffer(cru, np.uint8).reshape(h, w)
+
+    img = quadro_9x16(None)                       # o padrão: encaixe, escala 1, centro
+    h, w = img.shape
+    check(abs(w / h - 9 / 16) < 0.01, f"o arquivo sai 9:16 ({w}x{h})")
+    linhas_cinza = np.flatnonzero((np.abs(img.astype(int) - 128) < 12).mean(axis=1) > 0.9)
+    linhas_pretas = np.flatnonzero((img < 20).mean(axis=1) > 0.9)
+    linhas_brancas = np.flatnonzero((img > 235).mean(axis=1) > 0.9)
+    check(linhas_pretas.size > h * 0.5 and linhas_pretas[0] == 0 and linhas_pretas[-1] == h - 1,
+          f"tela preta em cima e embaixo ({linhas_pretas.size} de {h} linhas)")
+    check(linhas_cinza.size > 0 and abs((linhas_cinza[0] + linhas_cinza[-1]) / 2 - h / 2) < 4
+          and abs((linhas_cinza[-1] - linhas_cinza[0]) - w * 360 / 640) < 6,
+          f"o vídeo inteiro está no meio, na largura toda (linhas {linhas_cinza[0] if linhas_cinza.size else '?'}..{linhas_cinza[-1] if linhas_cinza.size else '?'})")
+    check(linhas_brancas.size > 0 and abs((linhas_brancas[0] + linhas_brancas[-1]) / 2 - h / 2) < 6,
+          "e o risco branco do meio da gravação está no meio da tela")
+
+    img2 = quadro_9x16({"modo": "encaixe", "escala": 0.5, "x": 0.5, "y": 0.25, "fundo": "preto"})
+    cinza2 = np.flatnonzero((np.abs(img2.astype(int) - 128) < 12).mean(axis=1) > 0.4)
+    cols2 = np.flatnonzero((np.abs(img2.astype(int) - 128) < 12).mean(axis=0) > 0.1)
+    check(cinza2.size > 0 and abs((cinza2[0] + cinza2[-1]) / 2 - h * 0.25) < 6
+          and abs((cols2[-1] - cols2[0] + 1) - w * 0.5) <= 4,
+          f"escala 0,5 em y=0,25: o vídeo fica na metade da largura, no quarto de cima "
+          f"(colunas {cols2[0] if cols2.size else '?'}..{cols2[-1] if cols2.size else '?'}, "
+          f"linhas {cinza2[0] if cinza2.size else '?'}..{cinza2[-1] if cinza2.size else '?'})")
+
+    img3 = quadro_9x16({"modo": "recorte", "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"})
+    check((img3 < 20).mean() < 0.02,
+          f"no modo recorte não há tela preta: o quadro é preenchido pela gravação "
+          f"({(img3 < 20).mean():.1%} de preto)")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_quadro_pela_rota_e_janela_na_trilha() -> None:
+    """A rota do quadro e o teto de esticar uma janela na trilha."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.ai.roteiro import MAX_ANEXO, teto_do_anexo
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.server import app
+
+    tmp = Path(tempfile.mkdtemp(prefix="quadro_rota_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=30:d=12",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+    janela = tmp / "janela.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=3",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    str(janela)], check=True)
+    project = svc.create(str(fonte), "quadro", "VSL")
+    project.plan.clips = [Clip(src_start=0.0, src_end=12.0)]
+    project.plan.export.extras = ("9:16",)
+    project.save_plan()
+    cliente = TestClient(app)
+    try:
+        r = cliente.get(f"/api/projects/{project.id}").json()
+        check(r.get("quadros", {}).get("9:16", {}).get("modo") == "encaixe",
+              "o projeto já diz o quadro de cada formato que entrega")
+        r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
+                         json={"aspecto": "9:16", "y": 0.3, "escala": 0.8})
+        check(r.status_code == 200 and abs(r.json()["quadro"]["y"] - 0.3) < 1e-9
+              and abs(r.json()["quadro"]["escala"] - 0.8) < 1e-9,
+              "arrastar/redimensionar na prévia grava posição e escala do quadro")
+        r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
+                         json={"aspecto": "9:16", "modo": "recorte"})
+        check(r.json()["quadro"]["modo"] == "recorte" and abs(r.json()["quadro"]["y"] - 0.3) < 1e-9,
+              "trocar o modo não perde a posição")
+        r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
+                         json={"aspecto": "9:16", "padrao": True})
+        check(r.json()["quadro"]["modo"] == "encaixe" and abs(r.json()["quadro"]["y"] - 0.5) < 1e-9,
+              "'padrão' volta ao que o programa faria")
+        r = cliente.post(f"/api/projects/{project.id}/ops/quadro", json={"aspecto": "4:3"})
+        check(r.status_code == 400, "formato desconhecido é recusado")
+
+        # a janela na trilha: estica até o fim da mídia, nunca além
+        m = svc.add_media(project.id, str(janela), "video", "janela.mp4")
+        r = cliente.post(f"/api/projects/{project.id}/overlays",
+                         json={"media_id": m["id"], "out_start": 2.0, "out_end": 4.0})
+        oid = r.json()["overlay"]["id"]
+        r = cliente.post(f"/api/projects/{project.id}/ops/item",
+                         json={"kind": "overlay", "id": oid, "action": "resize",
+                               "side": "end", "time": 9.0})
+        ov = next(o for t in r.json()["timeline"]["tracks"] for o in t["items"] if o["id"] == oid)
+        check(abs(ov["out_end"] - 5.0) < 0.01 and "3.0 s" in r.json().get("aviso", ""),
+              f"esticar uma janela de vídeo de 3 s para 7 s para no fim dele "
+              f"({ov['out_end']:.2f} s) e avisa")
+        r = cliente.post(f"/api/projects/{project.id}/ops/item",
+                         json={"kind": "overlay", "id": oid, "action": "move", "delta": 3.0})
+        ov = next(o for t in r.json()["timeline"]["tracks"] for o in t["items"] if o["id"] == oid)
+        check(abs(ov["out_start"] - 5.0) < 0.01 and abs(ov["out_end"] - 8.0) < 0.01,
+              f"mover leva o item inteiro, sem mudar a duração ({ov['out_start']:.1f}..{ov['out_end']:.1f})")
+
+        # e o anexo automático mostra o vídeo INTEIRO (até metade da saída)
+        v = {"kind": "video", "info": {"duration": 20.0}}
+        check(abs(teto_do_anexo(v, 60.0) - 20.0) < 1e-9,
+              "vídeo de 20 s anexado num vídeo de 60 s entra inteiro")
+        check(abs(teto_do_anexo(v, 20.0) - 10.0) < 1e-9,
+              "num vídeo de 20 s, o teto é a metade (10 s)")
+        check(abs(teto_do_anexo({"kind": "image", "info": {}}, 60.0) - MAX_ANEXO) < 1e-9,
+              f"imagem continua com o teto de {MAX_ANEXO:.0f} s")
+    finally:
         try:
             svc.delete_project(project.id)
         except Exception:  # noqa: BLE001

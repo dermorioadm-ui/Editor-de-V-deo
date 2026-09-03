@@ -50,6 +50,9 @@ export default function Editor() {
   // a prévia renderizada nao acompanha edicao ao vivo: marca-se velha e ela
   // se refaz sozinha, enquanto o player cai na copia leve para nao ficar preso
   const [previaVelha, setPreviaVelha] = useState(false)
+  // o formato que a prévia mostra: a gravação, ou um dos derivados que o
+  // projeto entrega (é onde se vê — e se ajusta — o 9:16 antes de baixar)
+  const [formato, setFormato] = useState('fonte')
   // o arquivo FINAL que o clique único já exportou. Ter isso pronto é a
   // diferença entre "o editor abriu" e "o vídeo está pronto".
   const [baixar, setBaixar] = useState<string | null>(null)
@@ -693,6 +696,20 @@ export default function Editor() {
                     : null}
                   previewUrl={previaVelha ? null : previewUrl}
                   previaVelha={previaVelha}
+                  formato={formato}
+                  formatos={['fonte', ...((project.plan?.export?.extras ?? []) as string[])
+                    .filter((f) => f && f !== 'fonte')]}
+                  onFormato={setFormato}
+                  quadro={project.quadros?.[formato] ?? null}
+                  onQuadroChange={async (patch) => {
+                    snapshot()
+                    try {
+                      await api.setQuadro(project.id, formato, patch)
+                      await refresh()
+                    } catch (err: any) {
+                      toast('warn', 'Não deu para ajustar o quadro', String(err.message ?? err))
+                    }
+                  }}
                   proxyUrl={proxyUrl}
                   onDeleteSelection={deleteSelection}
                   onCutCue={cutWords}
@@ -760,7 +777,9 @@ export default function Editor() {
                           .flatMap((t) => t.items).find((x) => x.id === id)
                         if (!it) return
                         const base = side === 'start' ? it.out_start : it.out_end
-                        await api.resizeItem(project.id, kind, id, side, base + delta)
+                        const r = await api.resizeItem(project.id, kind, id, side, base + delta)
+                        // a janela parou no fim da mídia: dizer, não esconder
+                        if (r?.aviso) toast('info', 'Até o fim da mídia', r.aviso)
                       }
                       await refresh()
                     } catch (e: any) {

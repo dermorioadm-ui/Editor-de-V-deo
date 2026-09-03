@@ -120,6 +120,13 @@ export interface MediaInfo {
   size_bytes: number; rotation: number; has_audio: boolean
 }
 
+/** O quadro de um formato derivado: o vídeo inteiro encaixado numa tela
+ *  ("encaixe", com tamanho e lugar) ou o recorte concêntrico no rosto. */
+export interface Quadro {
+  modo: 'encaixe' | 'recorte'; escala: number; x: number; y: number
+  fundo: 'preto' | 'desfoque'
+}
+
 export interface Project {
   id: string; name: string; source_path: string; preset: string; status: string
   info: MediaInfo | null
@@ -127,6 +134,7 @@ export interface Project {
   analysis?: any
   plan?: any
   timeline?: TimelineView
+  quadros?: Record<string, Quadro>
 }
 
 /** Assobio: o marcador de "acertei". Não apaga fala nenhuma — valida o take e

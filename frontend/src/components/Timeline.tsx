@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Clip, Envelope, TimelineView } from '../types'
 import { SECTIONS } from '../types'
 import { clamp, timecode } from '../lib/format'
-import { cuesOnSource, outputToSource, sourceToOutput } from '../lib/timeline'
+import { cuesOnSource, outputToSource, sourceToOutput, sourceToOutputNearest } from '../lib/timeline'
 import { getPlayhead, setPlayhead, setState, subscribePlayhead, useStore }
   from '../state/store'
 
@@ -125,6 +125,22 @@ export default function Timeline(props: Props) {
     const pos = outputToSource(t, view.blocks)
     return pos && pos.source === 'main' ? pos.time : null
   }, [view.blocks])
+  // a borda de um item de trilho pode cair EXATAMENTE no fim de um bloco (a
+  // janela termina onde o corte começa) ou passar do fim do vídeo: aí o
+  // mapeamento estrito devolve nulo e o item sumia da trilha / não pegava
+  const itemSourceEdge = useCallback((t: number) => {
+    const direto = outputToSourceT(t)
+    if (direto != null) return direto
+    let melhor: { d: number; src: number } | null = null
+    for (const b of view.blocks) {
+      if (b.source !== 'main') continue
+      const s = b.out_start ?? 0; const e = b.out_end ?? 0
+      const d = t < s ? s - t : t > e ? t - e : 0
+      const src = t < s ? b.src_start : b.src_end
+      if (!melhor || d < melhor.d) melhor = { d, src }
+    }
+    return melhor ? melhor.src : null
+  }, [view.blocks, outputToSourceT])
 
   const subsOnSource = useMemo(
     () => cuesOnSource(view.subtitles, view.blocks), [view.subtitles, view.blocks])
@@ -416,8 +432,8 @@ export default function Timeline(props: Props) {
       g.fillText(track.label, 4, y + ROW.track - 7)
       for (const item of track.items) {
         // o item vive no tempo de SAÍDA; a régua está no da FONTE
-        const a = outputToSourceT(item.out_start)
-        const b = outputToSourceT(item.out_end)
+        const a = itemSourceEdge(item.out_start)
+        const b = itemSourceEdge(item.out_end)
         if (a == null || b == null) continue
         const vivo = itemDrag && itemDrag.id === item.id
         const off = vivo ? itemDrag.delta : 0
@@ -597,22 +613,28 @@ export default function Timeline(props: Props) {
     return null
   }
 
+  // Dois itens podem se sobrepor no tempo (duas janelas). A BORDA de um
+  // item ganha do miolo do outro: senão a borda direita da janela de baixo
+  // ficava inalcançável quando a de cima começava antes dela.
   const itemNear = (x: number, y: number) => {
+    let melhor: { item: any; side: 'move' | 'start' | 'end'; track: any } | null = null
     for (let i = 0; i < extras.length; i++) {
       const y0 = yTracks + i * (ROW.track + 2)
       if (y < y0 || y > y0 + ROW.track) continue
       for (const item of extras[i].items) {
-        const a = outputToSourceT(item.out_start)
-        const b = outputToSourceT(item.out_end)
+        const a = itemSourceEdge(item.out_start)
+        const b = itemSourceEdge(item.out_end)
         if (a == null || b == null) continue
         const x0 = toX(a); const x1 = toX(b)
         if (x < x0 - 6 || x > x1 + 6) continue
         const side: 'move' | 'start' | 'end' =
           Math.abs(x - x0) <= 8 ? 'start' : Math.abs(x - x1) <= 8 ? 'end' : 'move'
-        return { item, side, track: extras[i] }
+        if (!melhor || (melhor.side === 'move' && side !== 'move')) {
+          melhor = { item, side, track: extras[i] }
+        }
       }
     }
-    return null
+    return melhor
   }
 
   const onMouseDown = (e: React.MouseEvent) => {
@@ -760,12 +782,21 @@ export default function Timeline(props: Props) {
     const seg = itemDrag
     setItemDrag(null)
     if (Math.abs(seg.delta) < 2) return
-    // o arrasto é em pixels na régua da FONTE; converte para tempo de SAÍDA
-    const t0 = toT(0); const t1 = toT(seg.delta)
-    const a = sourceToOutput(Math.max(0, t0), view.blocks)
-    const b = sourceToOutput(Math.max(0, t1), view.blocks)
-    if (a == null || b == null) return
-    props.onMoveItem(seg.kind, seg.id, seg.side, b - a)
+    // O ARRASTO É EM PIXELS NA RÉGUA DA FONTE. Antes o delta era convertido
+    // pelos instantes 0 e delta da régua — e o instante 0 quase sempre cai
+    // no silêncio cortado do começo, onde não existe tempo de saída: a conta
+    // dava nulo e soltar o mouse não fazia NADA. Agora a borda que o usuário
+    // pegou é levada ao ponto onde ele soltou e, se ali é trecho removido,
+    // cai no bloco mantido mais perto.
+    const item = extras.flatMap((t) => t.items).find((i) => i.id === seg.id)
+    if (!item) return
+    const bordaOut = seg.side === 'end' ? item.out_end : item.out_start
+    const bordaSrc = itemSourceEdge(bordaOut)
+    if (bordaSrc == null) return
+    const alvoSrc = Math.max(0, toT(toX(bordaSrc) + seg.delta))
+    const alvoOut = sourceToOutputNearest(alvoSrc, view.blocks)
+    if (alvoOut == null) return
+    props.onMoveItem(seg.kind, seg.id, seg.side, alvoOut - bordaOut)
   }
 
   const onMouseUp = (e: React.MouseEvent) => {

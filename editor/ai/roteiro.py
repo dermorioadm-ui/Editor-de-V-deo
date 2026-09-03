@@ -313,7 +313,12 @@ def aplicar(plan, resposta: dict, midias: list[dict],
                          "tela inteira quando a descrição pede tela cheia")
         esperado = "video" if tipo == "cobertura" else "any"
         inicio = _inicio_na_saida(plan, bloco)
-        segundos = max(MIN_ANEXO, min(MAX_ANEXO, segundos))
+        # a IA responde em segundos; um vídeo em janela ganha o vídeo inteiro
+        # quando ela pediu menos do que ele tem (até o teto)
+        dur_m = float((m.get("info") or {}).get("duration") or 0.0)
+        if tipo == "sobreposicao" and m.get("kind") == "video" and dur_m > 0:
+            segundos = max(segundos, dur_m)
+        segundos = max(MIN_ANEXO, min(teto_do_anexo(m, duracao_saida, tipo), segundos))
         try:
             midia = anexos.validar(midias, m["id"], esperado)
             janela = anexos.encaixar(midia, inicio, inicio + segundos,
@@ -380,6 +385,20 @@ _TELA_CHEIA = ("tela cheia", "tela inteira", "cobre a tela", "cobrindo a tela",
                "fullscreen", "full screen", "cobertura")
 
 
+def teto_do_anexo(midia: dict, duracao_saida: float,
+                  tipo: str = "sobreposicao") -> float:
+    """Quanto um anexo pode durar. Imagem e cobertura (tela cheia, que
+    esconde quem fala): MAX_ANEXO. Vídeo em JANELA: o vídeo INTEIRO, até
+    metade da saída — o usuário anexou uma gravação de tela para ela ser
+    vista, e cortá-la em 6 s deixava "o vídeo cortado, não aparece todo"."""
+    if midia.get("kind") != "video" or tipo == "cobertura":
+        return MAX_ANEXO
+    dur_m = float((midia.get("info") or {}).get("duration") or 0.0)
+    if dur_m <= 0:
+        return MAX_ANEXO
+    return max(MAX_ANEXO, min(dur_m, 0.5 * max(duracao_saida, 0.0)))
+
+
 def pede_tela_cheia(midia: dict) -> bool:
     """A descrição do usuário pede tela cheia? Imagem nunca cobre a tela."""
     if midia.get("kind") != "video":
@@ -425,7 +444,8 @@ def _completar_anexos(plan, midias: list[dict], ja: list[dict], blocos: list,
     for k, m in enumerate(faltam):
         tipo = "cobertura" if pede_tela_cheia(m) else "sobreposicao"
         dur_m = float((m.get("info") or {}).get("duration") or 0.0)
-        segundos = max(MIN_ANEXO, min(MAX_ANEXO, dur_m if dur_m > 0 else 4.0))
+        segundos = max(MIN_ANEXO, min(teto_do_anexo(m, duracao_saida, tipo),
+                                      dur_m if dur_m > 0 else 4.0))
         pela_palavra = _bloco_por_palavras(m, textos, elegiveis)
         alvo_frac = (k + 1) / (len(faltam) + 1) * duracao_saida
         ordem = sorted(elegiveis, key=lambda x: abs(x[1] - alvo_frac))
