@@ -325,6 +325,7 @@ def main() -> int:
     testar_resumo_para_caber()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
+    testar_trilha_toca_do_comeco_ao_fim()
 
     print()
     if FALHAS:
@@ -4151,6 +4152,126 @@ def testar_relogio_e_aviso_de_pronto() -> None:
           "a exportação devolve o tamanho do arquivo")
     check('"duracao": round(duracao_de_saida(project), 2)' in fonte,
           "e o clique único devolve a duração do vídeo montado")
+
+
+def testar_trilha_toca_do_comeco_ao_fim() -> None:
+    """A música de fundo toca no vídeo inteiro — e na prévia também.
+
+    A primeira tela gravava ``out_end: 0`` (o usuário só escolheu o MP3, não
+    pediu janela nenhuma). A linha do tempo já lia esse zero como "a duração
+    inteira"; só o render o levava a ferro e fogo — ``fim = min(0, total)`` —
+    e a trilha saía com 0,1 s. A música que ele anexou não tocava nem na
+    prévia nem no arquivo, e o trilho mostrava a faixa inteira: o sintoma era
+    "a música não toca", sem nenhuma pista do motivo.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.render.filters import music_chain
+
+    # 1) a conta: zero é "até o fim", não "termina em zero"
+    cheio = music_chain(-18, False, 12, 0.0, 0.0, 30.0, 0.0, None)
+    zero = music_chain(-18, False, 12, 0.0, 0.0, 30.0, 0.0, 0)
+    curto = music_chain(-18, False, 12, 0.0, 0.0, 30.0, 0.0, 10.0)
+    check("atrim=0:30.000" in cheio, "sem out_end a trilha cobre o vídeo inteiro")
+    check("atrim=0:30.000" in zero,
+          f"out_end=0 TAMBÉM cobre o vídeo inteiro (era atrim=0:0.100)")
+    check("atrim=0:10.000" in curto,
+          "e uma janela de verdade continua sendo respeitada")
+
+    # 2) no ÁUDIO EXPORTADO: a música está lá, do começo ao fim
+    tmp = Path(tempfile.mkdtemp(prefix="trilha_"))
+    from editor.config import FFMPEG
+    voz = tmp / "voz.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "color=c=black:s=320x240:r=30:d=6",
+                    "-f", "lavfi", "-i", "sine=frequency=200:duration=6",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(voz)], check=True)
+    # a trilha é um tom AGUDO (3 kHz): dá para achá-la no espectro sem
+    # confundir com a "voz" de 200 Hz
+    trilha = tmp / "trilha.mp3"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "sine=frequency=3000:duration=6",
+                    "-c:a", "libmp3lame", str(trilha)], check=True)
+
+    from editor import projects as svc
+    from editor.models import Clip
+
+    projeto = svc.create(str(voz), "trilha", "VSL")
+    try:
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=6.0)]
+        m = svc.add_media(projeto.id, str(trilha), "audio")
+        # EXATAMENTE o que a primeira tela gravava: out_end zero
+        projeto.plan.music = {"media_id": m["id"], "gain_db": -6, "ducking": False,
+                              "duck_amount": 12, "fade_in": 0.0, "fade_out": 0.0,
+                              "muted": False, "enabled": True,
+                              "out_start": 0, "out_end": 0}
+        projeto.plan.export.burn_subtitles = False
+        projeto.save_plan()
+        ctx = Ctx(quiet=True)
+        r = svc.export(svc.load(projeto.id), ctx,
+                       {"filename": "com-trilha.mp4", "overwrite": True,
+                        "output_dir": str(tmp)})
+        saida = Path(r["output"])
+        check(saida.exists(), f"o vídeo com trilha foi exportado ({saida.name})")
+
+        # mede a energia em 3 kHz em três instantes: começo, meio e fim
+        def energia_3k(t0: float, t1: float) -> float:
+            cru = subprocess.run(
+                [FFMPEG, "-v", "error", "-ss", f"{t0}", "-to", f"{t1}",
+                 "-i", str(saida), "-vn", "-ac", "1", "-ar", "16000",
+                 "-f", "f32le", "-"], capture_output=True, check=True).stdout
+            x = np.frombuffer(cru, np.float32)
+            if x.size < 512:
+                return 0.0
+            espectro = np.abs(np.fft.rfft(x * np.hanning(x.size)))
+            freq = np.fft.rfftfreq(x.size, 1 / 16000)
+            faixa = (freq > 2700) & (freq < 3300)
+            return float(espectro[faixa].max() / max(espectro.max(), 1e-9))
+
+        medidas = [round(energia_3k(a, b), 3)
+                   for a, b in ((0.3, 1.0), (2.5, 3.2), (4.8, 5.5))]
+        check(all(v > 0.05 for v in medidas),
+              f"a trilha está no áudio no começo, no meio E no fim "
+              f"(energia em 3 kHz: {medidas})")
+
+        # e desligar a trilha realmente a tira
+        projeto = svc.load(projeto.id)
+        projeto.plan.music["muted"] = True
+        projeto.save_plan()
+        r2 = svc.export(svc.load(projeto.id), ctx,
+                        {"filename": "sem-trilha.mp4", "overwrite": True,
+                         "output_dir": str(tmp)})
+        saida = Path(r2["output"])
+        muda = [round(energia_3k(a, b), 3) for a, b in ((0.3, 1.0), (4.8, 5.5))]
+        check(all(v < 0.05 for v in muda),
+              f"e com a trilha muda o tom de 3 kHz não aparece ({muda})")
+    finally:
+        try:
+            svc.delete_project(projeto.id)
+        except Exception:  # noqa: BLE001
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # 3) e a prévia AO VIVO toca a trilha, com o volume ajustável
+    frente = Path("frontend/src")
+    player = (frente / "components/Player.tsx").read_text(encoding="utf-8")
+    trilha_tsx = (frente / "components/TrilhaPreview.tsx").read_text(encoding="utf-8")
+    editor = (frente / "components/Editor.tsx").read_text(encoding="utf-8")
+    check("<TrilhaPreview" in player and "!linear && music?.media_id" in player,
+          "a trilha toca na prévia AO VIVO (na renderizada ela já está no arquivo)")
+    check("onMusicChange({ gain_db: +e.target.value })" in player,
+          "com um controle de volume embaixo do player, ouvindo na hora")
+    check("music={project.plan?.music}" in editor and "ajustarMusica" in editor,
+          "e o que se ajusta ali é gravado no plano")
+    check("Math.pow(10, v / 20)" in trilha_tsx,
+          "o volume da prévia usa a mesma conta em dB do render")
+    check("faixa?.db" in trilha_tsx and "duck_amount" in trilha_tsx,
+          "e respeita a curva da IA e o abaixamento na fala")
 
 
 if __name__ == "__main__":

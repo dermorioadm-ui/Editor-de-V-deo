@@ -1195,6 +1195,20 @@ bloco a bloco, e responde três coisas:
    com Delete, como no Canva ou no CapCut — mouse só em cima da prévia, sem
    campo de número. Duas janelas nunca nascem no mesmo instante.
 
+**A trilha toca na prévia, com o volume na mão.** Embaixo do player há o
+controle da trilha: um botão de mudo e um slider de volume que você mexe
+ouvindo o resultado na hora. A prévia ao vivo toca a música junto com a fala,
+com a mesma conta do arquivo — ganho em dB, fade de entrada e saída, a curva
+de nível que a IA escreveu e o abaixamento na fala (aproximado pela legenda
+corrente; no arquivo é sidechain disparado pela voz).
+
+> Antes disto a música simplesmente **não tocava** — nem na prévia nem no
+> arquivo. A primeira tela gravava `out_end: 0` (você só escolheu o MP3, não
+> pediu janela nenhuma), a linha do tempo lia esse zero como "o vídeo
+> inteiro" e só o render o levava a ferro e fogo: a trilha saía com 0,1 s e
+> sumia. Agora zero é "até o fim" nos dois lugares, e um teste mede a energia
+> da música no áudio exportado no começo, no meio e no fim.
+
 **Música de fundo que fica guardada.** Toda música que entra em qualquer
 vídeo vai para a biblioteca (copiada para a pasta de dados do app, com o
 conteúdo — não o nome — como identidade: "trilha.mp3" se repete a cada

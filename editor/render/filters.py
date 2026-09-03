@@ -361,8 +361,16 @@ def music_chain(gain_db: float, ducking: bool, duck_amount: float,
     ``out_start``/``out_end`` posicionam a trilha na linha do tempo — é o que
     permite arrastar o item de música no trilho em vez de ela cobrir o vídeo
     inteiro à força.
+
+    ZERO É "ATÉ O FIM", NÃO "TERMINA NO INSTANTE ZERO". A primeira tela grava
+    ``out_end: 0`` quando o usuário só escolhe o MP3 (ele não pediu janela
+    nenhuma), a linha do tempo já lia esse zero como a duração inteira
+    (``out_end or duration``) e só o render o levava a ferro e fogo: a trilha
+    saía com 0,1 s e sumia. Resultado: a música que ele anexou não tocava
+    nem na prévia nem no arquivo, e o trilho mostrava a faixa inteira.
     """
-    fim = total if out_end is None else min(float(out_end), total)
+    fim = (total if out_end is None or float(out_end) <= 0.001
+           else min(float(out_end), total))
     inicio = max(0.0, float(out_start))
     dur = max(0.1, fim - inicio)
     music = [f"volume={gain_db}dB"]

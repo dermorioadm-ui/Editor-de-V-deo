@@ -211,7 +211,10 @@ export default function Home() {
           await api.setMusic(project.id, {
             media_id: m?.id ?? m?.media?.id, gain_db: musicaVol,
             ducking: true, duck_amount: 12, fade_in: 1, fade_out: 2,
-            muted: false, enabled: true, out_start: 0, out_end: 0,
+            // SEM out_end: a trilha vai até o fim do vídeo. Mandar 0 fazia o
+            // render entender "termina no instante zero" e a música tocava
+            // 0,1 s — ela simplesmente não existia no arquivo.
+            muted: false, enabled: true, out_start: 0,
           })
         } catch { /* sem trilha o vídeo sai igual */ }
       }

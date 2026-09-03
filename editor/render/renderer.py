@@ -1029,7 +1029,9 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               float(music.get("fade_in", 1.0)),
                               float(music.get("fade_out", 2.0)), duration,
                               float(music.get("out_start", 0.0) or 0.0),
-                              music.get("out_end"),
+                              # 0 = até o fim do vídeo (é o que a primeira tela
+                              # grava quando o usuário só escolhe o MP3)
+                              music.get("out_end") or None,
                               music.get("curva"))
         run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
              "-stream_loop", "-1", "-i", str(mpath),

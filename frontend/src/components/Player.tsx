@@ -7,6 +7,7 @@ import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
 import PipVideo from './PipVideo'
+import TrilhaPreview from './TrilhaPreview'
 import { getState, setPlayhead, setState, usePlayhead, useStore } from '../state/store'
 
 interface Props {
@@ -69,6 +70,11 @@ interface Props {
   /** Mexer na LEGENDA com o mouse, em cima da prévia: arrastar sobe e desce a
    *  faixa; a quina aumenta e diminui a letra. */
   onStyleChange?: (patch: { fontsize?: number; margin_v?: number }) => void
+  /** A TRILHA. Ela entra no arquivo, mas a prévia ao vivo tocava só o áudio da
+   *  gravação: quem mexia no volume não ouvia nada mudar. Aqui ela toca junto,
+   *  com o volume ajustável embaixo do player. */
+  music?: any
+  onMusicChange?: (patch: { gain_db?: number; muted?: boolean }) => void
 }
 
 /**
@@ -83,7 +89,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                                  overlays, cutaways, media,
                                  onOverlayChange, onOverlayDelete, onCutawayDelete,
                                  formato, formatos, onFormato, quadro, onQuadroChange,
-                                 look, onStyleChange }: Props) {
+                                 look, onStyleChange, music, onMusicChange }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -1026,6 +1032,13 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             </div>
           )
         })}
+        {/* A TRILHA, tocando junto. Só na prévia AO VIVO: a renderizada já
+            traz a música mixada no arquivo, e tocar de novo dobraria ela. */}
+        {!linear && music?.media_id && (
+          <TrilhaPreview src={api.mediaFileUrl(projectId, music.media_id)}
+                         music={music} playhead={playhead} playing={playing}
+                         duracao={duration} falando={!!cue} mudoGeral={muted} />
+        )}
         {cutAtivo && !stillClip && (
           <span className="absolute bottom-1.5 right-1.5 chip border-violet-700/70
                            text-violet-200 bg-ink-900/90 flex items-center gap-1">
@@ -1071,7 +1084,25 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             {block.speed.toFixed(2)}x
           </span>
         )}
-        <button className="btn btn-xs ml-auto" onClick={() => setMuted((m) => !m)}>
+        {music?.media_id && onMusicChange && (
+          <span className="flex items-center gap-1.5 ml-auto"
+                data-trilha="1"
+                title="o volume da trilha, ouvindo na hora. O que você deixar aqui é o que vai para o arquivo.">
+            <button className="btn btn-xs"
+                    onClick={() => onMusicChange({ muted: !music.muted })}>
+              {music.muted ? '♪ muda' : '♪ trilha'}
+            </button>
+            <input type="range" min={-40} max={0} step={1} className="w-24"
+                   value={Number(music.gain_db ?? -18)}
+                   disabled={!!music.muted}
+                   onChange={(e) => onMusicChange({ gain_db: +e.target.value })} />
+            <span className="font-mono text-[10px] text-slate-400 w-12">
+              {music.muted ? 'muda' : `${Math.round(Number(music.gain_db ?? -18))} dB`}
+            </span>
+          </span>
+        )}
+        <button className={`btn btn-xs ${music?.media_id && onMusicChange ? '' : 'ml-auto'}`}
+                onClick={() => setMuted((m) => !m)}>
           {muted ? 'som off' : 'som on'}
         </button>
       </div>

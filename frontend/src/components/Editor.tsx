@@ -747,6 +747,16 @@ export default function Editor() {
                     .filter((f) => f && f !== 'fonte')]}
                   onFormato={setFormato}
                   look={project.plan?.look}
+                  music={project.plan?.music}
+                  onMusicChange={async (patch) => {
+                    try {
+                      await api.ajustarMusica(project.id, patch)
+                      await refresh()
+                    } catch (err: any) {
+                      toast('warn', 'Não deu para mexer na trilha',
+                        String(err.message ?? err))
+                    }
+                  }}
                   onStyleChange={async (patch) => {
                     snapshot()
                     try {
