@@ -144,6 +144,9 @@ export const api = {
     post(`/api/projects/${id}/ops/repeat`, { repeat_id, restored }),
 
   // o quadro de um formato derivado (encaixe/recorte, tamanho, lugar, fundo)
+  // encurtar o vídeo para caber numa duração — a IA escolhe o que sai (JOB)
+  resumir: (id: string, alvo: number) =>
+    post<Job>(`/api/projects/${id}/ops/resumir`, { alvo }),
   setQuadro: (id: string, aspecto: string, patch: any) =>
     post<any>(`/api/projects/${id}/ops/quadro`, { aspecto, ...patch }),
   setZoom: (id: string, clip_id: string, zoom: number) =>

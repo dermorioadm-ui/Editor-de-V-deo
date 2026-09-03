@@ -270,13 +270,18 @@ def regua_da_legenda(main: MediaInfo, export: ExportParams,
     # do padrão deles.
     from ..projects import padrao_de_legenda
 
-    f_fonte, _mf, _cf, _chf = padrao_de_legenda(w, h)
+    f_fonte, m_fonte, _cf, _chf = padrao_de_legenda(w, h)
     fator = (style.fontsize / f_fonte) if f_fonte > 0 else 1.0
+    # A ALTURA QUE O USUÁRIO ESCOLHEU TAMBÉM VIAJA. Só o tamanho viajava: quem
+    # subia a legenda arrastando na prévia via o vertical sair com ela de
+    # volta na altura padrão. A margem vira PROPORÇÃO do padrão do formato,
+    # igual ao tamanho — sem ninguém mexer, a razão é 1,0 e nada muda.
+    fator_m = (style.margin_v / m_fonte) if m_fonte > 0 else 1.0
     fonte, margem, contorno, chars = padrao_de_legenda(tw, th)
     novo = replace(
         style,
         fontsize=max(8, int(round(fonte * fator))),
-        margin_v=max(0, int(round(margem))),
+        margin_v=max(0, int(round(margem * fator_m))),
         margin_l=max(0, int(round(tw * 0.06))),
         margin_r=max(0, int(round(tw * 0.06))),
         outline=round(max(1.0, contorno), 2),

@@ -760,15 +760,38 @@ estica até o fim da mídia dela e para ali, avisando — nunca congela o últim
 quadro. Soltar um item em cima de um trecho cortado o encosta no bloco mantido
 mais perto (antes soltar num corte simplesmente não fazia nada).
 
-**Ver o formato que vai sair.** Em cima da prévia há um seletor: *como
-gravado* e cada formato extra que o projeto entrega (9:16, 1:1, 16:9). Num
-formato derivado a prévia vira a **tela daquele formato** com o vídeo dentro,
-exatamente como o arquivo sai. Dois modos: **encaixar** (o vídeo inteiro numa
-tela preta — ou no próprio vídeo desfocado — no tamanho e lugar que você
-arrasta e redimensiona ali mesmo) e **recortar** (recorte concêntrico no
-rosto, preenchendo o quadro). De uma gravação horizontal o vertical e o
-quadrado nascem encaixados; de uma vertical, o horizontal nasce recortado.
-*Padrão* volta ao que o programa faria.
+**A prévia abre no formato que vai para a pasta.** Se você pediu 9:16, a
+prévia abre em 9:16 — não na gravação, para você não ter de trocar na mão
+para saber o que está sendo entregue. O seletor em cima dela troca entre
+*como gravado* e cada formato extra. Num formato derivado a prévia é a **tela
+daquele formato** com o vídeo dentro, igual ao arquivo. Por padrão o vídeo
+**preenche a tela** (recorte concêntrico no rosto): duas tarjas pretas num
+vertical é o que faz o anúncio parecer amador. **Encaixar** o vídeo inteiro
+numa tela preta (ou no próprio vídeo desfocado), no tamanho e lugar que você
+arrasta, continua existindo — como opção, a um clique. *Padrão* volta ao que
+o programa faria.
+
+**O filtro e a velocidade aparecem na prévia**, não só no arquivo: o look
+escolhido na primeira tela entra como aproximação em CSS enquanto você edita
+(o arquivo continua sendo a verdade), e a velocidade de cada bloco já tocava.
+
+**A legenda se mexe com o mouse**, em cima da prévia: arraste a faixa para
+subir e descer, puxe a quina para aumentar e diminuir a letra. O que você
+ajusta viaja para todos os formatos — subir a legenda 50% no horizontal sobe
+50% no vertical também.
+
+**Resumir para caber.** Na primeira tela, *Resumir para*: 90, 60, 45, 30 ou
+15 segundos. A IA lê a sua fala e escolhe o que sai — redundância, preâmbulo,
+divagação, final duplo — com o teto de corte aberto até o que o alvo exige.
+Gancho, promessa, preço, garantia e CTA nunca saem. Sem chave, o programa
+resume desligando os blocos das etapas menos essenciais, sem tocar no
+primeiro nem no último. As faixas passam pelas mesmas travas de sempre: vale
+acústico nas duas bordas e nunca meia frase.
+
+**Quanto tempo falta e quanto demorou.** A tela de processamento mostra o
+cronômetro correndo, quanto tem a gravação e uma estimativa do que falta; o
+editor abre com um aviso dizendo que ficou pronto, quanto tempo levou, quanto
+de vídeo saiu e — quando a exportação termina — o tamanho do arquivo.
 
 **A agulha** atravessa todas as camadas. Pegue nela e arraste para qualquer
 lugar; o **▶ tocar** fica na própria barra da timeline, ao lado do zoom.

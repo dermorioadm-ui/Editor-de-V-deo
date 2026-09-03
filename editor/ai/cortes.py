@@ -385,7 +385,7 @@ def _tem_vale(env, t: float) -> float:
 
 
 def aplicar(words: list[dict], resposta: dict, env=None,
-            duracao: float = 0.0) -> dict:
+            duracao: float = 0.0, teto_copy: float | None = None) -> dict:
     """Faixas de palavras -> takes descartados, com todas as travas.
 
     Cada faixa vira um take na lista "Saiu sozinho": restaurável com um
@@ -401,6 +401,10 @@ def aplicar(words: list[dict], resposta: dict, env=None,
     emendou na seguinte.
     """
     n = len(words)
+    # o teto de copy é 25% na edição normal; num RESUMO para caber em X
+    # segundos o usuário pediu explicitamente para encurtar, e o teto é o
+    # que sobra para chegar no alvo
+    max_copy = MAX_COPY if teto_copy is None else max(0.0, min(0.95, teto_copy))
     faixas, recusadas = _faixas_validas(resposta, n, words)
     # O gancho é medido em segundos, mas 8 s fixos comeriam 60% de um criativo
     # de 13 s — a proteção viraria uma mordaça. Vale o MENOR entre os 8 s e
@@ -491,10 +495,10 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                 continue
             # 3) teto próprio, bem mais apertado que o do take
             n_bloco = f["ate"] - f["de"] + 1
-            if n and (gasto_copy + n_bloco) / n > MAX_COPY:
+            if n and (gasto_copy + n_bloco) / n > max_copy:
                 recusadas.append({
                     "o_que": texto[:40],
-                    "motivo": f"já tirei {MAX_COPY:.0%} do vídeo por julgamento "
+                    "motivo": f"já tirei {max_copy:.0%} do vídeo por julgamento "
                               f"de copy; daqui em diante só o que você mandou"})
                 continue
             gasto_copy += n_bloco
@@ -553,7 +557,7 @@ def aplicar(words: list[dict], resposta: dict, env=None,
                 "musica": len(musica),
                 "fechado": sum(1 for c in camera if c.get("enfase") == "fechado"),
                 "aberto": sum(1 for c in camera if c.get("enfase") == "aberto"),
-                "teto_copy": MAX_COPY,
+                "teto_copy": max_copy,
                 "gancho_s": round(gancho, 1),
             },
             "leitura": str(resposta.get("leitura", ""))[:300], "ok": True}

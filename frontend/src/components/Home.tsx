@@ -62,6 +62,8 @@ export default function Home() {
   const [corte, setCorte] = useState(-1)
   // as músicas de fundo que já entraram em algum projeto, para escolher de novo
   const [musicas, setMusicas] = useState<any[]>([])
+  // RESUMO: a duração em que o vídeo tem que caber. 0 = o vídeo inteiro.
+  const [alvo, setAlvo] = useState(0)
   const [saida, setSaida] = useState<any>(null)      // pasta do vídeo pronto
   const [trocandoPasta, setTrocandoPasta] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -172,6 +174,7 @@ export default function Home() {
   function receita() {
     return {
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
+      alvo_duracao: alvo,
       speed: { global_multiplier: velocidade },
       zoom: { intensity: zoomForca },
       style: { fontsize_scale: legenda },
@@ -629,6 +632,27 @@ export default function Home() {
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">
               uma geração de encode só
+            </p>
+          </div>
+
+          <div className="w-44">
+            <label className="label flex justify-between">
+              <span>Resumir para</span>
+              <span className="font-mono text-slate-300">
+                {alvo ? `${alvo}s` : 'vídeo inteiro'}
+              </span>
+            </label>
+            <select className="field w-full py-1.5 text-xs" value={alvo}
+                    onChange={(e) => setAlvo(+e.target.value)}>
+              <option value={0}>não resumir</option>
+              <option value={90}>até 90 segundos</option>
+              <option value={60}>até 60 segundos</option>
+              <option value={45}>até 45 segundos</option>
+              <option value={30}>até 30 segundos</option>
+              <option value={15}>até 15 segundos</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              a IA escolhe o que sai da copy — gancho, preço e CTA nunca saem
             </p>
           </div>
 

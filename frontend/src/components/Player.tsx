@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Clip, Quadro, SubtitleCue } from '../types'
-import { PROPORCOES, QUADRO_PADRAO, estiloDoFormato, quebrar, recorte,
-         rotuloFormato, tamanhoDerivado } from '../lib/formato'
+import { PROPORCOES, QUADRO_PADRAO, estiloDoFormato, estiloParaFonte,
+         filtroDoLook, quebrar, recorte, rotuloFormato,
+         tamanhoDerivado } from '../lib/formato'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
@@ -60,6 +61,14 @@ interface Props {
   onFormato?: (f: string) => void
   quadro?: Quadro | null
   onQuadroChange?: (patch: Partial<Quadro> & { padrao?: boolean }) => void
+  /** O FILTRO DE CINEMA escolhido na primeira tela. A prévia ao vivo não passa
+   *  por ffmpeg, então ele não aparecia: o usuário escolhia "preto e branco" e
+   *  via a imagem colorida até o arquivo ficar pronto. Aqui entra a
+   *  aproximação em CSS — o arquivo continua sendo a verdade. */
+  look?: string | null
+  /** Mexer na LEGENDA com o mouse, em cima da prévia: arrastar sobe e desce a
+   *  faixa; a quina aumenta e diminui a letra. */
+  onStyleChange?: (patch: { fontsize?: number; margin_v?: number }) => void
 }
 
 /**
@@ -73,7 +82,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                                  proxyUrl, onDeleteSelection, onCutCue,
                                  overlays, cutaways, media,
                                  onOverlayChange, onOverlayDelete, onCutawayDelete,
-                                 formato, formatos, onFormato, quadro, onQuadroChange }: Props) {
+                                 formato, formatos, onFormato, quadro, onQuadroChange,
+                                 look, onStyleChange }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
@@ -106,6 +116,12 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const pendRef = useRef<typeof pend>(null)
   const ovDrag = useRef<{ id: string; modo: 'move' | 'scale'; mx: number; my: number
                           x0: number; y0: number; s0: number; cx: number; cy: number } | null>(null)
+  // O ELEMENTO ARRASTADO, pelo DOM. Chamar setState a cada mousemove refazia
+  // a árvore inteira do player (vídeo, legenda, trilha) 60x por segundo: a
+  // caixa ficava para trás do mouse e o vídeo dentro dela piscava. Durante o
+  // gesto a posição é escrita direto no style do nó; o React só sabe quando
+  // o mouse solta.
+  const ovNode = useRef<Record<string, HTMLDivElement | null>>({})
   const fonteW = sourceSize?.[0] || 1080
   const fonteH = sourceSize?.[1] || 1920
   const derivado = !!formato && formato !== 'fonte' && (formato in PROPORCOES)
@@ -158,33 +174,66 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     ovDrag.current = { id: o.id, modo, mx: e.clientX, my: e.clientY,
                        x0: g.x, y0: g.y, s0: g.scale,
                        cx: g.left + g.width / 2, cy: g.top + g.height / 2 }
+    // a régua do render, calculada UMA vez: a janela mantém a mesma fração
+    // de área do quadro (média geométrica das razões)
+    const m0 = (media ?? []).find((x) => x.id === o.media_id)
+    const mw0 = Number(m0?.info?.display_width || m0?.info?.width) || 400
+    const mh0 = Number(m0?.info?.display_height || m0?.info?.height) || 200
+    const fator = Math.sqrt((box.height / fonteH) * (box.width / fonteW))
+    let ultimo = { id: o.id, x: g.x, y: g.y, scale: g.scale }
+    let pedido = 0
+
+    const pintar = () => {
+      pedido = 0
+      const el = ovNode.current[o.id]
+      if (!el) return
+      const w = Math.max(8, mw0 * ultimo.scale * fator)
+      const h = Math.max(8, mh0 * ultimo.scale * fator)
+      el.style.left = `${box.left + ultimo.x * box.width - w / 2}px`
+      el.style.top = `${box.top + ultimo.y * box.height - h / 2}px`
+      el.style.width = `${w}px`
+      el.style.height = `${h}px`
+    }
     const onMove = (ev: MouseEvent) => {
       const d = ovDrag.current
       if (!d || !rc || box.width <= 0) return
-      let novo: typeof pend
       if (d.modo === 'move') {
-        const nx = Math.min(1, Math.max(0, d.x0 + (ev.clientX - d.mx) / box.width))
-        const ny = Math.min(1, Math.max(0, d.y0 + (ev.clientY - d.my) / box.height))
-        novo = { id: d.id, x: Number(nx.toFixed(4)), y: Number(ny.toFixed(4)), scale: d.s0 }
+        // O LIMITE É A JANELA, NÃO O CENTRO DELA. Prender o CENTRO em [0,1]
+        // fazia a caixa parar de seguir o mouse assim que ele passava da
+        // metade do quadro — o mouse ia embora e a janela ficava, que é o
+        // "não vem com o mouse, movimentação estranha". Agora ela pode
+        // encostar e passar da borda, desde que 30% dela continue à vista.
+        const fw = (mw0 * d.s0 * fator) / Math.max(box.width, 1)
+        const fh = (mh0 * d.s0 * fator) / Math.max(box.height, 1)
+        const folgaX = Math.max(0.02, fw * 0.2)
+        const folgaY = Math.max(0.02, fh * 0.2)
+        const nx = Math.min(1 + folgaX, Math.max(-folgaX,
+          d.x0 + (ev.clientX - d.mx) / box.width))
+        const ny = Math.min(1 + folgaY, Math.max(-folgaY,
+          d.y0 + (ev.clientY - d.my) / box.height))
+        ultimo = { id: d.id, x: Number(nx.toFixed(4)), y: Number(ny.toFixed(4)), scale: d.s0 }
       } else {
         // pela distância ao centro: puxar para fora cresce, para dentro encolhe
         const d0 = Math.hypot(d.mx - rc.left - d.cx, d.my - rc.top - d.cy) || 1
         const d1 = Math.hypot(ev.clientX - rc.left - d.cx, ev.clientY - rc.top - d.cy)
         const ns = Math.min(4, Math.max(0.1, d.s0 * (d1 / d0)))
-        novo = { id: d.id, x: d.x0, y: d.y0, scale: Number(ns.toFixed(4)) }
+        ultimo = { id: d.id, x: d.x0, y: d.y0, scale: Number(ns.toFixed(4)) }
       }
-      pendRef.current = novo
-      setPend(novo)
+      pendRef.current = ultimo
+      // um repintar por quadro de vídeo, no ritmo do navegador
+      if (!pedido) pedido = requestAnimationFrame(pintar)
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      if (pedido) { cancelAnimationFrame(pedido); pedido = 0 }
       const d = ovDrag.current
       ovDrag.current = null
       const p = pendRef.current
       if (!d || !p || p.id !== d.id) return
       if (Math.abs(p.x - d.x0) > 1e-4 || Math.abs(p.y - d.y0) > 1e-4
           || Math.abs(p.scale - d.s0) > 1e-4) {
+        setPend(p)                       // o React assume onde o mouse deixou
         onOverlayChange?.(d.id, { x: p.x, y: p.y, scale: p.scale })
       } else {
         pendRef.current = null
@@ -194,6 +243,79 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
+  // A LEGENDA NO MOUSE. Arrastar a faixa sobe e desce (margin_v); a quina
+  // aumenta e diminui a letra (fontsize). Os dois em pixels da FONTE, que é a
+  // régua em que o estilo está escrito e a mesma do ASS na exportação.
+  const [legPend, setLegPend] = useState<{ fontsize: number; margin_v: number } | null>(null)
+  const legRef = useRef<typeof legPend>(null)
+  const legDrag = useRef<{ modo: 'move' | 'scale'; my: number; mx: number
+                           f0: number; m0: number; largura: number } | null>(null)
+  const [legSel, setLegSel] = useState(false)
+  useEffect(() => {
+    if (!legPend || !style) return
+    if (Math.abs((style.fontsize ?? 0) - legPend.fontsize) < 0.5
+        && Math.abs((style.margin_v ?? 0) - legPend.margin_v) < 0.5) {
+      setLegPend(null); legRef.current = null
+    }
+  }, [style?.fontsize, style?.margin_v, legPend])
+  const iniciarArrastoLegenda = (e: React.MouseEvent, modo: 'move' | 'scale',
+                                 estilo: any, k: number) => {
+    if (!onStyleChange || k <= 0) return
+    e.preventDefault(); e.stopPropagation()
+    setLegSel(true)
+    setSelOverlay(null)
+    palco.current?.focus()
+    const caixa = (e.currentTarget as HTMLElement)
+      .closest('[data-legenda]')?.getBoundingClientRect()
+    legDrag.current = { modo, my: e.clientY, mx: e.clientX,
+                        f0: Number(estilo?.fontsize) || 35,
+                        m0: Number(estilo?.margin_v) || 0,
+                        largura: Math.max(60, caixa?.width || box.width || 300) }
+    const onMove = (ev: MouseEvent) => {
+      const d = legDrag.current
+      if (!d) return
+      let novo: typeof legPend
+      if (d.modo === 'move') {
+        // subir o mouse AUMENTA a margem (a legenda sobe): margin_v é medido
+        // da base do quadro para cima
+        const dm = (d.my - ev.clientY) / k
+        novo = { fontsize: d.f0,
+                 margin_v: Math.max(0, Math.round(d.m0 + dm)) }
+      } else {
+        // A QUINA: PROPORCIONAL, nunca em pixels de estilo. Somar o
+        // deslocamento dividido por k fazia um arrasto de 60 px virar +330 no
+        // fontsize (medido: 25 → 386 num quadro derivado, a legenda cobrindo a
+        // tela). Aqui puxar a quina por metade da largura da faixa aumenta a
+        // letra em 50% — o mesmo gesto dá o mesmo resultado em qualquer
+        // tamanho de janela e em qualquer formato.
+        const dd = ((ev.clientX - d.mx) + (ev.clientY - d.my)) / 2
+        const fator = Math.min(4, Math.max(0.25, 1 + dd / (d.largura / 2)))
+        novo = { fontsize: Math.max(8, Math.min(400, Math.round(d.f0 * fator))),
+                 margin_v: d.m0 }
+      }
+      legRef.current = novo
+      setLegPend(novo)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      const d = legDrag.current
+      legDrag.current = null
+      const p = legRef.current
+      if (!d || !p) return
+      if (Math.abs(p.fontsize - d.f0) >= 1 || Math.abs(p.margin_v - d.m0) >= 1) {
+        onStyleChange(derivado
+          ? estiloParaFonte({ fontsize: p.fontsize, margin_v: p.margin_v },
+                            fonteW, fonteH, formato!)
+          : { fontsize: p.fontsize, margin_v: p.margin_v })
+      } else {
+        legRef.current = null; setLegPend(null)
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   const aoTeclarNoPalco = (e: React.KeyboardEvent) => {
     if (!selOverlay) return
     if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -563,6 +685,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // disso o recorte sairia do quadro. A troca é seca, no corte, igual ao
   // arquivo final. A prévia 480p renderizada já vem com o zoom queimado, e as
   // fotos/insertos não têm zoom — nos dois casos o transform desliga.
+  // o filtro só é aplicado na prévia AO VIVO: a renderizada já vem com ele
+  // queimado, e aplicar de novo dobraria o efeito
+  const filtroCss = linear ? undefined : filtroDoLook(look)
   const zoomCss = (() => {
     const z = !linear && !stillClip ? (block?.zoom ?? 1.0) : 1.0
     if (z <= 1.001) return undefined
@@ -588,7 +713,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                        border-line focus:outline-none ${derivado ? 'bg-ink-900' : 'bg-black'}`}
            onKeyDown={aoTeclarNoPalco}
            onMouseDown={(e) => {
-             if (!(e.target as HTMLElement).closest?.('[data-ov]')) setSelOverlay(null)
+             const alvo = e.target as HTMLElement
+             if (!alvo.closest?.('[data-ov]')) setSelOverlay(null)
+             if (!alvo.closest?.('[data-legenda]')) setLegSel(false)
            }}>
         {/* a MOLDURA do quadro: exatamente o retângulo da imagem, com
             overflow escondido. É ela que transforma o scale do zoom em
@@ -623,7 +750,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                    onMouseDown={(e) => iniciarArrastoQuadro(e, 'move')}>
                 <video ref={video} className="w-full h-full object-fill" playsInline
                        muted={muted}
-                       style={zoomCss}
+                       style={{ ...(zoomCss ?? {}), filter: filtroCss }}
                        key={proxyUrl ?? 'source'}
                        src={proxyUrl ?? `/api/projects/${projectId}/source`}
                        onLoadedMetadata={aoCarregarMetadata}
@@ -646,7 +773,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
               <video ref={video} className="absolute object-fill max-w-none" playsInline
                      muted={muted}
                      style={{ left: -rx * kx, top: -ry * ky,
-                              width: fonteW * kx, height: fonteH * ky }}
+                              width: fonteW * kx, height: fonteH * ky,
+                              filter: filtroCss }}
                      key={proxyUrl ?? 'source'}
                      src={proxyUrl ?? `/api/projects/${projectId}/source`}
                      onLoadedMetadata={aoCarregarMetadata}
@@ -655,7 +783,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           })() : (
             <video ref={video} className="w-full h-full object-contain" playsInline
                    muted={muted}
-                   style={zoomCss}
+                   style={{ ...(zoomCss ?? {}), filter: filtroCss }}
                    key={previewUrl ?? proxyUrl ?? 'source'}
                    src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
                    onLoadedMetadata={aoCarregarMetadata}
@@ -754,10 +882,18 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           // Usar a altura do ELEMENTO era o bug: com a prévia leve tocando, o
           // elemento tem 854 de altura contra 1920 da fonte, e a legenda saía
           // 2,25x maior que na exportação.
-          const st = derivado ? estiloDoFormato(style, fonteW, fonteH, formato!) : style
+          const base = derivado ? estiloDoFormato(style, fonteW, fonteH, formato!) : style
+          // o que o mouse está mexendo AGORA vale por cima do gravado. No
+          // formato derivado o estilo é o daquele quadro, e mexer nele
+          // mexeria na régua errada: aí a legenda não é arrastável.
+          const st = legPend ? { ...base, ...legPend } : base
           const playH = derivado ? (st?._quadro?.[1] ?? box.vh) : (sourceSize?.[1] || box.vh || 1920)
           const k = box.height / Math.max(playH, 1)
           const fs = st?.fontsize ?? 35
+          // mexer na legenda vale em QUALQUER formato: a prévia abre no
+          // formato entregue, então travar no derivado era travar sempre.
+          // O que o mouse muda aqui é escrito na régua da FONTE.
+          const mexivel = !!onStyleChange && k > 0
 
           // Medido com o filtro ass do próprio ffmpeg, Arial/Liberation:
           //
@@ -773,7 +909,14 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           const ASS_PARA_CSS = 0.895
           const DESCIDA = 0.172
           return (
-            <div className="absolute pointer-events-none text-center"
+            <div data-legenda="1"
+                 className={`absolute text-center ${mexivel
+                   ? (legSel ? 'outline outline-1 outline-accent/70 cursor-grab'
+                             : 'hover:outline hover:outline-1 hover:outline-white/40 cursor-grab')
+                   : 'pointer-events-none'}`}
+                 title={mexivel ? 'arraste para subir e descer a legenda · a quina aumenta e diminui a letra' : undefined}
+                 onMouseDown={mexivel
+                   ? (e) => iniciarArrastoLegenda(e, 'move', base, k) : undefined}
                  style={{
                    left: box.left + (st?.margin_l ?? 60) * k,
                    width: Math.max(
@@ -783,7 +926,21 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                    bottom: `calc(100% - ${box.top + box.height}px + ${
                      ((st?.margin_v ?? 220) + fs * DESCIDA) * k}px)`,
                  }}>
-              <span className="inline-block"
+              {mexivel && legSel && (
+                <>
+                  <span className="absolute -top-5 left-0 chip border-accent/60 text-accent
+                                   bg-ink-900/90 text-[10px] whitespace-nowrap
+                                   pointer-events-none">
+                    legenda · {Math.round(fs)} px · {Math.round(st?.margin_v ?? 0)} da base
+                  </span>
+                  <div data-legenda="1"
+                       className="absolute -right-1.5 -bottom-1.5 w-3 h-3 bg-accent
+                                  rounded-sm cursor-nwse-resize"
+                       title="aumenta e diminui a letra"
+                       onMouseDown={(e) => iniciarArrastoLegenda(e, 'scale', base, k)} />
+                </>
+              )}
+              <span className="inline-block pointer-events-none"
                     style={{
                       // 'pre': o ASS está em WrapStyle 2, que NÃO quebra linha
                       // sozinho. Quem decide a quebra é o linebreak.py; o CSS
@@ -819,6 +976,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           const sel = o.id === selOverlay
           return (
             <div key={o.id} data-ov="1"
+                 ref={(el) => { ovNode.current[o.id] = el }}
                  className={`absolute select-none ${sel
                    ? 'border-2 border-accent'
                    : 'border border-dashed border-white/40 hover:border-white/80'}`}

@@ -13,7 +13,7 @@ import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
 import { api } from '../lib/api'
 import { sourceToOutput } from '../lib/timeline'
-import { timecode } from '../lib/format'
+import { bytes, timecode } from '../lib/format'
 import { getPlayhead, getState, pushHistory, setPlayhead, setState, toast, useStore }
   from '../state/store'
 
@@ -50,9 +50,17 @@ export default function Editor() {
   // a prévia renderizada nao acompanha edicao ao vivo: marca-se velha e ela
   // se refaz sozinha, enquanto o player cai na copia leve para nao ficar preso
   const [previaVelha, setPreviaVelha] = useState(false)
-  // o formato que a prévia mostra: a gravação, ou um dos derivados que o
-  // projeto entrega (é onde se vê — e se ajusta — o 9:16 antes de baixar)
-  const [formato, setFormato] = useState('fonte')
+  // o aviso de "ficou pronto": quanto demorou, quanto de vídeo saiu e o
+  // tamanho do arquivo (que chega depois, quando a exportação termina)
+  const [pronto, setPronto] = useState<{ segundos: number; duracao: number
+                                         bytes: number; resumo: any } | null>(null)
+  // O FORMATO QUE A PRÉVIA MOSTRA nasce sendo o que VAI PARA A PASTA: se o
+  // usuário pediu 9:16, a prévia abre em 9:16. Ela mostrava a gravação e ele
+  // tinha de trocar na mão para saber o que estava sendo entregue.
+  const [formato, setFormato] = useState<string | null>(null)
+  const formatoEntregue = ((project?.plan?.export?.extras ?? []) as string[])
+    .filter((f) => f && f !== 'fonte')[0] ?? 'fonte'
+  const formatoAtual = formato ?? formatoEntregue
   // o arquivo FINAL que o clique único já exportou. Ter isso pronto é a
   // diferença entre "o editor abriu" e "o vídeo está pronto".
   const [baixar, setBaixar] = useState<string | null>(null)
@@ -110,6 +118,15 @@ export default function Editor() {
     if (activeJob?.kind !== 'clique-unico' || activeJob.status !== 'ok') return
     const url = activeJob.result?.previa?.download
     if (url) { setPreviewUrl(`${url}?v=${activeJob.id}`); setPreviaVelha(false) }
+    // QUANTO DEMOROU E O QUE SAIU. O editor abria e o usuário não tinha como
+    // saber se a máquina levou 40 s ou 6 minutos, nem quanto vídeo sobrou.
+    const seg = Math.max(0, (activeJob.updated_at ?? 0) - (activeJob.created_at ?? 0))
+    setPronto({
+      segundos: seg,
+      duracao: Number(activeJob.result?.duracao ?? 0),
+      resumo: activeJob.result?.resumo ?? null,
+      bytes: 0,
+    })
   }, [activeJob?.id, activeJob?.status])
 
   // O MP4 FINAL é gerado por baixo, depois que esta tela já abriu. Este efeito
@@ -138,6 +155,8 @@ export default function Editor() {
     if (!ultimo) return
     setExportando(['fila', 'rodando'].includes(ultimo.status) ? ultimo : null)
     if (ultimo.status === 'ok' && ultimo.result?.download) {
+      const tam = Number(ultimo.result?.size_bytes ?? 0)
+      if (tam > 0) setPronto((p) => (p ? { ...p, bytes: tam } : p))
       setBaixar(`${ultimo.result.download}?v=${ultimo.id}`)
       setOutrosFormatos((ultimo.result.formatos ?? [])
         .filter((f: any) => f.aspecto && f.aspecto !== 'fonte' && f.download)
@@ -464,6 +483,33 @@ export default function Editor() {
         return null
       })() || <>
 
+      {/* FICOU PRONTO: quanto demorou, quanto de vídeo saiu, que tamanho tem.
+          O editor abria e o usuário não tinha como saber se a máquina levou
+          40 s ou 6 minutos — nem, quando pediu resumo, quanto foi encurtado. */}
+      {pronto && (
+        <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
+                        border-emerald-900/60 bg-emerald-950/25">
+          <span className="text-emerald-200 font-medium">✓ Seu vídeo está pronto</span>
+          <span className="text-slate-300">
+            ficou em {timecode(pronto.duracao)}
+            {pronto.segundos > 0 && ` · levou ${Math.floor(pronto.segundos / 60)} min ${
+              String(Math.round(pronto.segundos % 60)).padStart(2, '0')} s`}
+            {pronto.bytes > 0 && ` · ${bytes(pronto.bytes)}`}
+            {pronto.resumo?.ok && pronto.resumo?.antes
+              && ` · resumido de ${timecode(pronto.resumo.antes)} para caber em ${
+                Math.round(pronto.resumo.alvo)}s`}
+          </span>
+          <span className="text-slate-500">agora é só editar.</span>
+          {baixar && (
+            <a className="btn btn-xs btn-primary ml-auto" href={baixar}
+               download>baixar o vídeo</a>
+          )}
+          <button className={`btn btn-xs ${baixar ? '' : 'ml-auto'}`}
+                  title="fechar este aviso"
+                  onClick={() => setPronto(null)}>×</button>
+        </div>
+      )}
+
       {/* O QUE A IA FEZ NESTE VÍDEO — sempre à vista, nunca escondido numa aba.
           Era a maior queixa e ela era justa: tudo isto já era calculado e
           jogado fora, então não havia como saber se a IA tinha botado a mão
@@ -696,15 +742,26 @@ export default function Editor() {
                     : null}
                   previewUrl={previaVelha ? null : previewUrl}
                   previaVelha={previaVelha}
-                  formato={formato}
+                  formato={formatoAtual}
                   formatos={['fonte', ...((project.plan?.export?.extras ?? []) as string[])
                     .filter((f) => f && f !== 'fonte')]}
                   onFormato={setFormato}
-                  quadro={project.quadros?.[formato] ?? null}
+                  look={project.plan?.look}
+                  onStyleChange={async (patch) => {
+                    snapshot()
+                    try {
+                      await api.params(project.id, { style: patch })
+                      await refresh()
+                    } catch (err: any) {
+                      toast('warn', 'Não deu para mexer na legenda',
+                        String(err.message ?? err))
+                    }
+                  }}
+                  quadro={project.quadros?.[formatoAtual] ?? null}
                   onQuadroChange={async (patch) => {
                     snapshot()
                     try {
-                      await api.setQuadro(project.id, formato, patch)
+                      await api.setQuadro(project.id, formatoAtual, patch)
                       await refresh()
                     } catch (err: any) {
                       toast('warn', 'Não deu para ajustar o quadro', String(err.message ?? err))

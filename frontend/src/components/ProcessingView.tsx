@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { setState, useStore } from '../state/store'
 
@@ -28,6 +28,27 @@ export default function ProcessingView() {
   const activeJob = useStore((s) => s.activeJob)
 
   const meu = activeJob && activeJob.project_id === project?.id ? activeJob : null
+  // O RELÓGIO. Renderizar é minuto, não segundo: sem ver o tempo correndo,
+  // qualquer espera parece travamento. Conta do instante em que o job entrou
+  // na fila (created_at é do servidor, então sobrevive a recarregar a página).
+  const [agora, setAgora] = useState(() => Date.now() / 1000)
+  useEffect(() => {
+    const t = window.setInterval(() => setAgora(Date.now() / 1000), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+  const decorrido = meu?.created_at ? Math.max(0, agora - meu.created_at) : 0
+  const relogio = `${Math.floor(decorrido / 60)}:${
+    String(Math.floor(decorrido % 60)).padStart(2, '0')}`
+  const bruto = project?.info?.duration ?? 0
+  const minutos = bruto > 0
+    ? `${Math.floor(bruto / 60)}:${String(Math.round(bruto % 60)).padStart(2, '0')}`
+    : ''
+  // uma estimativa honesta, calibrada no medido: o pipeline inteiro custa em
+  // torno de 2,5x a duração da gravação numa máquina comum
+  const previsto = bruto > 0 ? bruto * 2.5 : 0
+  const faltando = previsto > decorrido + 5
+    ? `~${Math.ceil((previsto - decorrido) / 60)} min` : ''
+
   const rodando = !!meu && ['fila', 'rodando'].includes(meu.status)
   // o job terminou mas o projeto ainda não foi recarregado: é "abrindo", não
   // "parado" — mostrar o botão aqui fazia o usuário re-rodar o pipeline
@@ -70,9 +91,16 @@ export default function ProcessingView() {
         <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">
           preparando o seu vídeo
         </p>
-        <h2 className="text-lg font-semibold text-slate-100 truncate mb-6">
+        <h2 className="text-lg font-semibold text-slate-100 truncate mb-1">
           {project?.name}
         </h2>
+        <div className="flex items-baseline gap-3 mb-6">
+          <span className="font-mono text-2xl text-accent tabular-nums">{relogio}</span>
+          <span className="text-[11px] text-slate-500 leading-tight">
+            {minutos ? `gravação de ${minutos}` : ''}
+            {faltando ? ` · falta ${faltando}` : ''}
+          </span>
+        </div>
 
         <ol className="space-y-3">
           {PASSOS.map((p, i) => {

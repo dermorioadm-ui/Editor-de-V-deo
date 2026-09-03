@@ -322,6 +322,9 @@ def main() -> int:
     testar_biblioteca_de_musicas()
     testar_corte_na_primeira_tela()
     testar_armadilhas_de_musica_e_cartao()
+    testar_resumo_para_caber()
+    testar_previa_mostra_o_que_baixa()
+    testar_relogio_e_aviso_de_pronto()
 
     print()
     if FALHAS:
@@ -3119,6 +3122,8 @@ def testar_legenda_vertical_nao_corta() -> None:
     from editor.models import EditPlan
     from editor.projects import escalar_legenda
     from editor.render.renderer import regua_da_legenda
+    from dataclasses import replace as replace_style
+
     from editor.subtitles.ass import build_ass
     from editor.subtitles.linebreak import requebrar, wrap
 
@@ -3159,6 +3164,17 @@ def testar_legenda_vertical_nao_corta() -> None:
             quadro = np.frombuffer(proc.stdout, np.uint8)[: pw * ph].reshape(ph, pw)
         cols = np.flatnonzero((quadro > 40).any(axis=0))
         return (int(cols[0]), int(cols[-1])) if cols.size else (-1, -1)
+
+    # o que o usuário moveu na prévia vale em TODO formato: a margem viaja
+    # como proporção do padrão, igual ao tamanho
+    subiu = replace_style(plan.style, margin_v=int(plan.style.margin_v * 1.5))
+    _pw2, _ph2, vert_subiu = regua_da_legenda(main, ExportParams(aspect="9:16"), subiu)
+    check(abs(vert_subiu.margin_v / max(vert.margin_v, 1) - 1.5) < 0.02,
+          f"subir a legenda 50% na prévia sobe 50% no vertical também "
+          f"({vert.margin_v} → {vert_subiu.margin_v})")
+    _pw3, _ph3, vert_igual = regua_da_legenda(main, ExportParams(aspect="9:16"), plan.style)
+    check(vert_igual.margin_v == vert.margin_v,
+          "e sem ninguém mexer, a altura é exatamente a do padrão do formato")
 
     a0, a1 = extremos(horizontal)
     b0, b1 = extremos(novo)
@@ -3330,12 +3346,12 @@ def testar_quadro_encaixado() -> None:
                                         target_size)
 
     # 1) o padrão: horizontal -> vertical/quadrado encaixa; vertical -> horizontal recorta
-    check(quadro_padrao(16 / 9, "9:16")["modo"] == "encaixe",
-          "de uma gravação horizontal o 9:16 nasce ENCAIXADO (vídeo inteiro numa tela)")
-    check(quadro_padrao(16 / 9, "1:1")["modo"] == "encaixe", "e o 1:1 também")
-    check(quadro_padrao(9 / 16, "16:9")["modo"] == "recorte",
-          "de uma gravação vertical o 16:9 nasce recortado (encaixar deixaria duas tarjas enormes)")
-    check(quadro_padrao(16 / 9, "16:9")["modo"] == "recorte", "o próprio formato da fonte não encaixa nada")
+    check(quadro_padrao(16 / 9, "9:16")["modo"] == "recorte",
+          "de uma gravação horizontal o 9:16 nasce PREENCHENDO a tela — nada "
+          "de duas tarjas pretas por padrão")
+    check(quadro_padrao(16 / 9, "1:1")["modo"] == "recorte", "e o 1:1 também")
+    check(quadro_padrao(9 / 16, "16:9")["modo"] == "recorte", "o vertical para 16:9 idem")
+    check(quadro_padrao(16 / 9, "16:9")["modo"] == "recorte", "o próprio formato da fonte idem")
 
     # 2) o que o usuário gravou vale por cima do padrão, saneado
     main = MediaInfo(path="x.mp4", duration=10.0, width=1920, height=1080)
@@ -3384,19 +3400,25 @@ def testar_quadro_encaixado() -> None:
                              capture_output=True, check=True).stdout
         return np.frombuffer(cru, np.uint8).reshape(h, w)
 
-    img = quadro_9x16(None)                       # o padrão: encaixe, escala 1, centro
+    img = quadro_9x16(None)                       # o PADRÃO: preenche a tela
     h, w = img.shape
     check(abs(w / h - 9 / 16) < 0.01, f"o arquivo sai 9:16 ({w}x{h})")
-    linhas_cinza = np.flatnonzero((np.abs(img.astype(int) - 128) < 12).mean(axis=1) > 0.9)
-    linhas_pretas = np.flatnonzero((img < 20).mean(axis=1) > 0.9)
+    check((img < 20).mean() < 0.02,
+          f"o padrão PREENCHE a tela: nada de duas tarjas pretas "
+          f"({(img < 20).mean():.1%} de preto)")
     linhas_brancas = np.flatnonzero((img > 235).mean(axis=1) > 0.9)
-    check(linhas_pretas.size > h * 0.5 and linhas_pretas[0] == 0 and linhas_pretas[-1] == h - 1,
-          f"tela preta em cima e embaixo ({linhas_pretas.size} de {h} linhas)")
-    check(linhas_cinza.size > 0 and abs((linhas_cinza[0] + linhas_cinza[-1]) / 2 - h / 2) < 4
-          and abs((linhas_cinza[-1] - linhas_cinza[0]) - w * 360 / 640) < 6,
-          f"o vídeo inteiro está no meio, na largura toda (linhas {linhas_cinza[0] if linhas_cinza.size else '?'}..{linhas_cinza[-1] if linhas_cinza.size else '?'})")
-    check(linhas_brancas.size > 0 and abs((linhas_brancas[0] + linhas_brancas[-1]) / 2 - h / 2) < 6,
-          "e o risco branco do meio da gravação está no meio da tela")
+    check(linhas_brancas.size > 0 and abs((linhas_brancas[0] + linhas_brancas[-1]) / 2 - h / 2) < 8,
+          "e o risco branco do meio da gravação continua no meio da tela")
+
+    # a tarja preta continua existindo — como OPÇÃO, a um clique na prévia
+    enc = quadro_9x16({"modo": "encaixe", "escala": 1.0, "x": 0.5, "y": 0.5,
+                       "fundo": "preto"})
+    pretas = np.flatnonzero((enc < 20).mean(axis=1) > 0.9)
+    cinza = np.flatnonzero((np.abs(enc.astype(int) - 128) < 12).mean(axis=1) > 0.9)
+    check(pretas.size > h * 0.5 and cinza.size > 0
+          and abs((cinza[0] + cinza[-1]) / 2 - h / 2) < 4,
+          f"escolhendo 'encaixar', o vídeo inteiro fica no meio de uma tela "
+          f"preta ({pretas.size} linhas de tarja)")
 
     img2 = quadro_9x16({"modo": "encaixe", "escala": 0.5, "x": 0.5, "y": 0.25, "fundo": "preto"})
     cinza2 = np.flatnonzero((np.abs(img2.astype(int) - 128) < 12).mean(axis=1) > 0.4)
@@ -3445,21 +3467,22 @@ def testar_quadro_pela_rota_e_janela_na_trilha() -> None:
     cliente = TestClient(app)
     try:
         r = cliente.get(f"/api/projects/{project.id}").json()
-        check(r.get("quadros", {}).get("9:16", {}).get("modo") == "encaixe",
-              "o projeto já diz o quadro de cada formato que entrega")
+        check(r.get("quadros", {}).get("9:16", {}).get("modo") == "recorte",
+              "o projeto já diz o quadro de cada formato que entrega, "
+              "preenchendo a tela por padrão")
         r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
                          json={"aspecto": "9:16", "y": 0.3, "escala": 0.8})
         check(r.status_code == 200 and abs(r.json()["quadro"]["y"] - 0.3) < 1e-9
               and abs(r.json()["quadro"]["escala"] - 0.8) < 1e-9,
               "arrastar/redimensionar na prévia grava posição e escala do quadro")
         r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
-                         json={"aspecto": "9:16", "modo": "recorte"})
-        check(r.json()["quadro"]["modo"] == "recorte" and abs(r.json()["quadro"]["y"] - 0.3) < 1e-9,
+                         json={"aspecto": "9:16", "modo": "encaixe"})
+        check(r.json()["quadro"]["modo"] == "encaixe" and abs(r.json()["quadro"]["y"] - 0.3) < 1e-9,
               "trocar o modo não perde a posição")
         r = cliente.post(f"/api/projects/{project.id}/ops/quadro",
                          json={"aspecto": "9:16", "padrao": True})
-        check(r.json()["quadro"]["modo"] == "encaixe" and abs(r.json()["quadro"]["y"] - 0.5) < 1e-9,
-              "'padrão' volta ao que o programa faria")
+        check(r.json()["quadro"]["modo"] == "recorte" and abs(r.json()["quadro"]["y"] - 0.5) < 1e-9,
+              "'padrão' volta ao que o programa faria (preencher)")
         r = cliente.post(f"/api/projects/{project.id}/ops/quadro", json={"aspecto": "4:3"})
         check(r.status_code == 400, "formato desconhecido é recusado")
 
@@ -3929,6 +3952,205 @@ def testar_armadilhas_de_musica_e_cartao() -> None:
         except Exception:  # noqa: BLE001
             pass
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_resumo_para_caber() -> None:
+    """"Quero 60 segundos": a IA escolhe o que sai até o vídeo caber.
+
+    Encurtar acelerando a fala destrói o anúncio e cortar mais silêncio não
+    chega perto: o que resolve é escolher O QUE SAI. As faixas passam pelas
+    mesmas travas do corte de copy (vale nas duas bordas, gancho protegido),
+    com o teto aberto até o que o alvo exige. Sem chave, quem resume é o
+    programa, desligando os blocos das etapas menos essenciais.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.ai import cortes as C, gemini, resumo as R
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.server import app
+
+    # 1) o teto de copy do resumo é MAIOR que o da edição normal
+    check(R.TETO_RESUMO > C.MAX_COPY,
+          f"o resumo pode tirar mais que os {C.MAX_COPY:.0%} do corte normal "
+          f"({R.TETO_RESUMO:.0%})")
+    palavras = [{"i": k, "start": k * 0.5, "end": k * 0.5 + 0.4, "text": f"p{k}"}
+                for k in range(40)]
+    pedido = R.montar_pedido(palavras, 120.0, 60.0)
+    check("120" in pedido and "60" in pedido and "p10" in pedido,
+          "o pedido leva a duração atual, o alvo e a transcrição numerada")
+    check("gancho" in R.INSTRUCAO.lower() and "chamada para ação" in R.INSTRUCAO.lower(),
+          "a instrução proíbe tirar o gancho e o CTA")
+
+    # 2) o recuo sem IA: desliga os blocos menos essenciais, nunca o 1º nem o último
+    clips = []
+    for k, etapa in enumerate(["gancho", "dor", "explicacao", "prova",
+                               "explicacao", "oferta", "cta"]):
+        c = Clip(src_start=float(k * 10), src_end=float(k * 10 + 10))
+        c.section = etapa
+        clips.append(c)
+    fora = R.pelo_programa(clips, 40.0)
+    check(len(fora) == 3, f"70 s para caber em 40 s: três blocos saem ({len(fora)})")
+    check(all(c.section not in ("gancho", "cta") for c in fora),
+          f"e o gancho e o CTA não são tocados ({[c.section for c in fora]})")
+    check(fora[0].section == "explicacao",
+          f"a explicação sai antes da prova e da oferta ({fora[0].section})")
+    check(not R.pelo_programa(clips, 999.0), "o que já cabe não é encurtado")
+
+    # 3) o caminho inteiro, com a IA simulada
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="resumo_"))
+    FALAS = ["Presta atenção nisso aqui que é rápido",
+             "O problema é que você perde cliente todo dia",
+             "Isso mesmo, você perde cliente todo santo dia",
+             "Clica no link agora e resolve"]
+    amostras, _marcas, duracao = build_track([(f, 0.9) for f in FALAS],
+                                             noise=0.0011)
+    fonte = make_video(tmp / "fonte.mp4", amostras, duracao, 320, 240, 30)
+    install(FALAS)
+    projeto = svc.create(str(fonte), "resumo", "VSL")
+    cliente = TestClient(app)
+    try:
+        ctx = Ctx(quiet=True)
+        svc.analyze(projeto, ctx)
+        svc.auto_edit(projeto, ctx)
+        antes = svc.duracao_de_saida(projeto)
+        check(antes > 3.0, f"o vídeo de teste tem {antes:.1f} s montados")
+
+        # a IA manda tirar a terceira frase (a repetida)
+        palavras_vivas = projeto.analysis.get("words") or []
+        check(len(palavras_vivas) > 10,
+              f"a transcrição do teste tem palavras ({len(palavras_vivas)})")
+        # a terceira frase ("isso mesmo, você perde cliente todo santo dia") é
+        # a repetida: é ela que a IA vai mandar tirar
+        alvo_i = [w["i"] for w in palavras_vivas
+                  if str(w.get("text", "")).strip().lower()
+                  in ("isso", "mesmo", "santo")]
+        if alvo_i:
+            alvo_i = list(range(min(alvo_i), max(alvo_i) + 1))
+        guardado = (R.pedir, gemini.chave_guardada)
+        try:
+            gemini.chave_guardada = lambda: "chave-de-teste"
+            R.pedir = lambda *a, **k: {
+                "leitura": "cortei a repetida", "_modelo": "gemini-teste",
+                "remover": ([{"de": alvo_i[0], "ate": alvo_i[-1], "tipo": "copy",
+                              "motivo": "repete a anterior"}] if alvo_i else [])}
+            r = svc.resumir_para_alvo(projeto, ctx, alvo=max(1.0, antes - 1.5))
+        finally:
+            R.pedir, gemini.chave_guardada = guardado
+        depois = svc.duracao_de_saida(svc.load(projeto.id))
+        check(r.get("ok"), f"o resumo rodou ({r.get('motivo') or r.get('erro') or ''})")
+        check(depois < antes - 0.3,
+              f"o vídeo encurtou de {antes:.1f} s para {depois:.1f} s")
+        check(r.get("antes") and r.get("depois"),
+              "o relatório diz de quanto para quanto")
+
+        # 4) pedir um alvo que o vídeo já cumpre não mexe em nada
+        r2 = svc.resumir_para_alvo(svc.load(projeto.id), ctx, alvo=999.0)
+        check(r2.get("pulada"), "alvo que o vídeo já cumpre não corta nada")
+
+        # 5) a rota existe e recusa alvo vazio
+        rr = cliente.post(f"/api/projects/{projeto.id}/ops/resumir", json={"alvo": 0})
+        check(rr.status_code == 400, "resumir sem alvo é recusado com motivo")
+        rr = cliente.post(f"/api/projects/{projeto.id}/ops/resumir", json={"alvo": 30})
+        check(rr.status_code == 200 and rr.json().get("kind") == "resumo",
+              "e com alvo vira um job")
+        check(abs(svc.load(projeto.id).plan.alvo_duracao - 30.0) < 1e-9,
+              "o alvo fica gravado no plano")
+
+        # 6) a receita da primeira tela grava o alvo
+        rr = cliente.post(f"/api/projects/{projeto.id}/params",
+                          json={"alvo_duracao": 45})
+        check(abs(rr.json()["plan"]["alvo_duracao"] - 45.0) < 1e-9,
+              "o 'resumir para' da primeira tela viaja na receita")
+    finally:
+        try:
+            svc.delete_project(projeto.id)
+        except Exception:  # noqa: BLE001
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_previa_mostra_o_que_baixa() -> None:
+    """A prévia mostra o FORMATO e o FILTRO que vão para a pasta.
+
+    Dois defeitos que davam a mesma sensação — "não é isso que eu vou
+    receber": a prévia abria sempre no formato da gravação (o usuário pedia
+    9:16, baixava 9:16 e via horizontal), e o filtro de cinema escolhido na
+    primeira tela só aparecia depois de o arquivo ficar pronto, porque a
+    prévia ao vivo não passa por ffmpeg nenhum.
+    """
+    from pathlib import Path
+
+    frente = Path("frontend/src")
+    editor = (frente / "components/Editor.tsx").read_text(encoding="utf-8")
+    player = (frente / "components/Player.tsx").read_text(encoding="utf-8")
+    formato = (frente / "lib/formato.ts").read_text(encoding="utf-8")
+
+    check("formatoEntregue" in editor and "export?.extras" in editor,
+          "a prévia nasce no formato que vai para a pasta, não no da gravação")
+    check("formato={formatoAtual}" in editor,
+          "e é esse formato que o player recebe")
+    check("look={project.plan?.look}" in editor and "look?: string | null" in player,
+          "o filtro escolhido na primeira tela chega ao player")
+    check("filtroCss = linear ? undefined : filtroDoLook(look)" in player,
+          "e só é aplicado na prévia AO VIVO — a renderizada já vem queimada")
+    for look in ("pb", "quente", "frio", "teal_orange", "vintage", "nitido"):
+        check(f"{look}:" in formato, f"o look '{look}' tem aproximação em CSS")
+    check("grayscale(1)" in formato, "preto e branco vira grayscale de verdade")
+
+    # a legenda se mexe com o mouse, e o elemento arrastado não passa pelo React
+    check("iniciarArrastoLegenda" in player and "onStyleChange" in player,
+          "a legenda é arrastável e redimensionável na prévia")
+    check("margin_v: Math.max(0, Math.round(d.m0 + dm))" in player,
+          "arrastar a legenda mexe na margem (sobe e desce)")
+    check("fontsize: Math.max(8, Math.min(400, Math.round(d.f0 * fator)))" in player,
+          "e a quina mexe no tamanho da letra")
+    check("requestAnimationFrame(pintar)" in player and "ovNode" in player,
+          "o elemento arrastado é pintado direto no DOM, um quadro por vez — "
+          "era o setState a cada mousemove que deixava a caixa para trás do mouse")
+    check("const folgaX = Math.max(0.02, fw * 0.2)" in player,
+          "o limite do arrasto é a BORDA da janela, não o centro dela — preso "
+          "no centro, a caixa parava de seguir o mouse no meio do quadro")
+    check("const fator = Math.min(4, Math.max(0.25, 1 + dd / (d.largura / 2)))" in player,
+          "a quina da legenda é proporcional à faixa: em pixels de estilo, um "
+          "arrasto de 60 px levava o fontsize de 25 para 386")
+    check("estiloParaFonte" in player,
+          "e o que se mexe num formato derivado é escrito na régua da fonte")
+
+
+def testar_relogio_e_aviso_de_pronto() -> None:
+    """O tempo correndo na tela de processamento e o aviso de que ficou pronto."""
+    from pathlib import Path
+
+    frente = Path("frontend/src")
+    proc = (frente / "components/ProcessingView.tsx").read_text(encoding="utf-8")
+    editor = (frente / "components/Editor.tsx").read_text(encoding="utf-8")
+
+    check("relogio" in proc and "setInterval" in proc,
+          "a tela de processamento tem cronômetro correndo")
+    check("created_at" in proc, "que conta do instante em que o job entrou na fila")
+    check("gravação de ${minutos}" in proc,
+          "e diz quantos minutos tem a gravação")
+    check("falta ${faltando}" in proc, "com uma estimativa do que falta")
+    check("Seu vídeo está pronto" in editor,
+          "e o editor abre com o aviso de que ficou pronto")
+    check("levou ${Math.floor(pronto.segundos / 60)} min" in editor,
+          "dizendo quanto tempo demorou")
+    check("bytes(pronto.bytes)" in editor, "e o tamanho do arquivo")
+    check("size_bytes" in editor, "que vem do resultado da exportação")
+
+    # e o servidor manda esses números
+    from editor.projects import export as _export  # noqa: F401
+    fonte = Path("editor/projects.py").read_text(encoding="utf-8")
+    check('payload["size_bytes"] = dest.stat().st_size' in fonte,
+          "a exportação devolve o tamanho do arquivo")
+    check('"duracao": round(duracao_de_saida(project), 2)' in fonte,
+          "e o clique único devolve a duração do vídeo montado")
 
 
 if __name__ == "__main__":

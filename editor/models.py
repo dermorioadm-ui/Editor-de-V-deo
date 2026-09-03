@@ -255,6 +255,9 @@ class EditPlan:
     # o recorte concêntrico no rosto. O que não está aqui usa o padrão do
     # programa (ver projects.quadro_padrao).
     enquadramento: dict = field(default_factory=dict)
+    # RESUMO: a duração que o vídeo tem que caber (segundos). 0 = sem alvo.
+    # Quando há alvo, a IA escolhe o que sai da copy até o vídeo caber.
+    alvo_duracao: float = 0.0
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -292,6 +295,7 @@ class EditPlan:
             "zoom_audit": self.zoom_audit,
             "repeats": self.repeats,
             "enquadramento": self.enquadramento,
+            "alvo_duracao": self.alvo_duracao,
             "version": self.version,
         }
 
@@ -331,6 +335,10 @@ class EditPlan:
         plan.enquadramento = {str(k): dict(v) for k, v in
                               dict(data.get("enquadramento") or {}).items()
                               if isinstance(v, dict)}
+        try:
+            plan.alvo_duracao = max(0.0, float(data.get("alvo_duracao") or 0.0))
+        except (TypeError, ValueError):
+            plan.alvo_duracao = 0.0
         plan.version = int(data.get("version", 1))
         return plan
 

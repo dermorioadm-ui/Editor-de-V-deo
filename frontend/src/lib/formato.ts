@@ -108,3 +108,56 @@ export function quebrar(texto: string, maxChars: number, maxLines: number): stri
 }
 
 export const QUADRO_PADRAO: Quadro = { modo: 'encaixe', escala: 1, x: 0.5, y: 0.5, fundo: 'preto' }
+
+
+/**
+ * O FILTRO DE CINEMA na prévia, em CSS.
+ *
+ * O look é uma cadeia de ffmpeg queimada no encode; a prévia ao vivo não
+ * passa por ffmpeg nenhum, então ele simplesmente não aparecia — o usuário
+ * escolhia "preto e branco" na primeira tela e via a imagem colorida até o
+ * arquivo ficar pronto. Aqui cada look tem a aproximação em CSS mais próxima
+ * do que o ffmpeg faz (mesma saturação, mesmo contraste, mesma temperatura).
+ * É aproximação, não igualdade: o arquivo continua sendo a verdade.
+ */
+export const LOOK_CSS: Record<string, string> = {
+  nenhum: '',
+  pb: 'grayscale(1) contrast(1.14) brightness(1.01)',
+  pb_duro: 'grayscale(1) contrast(1.42) brightness(0.98)',
+  quente: 'saturate(1.10) contrast(1.06) sepia(0.12) hue-rotate(-6deg)',
+  frio: 'saturate(0.94) contrast(1.08) hue-rotate(8deg) brightness(1.01)',
+  teal_orange: 'saturate(1.05) contrast(1.12) hue-rotate(-4deg)',
+  vintage: 'saturate(0.72) contrast(0.94) brightness(1.03) sepia(0.22)',
+  nitido: 'contrast(1.08) saturate(1.04)',
+}
+
+export function filtroDoLook(look?: string | null): string | undefined {
+  const css = LOOK_CSS[String(look || 'nenhum')] || ''
+  return css || undefined
+}
+
+
+/**
+ * O caminho de volta: o que o mouse mexeu NUM FORMATO DERIVADO, escrito na
+ * régua da FONTE (que é onde o estilo mora). O servidor faz o mesmo caminho
+ * de ida em regua_da_legenda: tamanho e margem viajam como PROPORÇÃO do
+ * padrão de cada formato.
+ */
+export function estiloParaFonte(patch: { fontsize?: number; margin_v?: number },
+                                sw: number, sh: number, aspecto: string) {
+  if (!(aspecto in PROPORCOES)) return patch
+  const [tw, th] = tamanhoDerivado(sw, sh, aspecto)
+  if (Math.abs(sw / sh - tw / th) <= 0.01) return patch
+  const daFonte = padraoDeLegenda(sw, sh)
+  const doFormato = padraoDeLegenda(tw, th)
+  const saida: { fontsize?: number; margin_v?: number } = {}
+  if (patch.fontsize != null && doFormato.fonte > 0) {
+    saida.fontsize = Math.max(8, Math.round(
+      (patch.fontsize / doFormato.fonte) * daFonte.fonte))
+  }
+  if (patch.margin_v != null && doFormato.margem > 0) {
+    saida.margin_v = Math.max(0, Math.round(
+      (patch.margin_v / doFormato.margem) * daFonte.margem))
+  }
+  return saida
+}

@@ -917,6 +917,96 @@ def enriquecer(project: Project, ctx) -> dict:
     return {"ok": True, **r}
 
 
+def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
+    """Encurta o vídeo até caber na duração pedida — a IA escolhe o que sai.
+
+    "Quero 60 segundos" com um vídeo de 3 minutos não se resolve acelerando a
+    fala nem cortando mais silêncio: o que resolve é escolher O QUE SAI, e
+    isso é julgamento de copy. A IA marca as faixas; as faixas passam pelas
+    MESMAS travas do corte normal (vale acústico nas duas bordas, gancho
+    protegido, ideia inteira e nunca meia frase), só que com o teto de copy
+    aberto até o que o alvo exige.
+
+    Sem chave, ou com a IA fora do ar, quem resume é o programa: desliga os
+    blocos das etapas menos essenciais, do menos para o mais importante, sem
+    tocar no gancho nem no fecho.
+    """
+    from .ai import cortes as cortes_ia, gemini, resumo as resumo_ia
+    from .edit import ops
+
+    plan = project.plan
+    alvo = float(plan.alvo_duracao if alvo is None else alvo)
+    atual = duracao_de_saida(project)
+    if alvo <= 0:
+        return {"ok": False, "pulada": True, "motivo": "sem duração alvo"}
+    if atual <= alvo + 0.5:
+        return {"ok": True, "pulada": True, "duracao": round(atual, 2),
+                "alvo": alvo, "motivo": f"o vídeo já cabe ({atual:.0f} s)"}
+
+    ctx.stage("resumo", f"resumindo de {atual:.0f} s para caber em {alvo:.0f} s")
+    env = project.envelope()
+    removidas = set(project.analysis.get("removed_word_ids", []))
+    vivas = [w for w in (project.analysis.get("words") or [])
+             if w.get("src_i", w["i"]) not in removidas]
+    saida: dict = {"ok": False, "alvo": alvo, "antes": round(atual, 2),
+                   "recusados": [], "cortes": 0, "por": "programa"}
+    chave = gemini.chave_guardada()
+
+    if chave and vivas:
+        try:
+            resposta = resumo_ia.pedir(chave, db.get_setting("gemini_model", "") or "",
+                                       vivas, atual, alvo)
+        except Exception as exc:  # noqa: BLE001 — o resumo cai no programa
+            ctx.progress(0.4, f"a IA não respondeu ({exc}); resumo pela regra")
+            resposta = None
+        if resposta:
+            julgado = cortes_ia.aplicar(project.analysis.get("words") or [],
+                                        resposta, env=env, duracao=atual,
+                                        teto_copy=resumo_ia.TETO_RESUMO)
+            saida["leitura"] = julgado.get("leitura", "")
+            saida["modelo"] = resposta.get("_modelo", "")
+            saida["recusados"] = julgado.get("recusados", [])
+            palavras = project.analysis.get("words") or []
+            ids: list[int] = []
+            for t in julgado.get("takes", []):
+                a, b = float(t["start"]), float(t["end"])
+                ids += [w["i"] for w in palavras
+                        if float(w["start"]) >= a - 0.05
+                        and float(w["end"]) <= b + 0.05]
+            ids = sorted(set(ids) - removidas)
+            if ids and env is not None:
+                res = ops.remove_words(plan, env, palavras, ids, plan.cut)
+                feitas = {i for g in res.get("applied", []) if g.get("ok")
+                          for i in g["words"]}
+                if feitas:
+                    removidas |= feitas
+                    project.analysis["removed_word_ids"] = sorted(removidas)
+                    manual = set(project.analysis.get("manual_removed_word_ids", []))
+                    project.analysis["manual_removed_word_ids"] = sorted(manual | feitas)
+                    project.save_analysis()
+                    saida.update({"ok": True, "por": "ia",
+                                  "cortes": len([g for g in res["applied"] if g["ok"]]),
+                                  "palavras_fora": len(feitas)})
+
+    # ainda não coube? o programa desliga os blocos menos essenciais
+    depois = duracao_de_saida(project)
+    if depois > alvo + 0.5:
+        fora = resumo_ia.pelo_programa(plan.active_clips, alvo)
+        for c in fora:
+            c.enabled = False
+        if fora:
+            saida["blocos_desligados"] = len(fora)
+            saida["ok"] = True
+            depois = duracao_de_saida(project)
+    project.save_plan()
+    rebuild_subtitles(project)
+    project.save_plan()
+    saida["depois"] = round(depois, 2)
+    ctx.progress(1.0, f"resumo: {atual:.0f} s → {depois:.0f} s "
+                      f"(alvo {alvo:.0f} s)")
+    return saida
+
+
 def one_click(project: Project, ctx) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
@@ -926,7 +1016,16 @@ def one_click(project: Project, ctx) -> dict:
     """
     ctx.progress(0.0, "iniciando")
     a = _scoped(ctx, 0.0, 0.52, lambda c: analyze(project, c))
-    b = _scoped(ctx, 0.52, 0.62, lambda c: auto_edit(project, c))
+    b = _scoped(ctx, 0.52, 0.60, lambda c: auto_edit(project, c))
+    # RESUMO PARA CABER NO ALVO. Depois do corte (só aqui existe a duração de
+    # verdade) e antes dos anexos (que se ancoram na linha do tempo final).
+    r = {"ok": False, "pulada": True}
+    if project.plan.alvo_duracao > 0:
+        try:
+            r = _scoped(ctx, 0.60, 0.62, lambda c: resumir_para_alvo(project, c))
+        except Exception as exc:  # noqa: BLE001 — o vídeo sai sem o resumo
+            ctx.progress(0.62, f"não consegui resumir ({exc}); o vídeo sai inteiro")
+            r = {"ok": False, "erro": str(exc)}
     # o material auxiliar entra AQUI, depois do corte: só agora existem blocos
     # com fala para ancorar um anexo, e a duração de saída é a de verdade
     try:
@@ -959,7 +1058,8 @@ def one_click(project: Project, ctx) -> dict:
     # o que vai baixar — e o botão de baixar acende sozinho quando o MP4 fica
     # pronto.
     project.set_status("pronto")
-    return {"analysis": a, "edit": b, "anexos": x, "proxy": p, "previa": v}
+    return {"analysis": a, "edit": b, "resumo": r, "anexos": x, "proxy": p,
+            "previa": v, "duracao": round(duracao_de_saida(project), 2)}
 
 
 def exportar_final(project: Project, ctx) -> dict:
@@ -1204,6 +1304,12 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
     ctx.progress(1.0, f"pronto: {dest.name}")
     payload = result.to_dict()
     payload["download"] = f"/api/projects/{project.id}/download/{dest.name}"
+    payload["nome"] = dest.name
+    payload["pasta"] = str(dest.parent)
+    try:
+        payload["size_bytes"] = dest.stat().st_size
+    except OSError:
+        payload["size_bytes"] = 0
     return payload
 
 
@@ -1523,19 +1629,16 @@ QUADRO_FUNDOS = ("preto", "desfoque")
 
 
 def quadro_padrao(prop_fonte: float, aspecto: str) -> dict:
-    """Como um formato derivado nasce: o vídeo INTEIRO encaixado numa tela
-    preta quando o quadro pedido é mais estreito que a gravação (horizontal
-    -> vertical ou quadrado), e recorte concêntrico no rosto quando é mais
-    largo (vertical -> horizontal), onde encaixar deixaria duas tarjas
-    enormes. O usuário troca e arrasta na prévia."""
-    from .render.renderer import PROPORCOES
+    """Como um formato derivado nasce: PREENCHENDO a tela.
 
-    prop = PROPORCOES.get(aspecto, 0.0)
-    if aspecto == "fonte" or prop <= 0 or prop_fonte <= 0 \
-            or abs(prop - prop_fonte) <= 0.01:
-        return {"modo": "recorte", "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"}
-    modo = "encaixe" if prop < prop_fonte else "recorte"
-    return {"modo": modo, "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"}
+    O vídeo é centralizado e recortado no rosto até ocupar o quadro inteiro —
+    horizontal virando vertical inclusive. Duas tarjas pretas num vertical é
+    o que faz o anúncio parecer amador, e ninguém quer isso por padrão.
+    Encaixar o vídeo inteiro numa tela (com fundo preto ou desfocado) continua
+    existindo como OPÇÃO, a um clique na prévia — não como regra.
+    """
+    del prop_fonte, aspecto     # o padrão é o mesmo para todo formato
+    return {"modo": "recorte", "escala": 1.0, "x": 0.5, "y": 0.5, "fundo": "preto"}
 
 
 def quadro_do_formato(plan: EditPlan, info, aspecto: str) -> dict:

@@ -455,6 +455,11 @@ def aplicar_receita(project, payload: dict) -> None:
             if "levels" in current:
                 current["levels"] = tuple(float(x) for x in current["levels"])
             setattr(plan, attr, cls(**current))
+    if "alvo_duracao" in payload:
+        try:
+            plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
+        except (TypeError, ValueError):
+            pass
     if "look" in payload:
         from .render.looks import BY_ID
 
@@ -990,6 +995,22 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
                              f"vai até o fim dele e para ali")
     project.save_plan()
     return {"ok": True, "timeline": svc.timeline_summary(project), "aviso": aviso}
+
+
+@app.post("/api/projects/{pid}/ops/resumir")
+def api_resumir(pid: str, payload: dict = Body(...)) -> dict:
+    """Encurta o vídeo para caber numa duração — a IA escolhe o que sai. JOB."""
+    project = _project(pid)
+    try:
+        alvo = float(payload.get("alvo") or 0.0)
+    except (TypeError, ValueError):
+        alvo = 0.0
+    if alvo <= 0:
+        raise HTTPException(400, "diga em quantos segundos o vídeo tem que caber")
+    project.plan.alvo_duracao = alvo
+    project.save_plan()
+    return _run("resumo", pid,
+                lambda ctx: svc.resumir_para_alvo(svc.load(pid), ctx, alvo))
 
 
 @app.post("/api/projects/{pid}/ops/quadro")
