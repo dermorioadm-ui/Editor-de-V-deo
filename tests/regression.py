@@ -330,6 +330,7 @@ def main() -> int:
     testar_emudecer_um_bloco_sai_no_arquivo()
     testar_efeitos_mexem_no_pixel()
     testar_dividir_bloco_nao_compartilha_interior()
+    testar_varios_videos_no_mesmo_projeto()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4884,6 +4885,182 @@ def testar_dividir_bloco_nao_compartilha_interior() -> None:
     check(abs(partidos[1].effects[0]["sigma"] - 6) < 1e-9,
           f"e as duas metades do corte real também são independentes "
           f"({partidos[1].effects[0]['sigma']})")
+
+
+def testar_varios_videos_no_mesmo_projeto() -> None:
+    """Três tomadas soltas, um vídeo pronto — cada uma cortada no ÁUDIO DELA.
+
+    O miolo do editor já era agnóstico de fonte: Timeline empilha clipes de
+    arquivos diferentes, o render resolve o caminho por clipe, e
+    ``build_auto_plan`` é função pura de (palavras, envelope, parâmetros). O
+    que estava cravado em "um vídeo só" era a camada de análise: UM envelope,
+    UMA transcrição, e o número da palavra recomeçando do zero a cada vez.
+
+    O terceiro era o mais perigoso dos três. O "i" da palavra é a identidade
+    que o programa inteiro usa — removed_word_ids, Subtitle.word_ids — e duas
+    gravações colidindo nele fariam apagar a palavra 12 de uma sumir a palavra
+    12 da outra.
+
+    E o segundo é o que fere a regra 3 em silêncio: o corte encaixa a borda no
+    vale de energia, e com o envelope do arquivo errado a borda cai num vale
+    que não existe naquele áudio — em cima de palavra — enquanto o encaixe
+    devolve uma explicação convincente sobre o vale errado.
+
+    O que este teste mede é isso: que a segunda gravação foi cortada contra o
+    som dela.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import projects as svc
+    from editor.audio.envelope import compute_envelope
+    from editor.config import ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import extract_wav, read_wav_mono
+    from editor.models import Clip
+    from tests.e2e import Ctx
+
+    tmp = Path(tempfile.mkdtemp(prefix="varios_"))
+    projeto = None
+    try:
+        # DUAS gravações com a fala em lugares DIFERENTES. É a diferença que
+        # torna o teste capaz de pegar o envelope trocado: cortar a segunda com
+        # o envelope da primeira daria blocos em cima do silêncio dela.
+        #
+        # FALA DE VERDADE (espeak) na segunda, não tom sintético: o Whisper
+        # falso acha as regiões pelo envelope REAL, e o tom de tests/synth não
+        # produz região de fala nenhuma — o teste passaria por vazio.
+        from tests.speech import build_track, make_video
+
+        falas_a = [(0.5, 1.3), (2.6, 3.4), (4.7, 5.5)]
+        dur_a = 6.2
+        video_a = write_video(tmp / "a.mp4", build(falas_a, dur_a, noise=0.001),
+                              dur_a, 180, 320, 30)
+        amostras_b, marcas_b, dur_b = build_track(
+            [("delta um dois", 0.9), ("eco tres quatro", 0.7)])
+        video_b = make_video(tmp / "b.mp4", amostras_b, dur_b, 320, 180, 30)
+        falas_b = [(m["start"], m["end"]) for m in marcas_b]
+
+        projeto = svc.create(str(video_a), "varios", "VSL")
+        # análise do principal, à mão (a de verdade é lenta e já tem teste)
+        extract_wav(video_a, projeto.wav, 16000, 1)
+        amostras, sr = read_wav_mono(projeto.wav)
+        env_a = compute_envelope(amostras, sr)
+        np.save(projeto.envelope_file, env_a.db)
+        svc._envelope_cache[projeto.id] = env_a
+        texto_a = ["alfa", "bravo", "charlie"]
+        projeto.analysis = {
+            "duration": dur_a,
+            "words": [{"i": i, "start": a, "end": b, "text": texto_a[i],
+                       "prob": 0.95} for i, (a, b) in enumerate(falas_a)],
+            "claps": [], "takes": [], "fillers": [],
+            "manual_removed_word_ids": [],
+            "envelope": {"hop": env_a.hop, "sample_rate": sr,
+                         "noise_floor": env_a.noise_floor,
+                         "duration": env_a.duration}}
+        projeto.save_analysis()
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=dur_a)]
+        projeto.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                           preset="ultrafast", crf=30)
+        projeto.save_plan()
+
+        # a SEGUNDA gravação entra pelo caminho de verdade
+        midia = svc.add_media(projeto.id, str(video_b), "video", "tomada 2")
+        install(["delta um dois", "eco tres quatro"])
+        info = svc.analisar_midia(svc.load(projeto.id), midia["id"], Ctx(quiet=True))
+        p = svc.load(projeto.id)
+
+        check(info["ordem"] == 1 and info["base_i"] == svc.BASE_POR_FONTE,
+              f"a gravação acrescentada ganha uma FAIXA de números só dela "
+              f"(base {info['base_i']})")
+        numeros_a = {w["i"] for w in p.words}
+        numeros_b = {w["i"] for w in p.words_de(midia["id"])}
+        check(numeros_a and numeros_b and not (numeros_a & numeros_b),
+              f"os números das palavras NÃO colidem "
+              f"({sorted(numeros_a)[:3]} contra {sorted(numeros_b)[:3]})")
+        check(p.envelope_de(midia["id"]).exists()
+              and p.envelope_de(midia["id"]) != p.envelope_file,
+              "e ela tem o PRÓPRIO envelope, em arquivo separado")
+        env_b = p.envelope(midia["id"])
+        check(env_b is not None and abs(env_b.duration - dur_b) < 0.3,
+              f"que é o áudio dela mesma ({env_b.duration if env_b else '?'} s "
+              f"contra {dur_b} s)")
+
+        # a edição automática monta as duas
+        svc.auto_edit(svc.load(projeto.id), Ctx(quiet=True))
+        p = svc.load(projeto.id)
+        por_fonte: dict = {}
+        for c in p.plan.active_clips:
+            por_fonte.setdefault(c.source, []).append(c)
+        check(set(por_fonte) == {"main", midia["id"]},
+              f"a linha do tempo tem blocos das DUAS gravações ({list(por_fonte)})")
+
+        ordem = [c.source for c in p.plan.active_clips]
+        check(ordem == sorted(ordem, key=lambda x: x != "main"),
+              f"e na ordem da montagem: o principal primeiro ({ordem})")
+
+        # O QUE IMPORTA: os blocos da segunda caem em cima da FALA dela
+        blocos_b = por_fonte[midia["id"]]
+        def fala_em(t: float) -> bool:
+            return any(a - 0.25 <= t <= b + 0.25 for a, b in falas_b)
+        meios = [(c.src_start + c.src_end) / 2 for c in blocos_b]
+        acertos = sum(1 for t in meios if fala_em(t))
+        check(blocos_b and acertos == len(meios),
+              f"os blocos da segunda gravação caem em cima da fala DELA "
+              f"({acertos} de {len(meios)}; falas em {falas_b})")
+        # A REGRA 3, NA SEGUNDA GRAVAÇÃO. Esta é a asserção que importa: se o
+        # corte dela tivesse sido decidido contra o envelope do primeiro
+        # arquivo, a borda cairia num vale que não existe neste áudio — em
+        # cima de palavra. Nenhuma palavra viva pode estar partida por uma
+        # borda de bloco.
+        palavras_b = p.words_de(midia["id"])
+        removidas = set(p.analysis.get("removed_word_ids") or [])
+        vivas = [w for w in palavras_b if w["i"] not in removidas]
+        partidas = [w for w in vivas
+                    if not any(c.src_start - 0.03 <= w["start"]
+                               and w["end"] <= c.src_end + 0.03
+                               for c in blocos_b)]
+        check(vivas and not partidas,
+              f"NENHUMA palavra da segunda gravação foi partida pelo corte "
+              f"({len(vivas)} palavra(s) viva(s), "
+              f"{[(w['text'], round(w['start'], 2)) for w in partidas]})")
+        # e o silêncio dela saiu: o que sobrou é menor que o arquivo
+        cobertura = sum(c.src_duration for c in blocos_b)
+        check(cobertura < dur_b - 0.5,
+              f"e o silêncio dela saiu ({cobertura:.1f} s de {dur_b:.1f} s)")
+
+        # legenda: as palavras das duas gravações viram legenda
+        svc.rebuild_subtitles(p)
+        p.save_plan()
+        textos = " ".join(s_.text for s_ in p.plan.subtitles).lower()
+        check("alfa" in textos or "bravo" in textos,
+              f"a legenda tem palavra da primeira gravação ({textos[:60]}…)")
+        check("delta" in textos or "eco" in textos,
+              f"E da segunda ({textos[:110]}…)")
+        tl = Timeline(p.plan.active_clips, 30.0)
+        fora = [s_ for s_ in p.plan.subtitles if s_.start > tl.duration + 0.5]
+        check(not fora,
+              f"e nenhuma legenda caiu fora da linha do tempo ({len(fora)})")
+
+        # o corte de uma gravação NÃO mexe na outra
+        antes_a = len(por_fonte["main"])
+        from editor.edit import ops
+        p.plan.clips, _ = ops.cut_source_range(p.plan.clips, 1.7, 2.3,
+                                               source=midia["id"])
+        depois_a = len([c for c in p.plan.active_clips if c.source == "main"])
+        check(depois_a == antes_a,
+              f"cortar dentro da segunda gravação não mexe na primeira "
+              f"({antes_a} → {depois_a} blocos)")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

@@ -61,13 +61,35 @@ class Project:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    # --------------------------------------------------- arquivos por fonte
+    # Um projeto pode ter MAIS DE UMA GRAVAÇÃO COM FALA: três tomadas, uma
+    # abertura gravada à parte, um depoimento. Cada uma precisa do próprio
+    # áudio de trabalho e do próprio envelope de energia — e é esse "próprio"
+    # que faz a regra 3 continuar valendo. O corte encaixa a borda no vale de
+    # SILÊNCIO; se a borda do segundo vídeo for encaixada no envelope do
+    # primeiro, ela cai num vale que não existe naquele áudio, em cima de
+    # palavra, e o encaixe ainda devolve uma explicação bonita sobre o vale
+    # errado. Quebra calada é a pior que existe.
+    #
+    # "main" continua nos nomes de antes (audio16k.wav, envelope.npy): projeto
+    # já gravado no disco dele abre sem migração nenhuma.
+    def wav_de(self, source: str = "main") -> Path:
+        if source in ("", "main"):
+            return self.dir / "audio16k.wav"
+        return self.dir / f"audio16k_{source}.wav"
+
+    def envelope_de(self, source: str = "main") -> Path:
+        if source in ("", "main"):
+            return self.dir / "envelope.npy"
+        return self.dir / f"envelope_{source}.npy"
+
     @property
     def wav(self) -> Path:
-        return self.dir / "audio16k.wav"
+        return self.wav_de("main")
 
     @property
     def envelope_file(self) -> Path:
-        return self.dir / "envelope.npy"
+        return self.envelope_de("main")
 
     @property
     def proxy_file(self) -> Path:
@@ -104,17 +126,43 @@ class Project:
     def words(self) -> list[dict]:
         return self.analysis.get("words", [])
 
-    def envelope(self) -> Envelope | None:
-        cached = _envelope_cache.get(self.id)
+    # ----------------------------------------------------- análise por fonte
+    @property
+    def fontes(self) -> dict:
+        """{id da mídia: análise dela}. Vazio num projeto de um vídeo só."""
+        f = self.analysis.get("fontes")
+        return f if isinstance(f, dict) else {}
+
+    def analise_de(self, source: str = "main") -> dict:
+        if source in ("", "main"):
+            return self.analysis
+        return self.fontes.get(source) or {}
+
+    def words_de(self, source: str = "main") -> list[dict]:
+        return self.analise_de(source).get("words", [])
+
+    def fontes_com_fala(self) -> list[str]:
+        """As fontes analisadas, na ordem de montagem. "main" é sempre a primeira."""
+        extras = sorted(self.fontes.items(),
+                        key=lambda kv: int(kv[1].get("ordem", 0)))
+        return ["main"] + [mid for mid, _d in extras]
+
+    def envelope(self, source: str = "main") -> Envelope | None:
+        # A chave do cache de "main" continua sendo o id do projeto puro. É
+        # o que a suíte inteira já escreve à mão (_envelope_cache[pid] = env),
+        # e trocar a chave aqui quebraria tudo por nada.
+        chave = self.id if source in ("", "main") else f"{self.id}:{source}"
+        cached = _envelope_cache.get(chave)
         if cached is not None:
             return cached
-        if not self.envelope_file.exists():
+        arquivo = self.envelope_de(source)
+        if not arquivo.exists():
             return None
-        db_array = np.load(self.envelope_file)
-        meta = self.analysis.get("envelope", {})
+        db_array = np.load(arquivo)
+        meta = self.analise_de(source).get("envelope", {})
         env = Envelope(db_array, meta.get("hop", 0.010),
                        meta.get("sample_rate", 16000))
-        _envelope_cache[self.id] = env
+        _envelope_cache[chave] = env
         return env
 
     def save_plan(self) -> None:
@@ -335,6 +383,107 @@ def sources_for(project: Project) -> dict:
 
 
 # ------------------------------------------------------------------ análise
+# Cada gravação recebe uma FAIXA de números de palavra só dela. O "i" da
+# palavra é a identidade que o programa inteiro usa — removed_word_ids,
+# manual_removed_word_ids, command_word_ids, Subtitle.word_ids — e o
+# transcritor começa a contar do zero toda vez. Duas gravações no mesmo
+# projeto colidiriam nesse número, e o sintoma seria apagar a palavra 12 de um
+# vídeo e ver sumir a palavra 12 do outro.
+#
+# Cem mil por fonte é folga de sobra (são umas onze horas de fala contínua) e
+# tem uma vantagem prática: olhando o número 200003 já se sabe que é a terceira
+# gravação, palavra 3. Um esquema apertado economizaria nada e esconderia isso.
+BASE_POR_FONTE = 100_000
+
+
+def analisar_midia(project: Project, media_id: str, ctx) -> dict:
+    """Envelope e transcrição de uma gravação ACRESCENTADA ao projeto.
+
+    O corte de silêncio, a aceleração por trecho e a legenda são funções puras
+    de (palavras, envelope) — ``build_auto_plan`` não toca em ``project`` nem
+    sabe de fonte nenhuma. Então o que falta para uma segunda gravação receber
+    o mesmo tratamento do vídeo principal é exatamente isto: ter as próprias
+    palavras e o próprio envelope.
+
+    O que uma fonte acrescentada NÃO ganha, e é honesto dizer: palma, assobio,
+    take descartado e âncora de rosto. Esses quatro nascem de uma leitura do
+    vídeo inteiro feita para o arquivo principal (a palma marca o começo da
+    gravação, a âncora de rosto vale para o recorte concêntrico), e aplicá-los
+    a um material que entra no meio da montagem daria marcação em cima de
+    coisa nenhuma.
+    """
+    from .transcribe import detect_device, transcribe
+
+    midia = next((m for m in list_media(project.id) if m["id"] == media_id), None)
+    if not midia:
+        raise FileNotFoundError(f"mídia {media_id} não está neste projeto")
+    caminho = midia["path"]
+    info = probe(caminho)
+    if not info.has_audio:
+        raise ValueError(f"{midia.get('name') or caminho} não tem áudio para "
+                         f"transcrever")
+
+    fontes = dict(project.fontes)
+    anterior = fontes.get(media_id) or {}
+    # a ordem é estável: reanalisar a mesma mídia reaproveita a faixa dela, em
+    # vez de empurrar os números e invalidar o que já foi cortado
+    ordem = int(anterior.get("ordem") or (len(fontes) + 1))
+    base = ordem * BASE_POR_FONTE
+
+    ctx.stage("audio", f"extraindo o áudio de {midia.get('name') or 'anexo'}")
+    destino_wav = project.wav_de(media_id)
+    extract_wav(caminho, destino_wav, 16000, 1,
+                on_progress=lambda f: ctx.progress(0.02 + f * 0.18,
+                                                   "extraindo áudio"),
+                duration=info.duration)
+
+    ctx.stage("envelope", "calculando o envelope de energia")
+    samples, sr = read_wav_mono(destino_wav)
+    env = compute_envelope(samples, sr)
+    np.save(project.envelope_de(media_id), env.db)
+    _envelope_cache[f"{project.id}:{media_id}"] = env
+    ctx.progress(0.26, f"piso de ruído em {env.noise_floor:.1f} dB")
+
+    ctx.stage("transcricao", "transcrevendo")
+    resultado = transcribe(
+        samples, info.duration, silence=env.all_silence_runs(0.5),
+        on_progress=lambda f, m: ctx.progress(0.30 + f * 0.62, m),
+        device_info=detect_device(),
+    )
+    ctx.stage("encaixe", "encaixando as palavras no áudio")
+    palavras, encaixes = trim_words(resultado["words"], env)
+    for w in palavras:
+        w["i"] = base + int(w["i"])
+        w["source"] = media_id
+
+    fontes[media_id] = {
+        "ordem": ordem,
+        "base_i": base,
+        "media_id": media_id,
+        "name": midia.get("name") or "",
+        "path": caminho,
+        "duration": info.duration,
+        "words": palavras,
+        "word_fixes": encaixes,
+        "language": resultado.get("language"),
+        "envelope": {"hop": env.hop, "sample_rate": env.sample_rate,
+                     "noise_floor": env.noise_floor,
+                     "silence_threshold": env.silence_threshold,
+                     "speech_threshold": env.speech_threshold,
+                     "audit_threshold": env.audit_threshold,
+                     "duration": env.duration},
+        "analyzed_at": time.time(),
+    }
+    project.analysis = {**project.analysis, "fontes": fontes}
+    project.save_analysis()
+    ctx.progress(1.0, f"{len(palavras)} palavras em "
+                      f"{midia.get('name') or 'anexo'}")
+    return {"media_id": media_id, "ordem": ordem, "base_i": base,
+            "words": len(palavras), "duration": round(info.duration, 2),
+            "noise_floor": round(env.noise_floor, 2),
+            "name": midia.get("name") or ""}
+
+
 def analyze(project: Project, ctx) -> dict:
     """Fase 1: áudio -> envelope -> transcrição -> palmas -> takes."""
     from .transcribe import detect_device, transcribe
@@ -724,6 +873,49 @@ def auto_edit(project: Project, ctx) -> dict:
         c.copy_seam = any(abs(c.src_start - f) < 0.35 for f in fins_de_copy)
 
     plan.clips = result["clips"]
+
+    # AS OUTRAS GRAVAÇÕES, cada uma contra o PRÓPRIO áudio.
+    #
+    # build_auto_plan é função pura de (palavras, envelope, parâmetros): não
+    # toca em project e não sabe de fonte nenhuma. É isso que permite rodar o
+    # corte de silêncio, a subdivisão narrativa e a aceleração por trecho uma
+    # vez por gravação, com o envelope certo em cada uma — e é o envelope certo
+    # que faz a regra 3 continuar valendo. Com o envelope do arquivo principal,
+    # a borda do segundo vídeo cairia num vale que não existe naquele áudio, em
+    # cima de palavra, e o encaixe ainda devolveria uma explicação convincente
+    # sobre o vale errado.
+    #
+    # A ordem da montagem é a ordem das gravações: o principal primeiro, depois
+    # as acrescentadas na ordem em que foram acrescentadas.
+    extras_removidos: list = []
+    extras_palavras: list = []
+    for _mid in project.fontes_com_fala()[1:]:
+        env_extra = project.envelope(_mid)
+        palavras_extra = project.words_de(_mid)
+        if env_extra is None or not palavras_extra:
+            continue
+        # NÚMEROS LOCAIS PARA DENTRO, GLOBAIS PARA FORA. build_spans indexa a
+        # LISTA pelo número da palavra (`words[first["i"] - 1]`, plan_builder
+        # linha 137): ali o número É a posição na lista. Já a identidade que o
+        # resto do programa usa tem que ser única entre as gravações, e é por
+        # isso que a palavra guardada leva o número deslocado pela faixa da
+        # fonte. As duas coisas são verdadeiras ao mesmo tempo; o que falta é
+        # traduzir na entrada e na saída, que é o que estas duas linhas fazem.
+        base = int((project.fontes.get(_mid) or {}).get("base_i") or 0)
+        locais = [{**w, "i": k} for k, w in enumerate(palavras_extra)]
+        r_extra = build_auto_plan(locais, env_extra, project.plan.cut,
+                                  project.plan.speed, [],
+                                  extra_removed=set(), markers=[])
+        for c in r_extra["clips"]:
+            c.source = _mid
+        for reg in r_extra["removed"]:
+            reg.source = _mid
+        plan.clips = plan.clips + r_extra["clips"]
+        extras_removidos += r_extra["removed"]
+        extras_palavras += [base + int(i) for i in r_extra["removed_word_ids"]]
+        ctx.progress(0.55, f"{len(r_extra['clips'])} bloco(s) da gravação "
+                           f"acrescentada, cortados no áudio dela")
+
     if not plan.clips:
         # Vídeo sem fala transcritível (b-roll, microfone mudo) — ou um teste
         # em que a única palavra dita era comando. Antes isto saía como
@@ -738,7 +930,7 @@ def auto_edit(project: Project, ctx) -> dict:
         ctx.progress(0.5, "não achei fala para cortar: o vídeo ficou inteiro. "
                           "Sem transcrição não há corte, legenda nem câmeras.")
     _restaurar_travados(plan.clips, travados)
-    plan.removed = result["removed"]
+    plan.removed = result["removed"] + extras_removidos
     plan.discarded_takes = takes
     plan.claps = project.analysis.get("claps", [])
     plan.whistles = project.analysis.get("whistles", [])
@@ -747,7 +939,8 @@ def auto_edit(project: Project, ctx) -> dict:
     # reancorados pela fonte — refazer a edição não pode custar trabalho manual
     new_tl = Timeline(plan.active_clips, fps)
     remap_output_items(plan, old_tl, new_tl)
-    project.analysis["removed_word_ids"] = result["removed_word_ids"]
+    project.analysis["removed_word_ids"] = (list(result["removed_word_ids"])
+                                           + extras_palavras)
     project.analysis["plan_notes"] = result["notes"]
 
     plan.repeats = saida
@@ -1160,6 +1353,24 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None,
     fps = project.info.fps if project.info else None
     tl = timeline or Timeline(plan.active_clips, fps)
     mapped = remap_words(words, tl)
+
+    # A LEGENDA DAS OUTRAS GRAVAÇÕES. remap_words leva o tempo da palavra da
+    # fonte para a linha do tempo final, e ele PRECISA saber de qual arquivo:
+    # com o padrão "main", uma palavra da segunda gravação não cai dentro de
+    # nenhum clipe principal e o clamp a empurra para a borda mais próxima —
+    # o resultado é a legenda inteira do segundo vídeo empilhada num instante
+    # só. Uma chamada por fonte, e a ordem final é por tempo de saída.
+    regras = db.list_corrections()
+    for _mid in project.fontes_com_fala()[1:]:
+        extras = [w for w in project.words_de(_mid)
+                  if w.get("src_i", w["i"]) not in removed]
+        if not extras:
+            continue
+        corrigidas, _log_extra = apply_corrections(extras, regras)
+        mapped += remap_words(corrigidas, tl, source=_mid)
+    if len(project.fontes_com_fala()) > 1:
+        mapped.sort(key=lambda w: (float(w.get("start", 0.0)),
+                                   float(w.get("end", 0.0))))
     manual = [s for s in plan.subtitles
               if s.edited or getattr(s, "start_off", 0.0)
               or getattr(s, "end_off", 0.0)]

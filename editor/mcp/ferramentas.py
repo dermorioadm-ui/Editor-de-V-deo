@@ -586,6 +586,42 @@ def exportar(c: Cliente, a: dict) -> str:
     return (f"pronto: {nome}{tamanho}{levou}\nna pasta: {pasta}")
 
 
+@ferramenta(
+    "adicionar_video",
+    "Acrescenta outra gravação ao MESMO projeto: ela entra na linha do tempo "
+    "depois do que já está lá, com a fala dela, e recebe o mesmo tratamento do "
+    "primeiro vídeo — transcrição, corte de silêncio, aceleração e legenda. É "
+    "isto que junta várias tomadas num vídeo só. Diferente de anexar, que põe "
+    "uma janela por cima do quadro.",
+    {
+        "properties": {
+            "projeto": {"type": "string"},
+            "caminho": {"type": "string",
+                        "description": "caminho do arquivo na máquina"},
+            "descricao": {"type": "string",
+                          "description": "o que é esta gravação (opcional)"},
+        },
+        "required": ["projeto", "caminho"],
+    },
+)
+def adicionar_video(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    antes = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    job = c.post(f"/api/projects/{pid}/adicionar-video",
+                 {"path": str(a["caminho"]),
+                  "descricao": a.get("descricao") or ""})
+    fim = c.esperar_job(pid, job.get("id", ""))
+    ruim = _falhou(fim)
+    if ruim:
+        return f"acrescentar a gravação {ruim}"
+    r = fim.get("result") or {}
+    return (f"gravação acrescentada: {r.get('name') or a['caminho']}, "
+            f"{r.get('words', '?')} palavras\n"
+            f"o vídeo agora tem {_seg(r.get('duracao_total'))} em "
+            f"{r.get('blocos', '?')} blocos (era {_seg(antes)})\n"
+            f"ela foi cortada no áudio dela, não no do primeiro vídeo.")
+
+
 def chamar(c: Cliente, nome: str, argumentos: dict) -> str:
     """Executa uma ferramenta e SEMPRE devolve texto.
 

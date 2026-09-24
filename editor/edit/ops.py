@@ -15,7 +15,23 @@ EPS = 0.002
 
 
 def _sorted(clips: list[Clip]) -> list[Clip]:
-    return sorted(clips, key=lambda c: (c.source != "main", c.src_start))
+    """Reordena DENTRO de cada gravação, sem trocar a ordem das gravações.
+
+    Antes a chave era ``(c.source != "main", c.src_start)``: todo o arquivo
+    principal em ordem, e tudo que não fosse ele empurrado para o fim. Num
+    projeto de um vídeo só isso nunca apareceu. Com três gravações, a primeira
+    edição jogava a segunda e a terceira para o final do vídeo — a montagem
+    que o usuário escolheu era desfeita por um detalhe de ordenação.
+
+    Agora a ordem das gravações é a ordem em que elas já estão na lista (é a
+    montagem), e o que se ordena é o interior de cada uma pelo tempo na fonte,
+    que é o que ``cut_source_range`` precisa depois de partir um bloco.
+    """
+    ordem: dict[str, int] = {}
+    for c in clips:
+        if c.source not in ordem:
+            ordem[c.source] = len(ordem)
+    return sorted(clips, key=lambda c: (ordem[c.source], c.src_start))
 
 
 def cut_source_range(clips: list[Clip], start: float, end: float,

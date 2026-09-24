@@ -333,6 +333,43 @@ def api_proxy_status(pid: str) -> dict:
                            if project.proxy_ok else 0)}
 
 
+@app.post("/api/projects/{pid}/adicionar-video")
+def api_adicionar_video(pid: str, payload: dict = Body(...)) -> dict:
+    """Acrescenta uma gravação ao projeto e a trata como o vídeo principal.
+
+    Não é o mesmo que anexar uma janela (``/overlays``) nem cobrir um trecho
+    (``/cutaways``): isto é MONTAGEM — o vídeo entra na linha do tempo depois
+    do que já está lá, com a fala dele, e recebe o mesmo tratamento do
+    primeiro: transcrição, corte de silêncio contra o PRÓPRIO envelope,
+    aceleração por trecho e legenda.
+
+    Roda como trabalho de fundo porque transcrever é a parte cara. No fim,
+    refaz a edição automática, que é o que monta os blocos das duas gravações
+    na mesma linha do tempo.
+    """
+    project = _project(pid)
+    caminho = str(payload.get("path") or payload.get("caminho") or "").strip()
+    if not caminho:
+        raise HTTPException(400, "informe o caminho do vídeo")
+    try:
+        midia = svc.add_media(pid, caminho, "video",
+                              name=str(payload.get("name") or ""),
+                              descricao=str(payload.get("descricao") or ""))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    def trabalho(ctx):
+        p = svc.load(pid)
+        info = svc.analisar_midia(p, midia["id"], ctx)
+        ctx.stage("edicao", "montando as duas gravações na mesma linha")
+        svc.auto_edit(svc.load(pid), ctx)
+        p2 = svc.load(pid)
+        return {**info, "duracao_total": round(svc.duracao_de_saida(p2), 2),
+                "blocos": len(p2.plan.active_clips)}
+
+    return _run("adicionar", pid, trabalho)
+
+
 @app.post("/api/projects/{pid}/analyze")
 def api_analyze(pid: str) -> dict:
     _project(pid)

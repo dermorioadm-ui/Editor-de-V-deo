@@ -123,6 +123,13 @@ class RemovedRegion:
     reason: str = "silencio"        # silencio | palma | manual | vicio | texto
     restorable: bool = True
     detail: str = ""
+    # DE QUAL GRAVAÇÃO. start e end são tempo DENTRO de um arquivo, não na
+    # linha do tempo final. Num projeto com duas gravações, "de 3,2 s a 5,0 s"
+    # sem dizer de qual arquivo é uma coordenada sem mapa: o vermelho da trilha
+    # apareceria no lugar errado e "recuperar trecho" devolveria pedaço do
+    # vídeo errado. Projeto antigo não tem o campo e cai em "main", que é o
+    # que ele sempre foi.
+    source: str = "main"
 
     def to_dict(self) -> dict:
         return asdict(self)

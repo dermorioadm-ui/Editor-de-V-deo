@@ -124,6 +124,15 @@ def main() -> int:
               "não existe ferramenta de apagar, revelar pasta ou trocar a "
               "pasta de saída — isso é botão dele, na tela")
 
+        # juntar gravações é um gesto DIFERENTE de anexar uma janela, e a
+        # descrição tem que dizer isso: são as duas coisas que ele mais
+        # confunde ao pedir, e o modelo escolhe pela descrição
+        junta = next((f for f in ferramentas if f["name"] == "adicionar_video"),
+                     None)
+        check(junta is not None, "existe ferramenta de acrescentar gravação")
+        check(junta and "janela" in junta["description"],
+              "e a descrição dela distingue de anexar uma janela por cima")
+
         # ---- 2) cada ferramenta MUDA alguma coisa ----------------------
         texto = F.chamar(cliente, "estado_do_editor", {})
         check("ffmpeg" in texto and "editor no ar" in texto,
