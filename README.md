@@ -32,6 +32,7 @@ da pasta onde ele já está.
 10. [Como funciona por dentro](#10-como-funciona-por-dentro)
 11. [Ajustes por variável de ambiente](#ajustes-por-variável-de-ambiente)
 12. [A aba IA](#12-a-aba-ia)
+13. [Mandar o Claude editar por você](#13-mandar-o-claude-editar-por-você)
 
 ---
 
@@ -1301,3 +1302,81 @@ o bastante para você reconhecer qual é. Isso importa porque o
 qualquer um na sua rede local alcança as rotas.
 
 Sem internet, a aba IA avisa e o resto do editor continua igual.
+
+---
+
+## 13. Mandar o Claude editar por você
+
+Você diz o nome do arquivo e o que quer; o Claude que está instalado **na sua
+máquina** faz a edição no Sharkcut. Não é a nuvem editando: é o Claude daí
+falando com o editor daí.
+
+### O que trafega, e o que não trafega
+
+**O vídeo não sai da máquina.** As ferramentas recebem o **caminho** do
+arquivo no disco — `C:\Users\...\gravacao.mp4` —, nunca o arquivo. Quem abre
+e lê o vídeo é o ffmpeg, no seu computador, como sempre foi. A regra número um
+do programa continua valendo por construção, não por promessa.
+
+### Ligar (uma vez só)
+
+1. Abra o Sharkcut como sempre: **`iniciar.bat`**. Deixe aberto — o Claude
+   conversa com esse editor.
+2. No Claude Code, registre o servidor. Numa janela de terminal, na pasta do
+   projeto:
+
+   ```
+   claude mcp add sharkcut -- cmd /c "%CD%\mcp.bat"
+   ```
+
+   No Claude Desktop, o arquivo de configuração leva a mesma coisa:
+
+   ```json
+   {
+     "mcpServers": {
+       "sharkcut": {
+         "command": "cmd",
+         "args": ["/c", "C:\\caminho\\da\\pasta\\mcp.bat"]
+       }
+     }
+   }
+   ```
+
+   Troque `C:\caminho\da\pasta` pela pasta onde está o `mcp.bat` (é a mesma
+   do `iniciar.bat`).
+
+3. Pergunte ao Claude **"o editor está no ar?"**. Se ele responder com o ffmpeg,
+   a GPU e a pasta de saída, está ligado.
+
+### O que dá para pedir
+
+Em português, do jeito que você falaria:
+
+- *"abre o C:\Videos\vsl-nova.mp4 e me entrega em vertical"*
+- *"resume para 45 segundos"*
+- *"me mostra a transcrição das primeiras 60 palavras"* — e depois *"tira as
+  palavras 31 a 36"*
+- *"põe o C:\Fotos\selo.png no segundo 12, por 3 segundos, redondo, entrando
+  da esquerda"*
+- *"põe essa música de fundo em -20 dB"*
+- *"exporta e me diz onde ficou"*
+
+São dezesseis ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
+animar, recortar em forma, efeitos, trilha, formatos, exportar, listar projetos
+e estado do editor.
+
+### O que ele NÃO pode fazer, de propósito
+
+Não existe ferramenta para **apagar projeto**, **abrir pasta no Explorer** ou
+**trocar a pasta de saída**. São gestos irreversíveis ou que saem do editor, e
+a máquina é sua: esses botões são seus, na tela.
+
+### Se não funcionar
+
+- **"o editor não respondeu em 127.0.0.1"** — o Sharkcut não está aberto. Rode
+  o `iniciar.bat`.
+- **o Claude não lista as ferramentas** — confira o caminho do `mcp.bat` na
+  configuração. Ele precisa ser o caminho completo.
+- **nada aparece e nenhum erro** — o `mcp.bat` não pode imprimir nada na saída
+  padrão: a conversa é por ali. Se você acrescentou um `echo` nele, tire.

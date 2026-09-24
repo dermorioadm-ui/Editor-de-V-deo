@@ -51,7 +51,22 @@ def cut_source_range(clips: list[Clip], start: float, end: float,
 
 
 def _clone(clip: Clip, src_start: float, src_end: float) -> Clip:
+    """Metade de um bloco, com os campos compostos COPIADOS, não emprestados.
+
+    ``Clip(**clip.__dict__)`` é cópia rasa: a lista de efeitos, o dicionário da
+    foto, o do fit e os dois snaps ficavam sendo O MESMO objeto nas duas
+    metades. Dividir um bloco e depois mexer no efeito de uma metade mexia na
+    outra — e pior, mexia calado, porque nada no plano denuncia dois itens
+    apontando para a mesma lista. Um `deepcopy` do clipe inteiro resolveria e
+    seria mais caro; aqui só os campos que têm interior precisam de cópia.
+    """
+    import copy
+
     new = Clip(**{**clip.__dict__, "id": new_id("c_")})
+    for campo in ("effects", "photo", "fit", "snap_in", "snap_out"):
+        valor = getattr(new, campo, None)
+        if isinstance(valor, (list, dict)):
+            setattr(new, campo, copy.deepcopy(valor))
     new.src_start = round(src_start, 4)
     new.src_end = round(src_end, 4)
     new.measured_duration = None

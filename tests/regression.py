@@ -329,6 +329,7 @@ def main() -> int:
     testar_faixas_empilham_e_rotas_aceitam()
     testar_emudecer_um_bloco_sai_no_arquivo()
     testar_efeitos_mexem_no_pixel()
+    testar_dividir_bloco_nao_compartilha_interior()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4839,6 +4840,50 @@ def testar_efeitos_mexem_no_pixel() -> None:
               f"e sem ele ela fica firme ({firme:.1f} px)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_dividir_bloco_nao_compartilha_interior() -> None:
+    """Dividir um bloco tem que dar dois blocos INDEPENDENTES.
+
+    ``_clone`` fazia ``Clip(**clip.__dict__)``, que é cópia rasa: a lista de
+    efeitos, o dicionário do fit, o da foto e os dois snaps ficavam sendo O
+    MESMO objeto nas duas metades. Mexer no efeito de uma mexia na outra — e
+    mexia calado, porque nada no plano denuncia dois itens apontando para a
+    mesma lista. O sintoma que o usuário veria é o pior tipo: ele ajusta uma
+    metade, olha a outra e ela mudou sozinha.
+    """
+    from editor.edit.ops import _clone, cut_source_range
+    from editor.models import Clip
+
+    c = Clip(src_start=0.0, src_end=4.0,
+             effects=[{"kind": "vinheta", "amount": 0.5}],
+             fit={"brightness": 0.1},
+             snap_in={"reason": "vale"})
+    a = _clone(c, 0.0, 2.0)
+    b = _clone(c, 2.0, 4.0)
+    a.effects[0]["amount"] = 0.9
+    a.fit["brightness"] = 0.9
+    a.effects.append({"kind": "desfoque", "sigma": 5})
+    a.snap_in["reason"] = "outro"
+    check(abs(b.effects[0]["amount"] - 0.5) < 1e-9 and len(b.effects) == 1,
+          f"mexer no efeito de uma metade não mexe na outra "
+          f"({b.effects[0]['amount']}, {len(b.effects)} efeito(s))")
+    check(abs(b.fit["brightness"] - 0.1) < 1e-9,
+          f"nem no fit ({b.fit['brightness']})")
+    check(b.snap_in["reason"] == "vale",
+          f"nem no snap ({b.snap_in['reason']})")
+    check(abs(c.effects[0]["amount"] - 0.5) < 1e-9,
+          "e o bloco original também fica intacto")
+
+    # e pelo caminho de verdade: um corte no meio parte o bloco em dois
+    partidos, _ = cut_source_range(
+        [Clip(src_start=0.0, src_end=4.0,
+              effects=[{"kind": "desfoque", "sigma": 6}])], 1.8, 2.2)
+    check(len(partidos) == 2, f"o corte partiu em dois ({len(partidos)})")
+    partidos[0].effects[0]["sigma"] = 40
+    check(abs(partidos[1].effects[0]["sigma"] - 6) < 1e-9,
+          f"e as duas metades do corte real também são independentes "
+          f"({partidos[1].effects[0]['sigma']})")
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

@@ -21,6 +21,7 @@ editor-de-video = "editor.__main__:main"
 [tool.setuptools]
 packages = [
     "editor", "editor.audio", "editor.edit", "editor.subtitles", "editor.render",
+    "editor.mcp",
 ]
 
 [tool.setuptools.package-data]
