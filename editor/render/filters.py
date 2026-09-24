@@ -152,8 +152,24 @@ def janela_no_trecho(o, clip_out_start: float) -> tuple[float, float]:
 
 def overlay_inputs(overlays: list, clip_out_start: float,
                    clip_out_end: float) -> list:
-    return [o for o in overlays
-            if o.enabled and o.out_end > clip_out_start and o.out_start < clip_out_end]
+    """As sobreposições deste trecho, JÁ NA ORDEM DE EMPILHAMENTO.
+
+    ``overlay_chain`` encadeia uma sobre a outra na ordem em que as recebe, e
+    quem vem depois fica por cima. Antes essa ordem era a da lista, e a ordem da
+    lista é a ordem em que o usuário anexou: para pôr um cartão ATRÁS de uma
+    janela já anexada não havia gesto nenhum — só apagar as duas e anexar na
+    ordem contrária.
+
+    Agora quem manda é ``track``: número maior fica na frente. O desempate
+    continua sendo a posição na lista, então plano antigo (tudo em ``track=0``)
+    desenha exatamente como desenhava — e é por isso que a chave ``ordem``
+    entra no critério em vez de o ``sorted`` ser só por faixa.
+    """
+    vivos = [(i, o) for i, o in enumerate(overlays)
+             if o.enabled and o.out_end > clip_out_start
+             and o.out_start < clip_out_end]
+    vivos.sort(key=lambda par: (int(getattr(par[1], "track", 0) or 0), par[0]))
+    return [o for _i, o in vivos]
 
 
 # extensões que entram no ffmpeg como VÍDEO (lidas com -ss/-t), e não em

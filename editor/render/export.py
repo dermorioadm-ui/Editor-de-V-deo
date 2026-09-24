@@ -32,7 +32,16 @@ def _hash_audio(plan: EditPlan, timeline, clip_durations: dict,
         "s": p.clip.source, "a": round(p.clip.src_start, 4),
         "b": round(p.clip.src_end, 4), "v": round(p.clip.speed, 4),
         "m": round(clip_durations.get(p.clip.id, 0.0), 4),
-        "k": p.clip.kind, "mudo": bool(getattr(p.clip, "muted", False)),
+        # MUDO PELO CAMPO QUE EXISTE. Aqui estava
+        # `bool(getattr(p.clip, "muted", False))`, e Clip nunca teve campo
+        # `muted`: o getattr devolvia o padrão False para todo bloco, sempre.
+        # O campo real é `audio`, que o render lê em renderer.py:1008 e a rota
+        # escreve em server.py:1367. O efeito era o pior que este cache pode
+        # ter: emudecer um bloco não mexia na chave, o audio.wav era
+        # reaproveitado e A FALA CONTINUAVA NO ARQUIVO EXPORTADO — o usuário
+        # mandava calar, via o bloco marcado como mudo na tela e ouvia a voz
+        # no vídeo que foi para a pasta.
+        "k": p.clip.kind, "mudo": p.clip.audio == "mute",
     } for p in timeline]
     payload = {
         "blocos": blocos,

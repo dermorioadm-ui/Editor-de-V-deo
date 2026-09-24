@@ -27,6 +27,7 @@ from .edit.audit import apply_fix, audit_edges
 from .ffmpeg_utils import hw_encoders
 from .jobs import get_queue, hub
 from .models import BlurRegion, Clip, Cutaway, Overlay
+from .render import animacao as A
 from .subtitles import ass as ass_mod
 
 app = FastAPI(title="Sharkcut", docs_url="/api/docs", redoc_url=None)
@@ -1426,7 +1427,11 @@ def api_overlay(pid: str, payload: dict = Body(...)) -> dict:
                 anim_in=payload.get("anim_in", "fade"),
                 anim_out=payload.get("anim_out", "fade"),
                 dur_in=float(payload.get("dur_in", 0.35)),
-                dur_out=float(payload.get("dur_out", 0.35)))
+                dur_out=float(payload.get("dur_out", 0.35)),
+                rotation=float(payload.get("rotation", 0.0)),
+                track=int(payload.get("track", 0)),
+                keyframes=A.normalizar_marcos(payload.get("keyframes")),
+                mask=A.normalizar_mascara(payload.get("mask")))
     project.plan.overlays.append(o)
     project.save_plan()
     return {"ok": True, "overlay": o.to_dict(), "ajustes": janela.ajustes}
@@ -1440,11 +1445,20 @@ def api_overlay_update(pid: str, oid: str, payload: dict = Body(...)) -> dict:
             for k, cast in (("out_start", float), ("out_end", float), ("x", float),
                             ("y", float), ("scale", float), ("opacity", float),
                             ("dur_in", float), ("dur_out", float),
-                            ("media_start", float),
+                            ("media_start", float), ("rotation", float),
+                            ("track", int),
                             ("anim_in", str), ("anim_out", str),
                             ("enabled", bool)):
                 if k in payload:
                     setattr(o, k, cast(payload[k]))
+            # OS CAMPOS COMPOSTOS PASSAM PELA NORMALIZAÇÃO, sempre. O render
+            # monta expressão de ffmpeg com estes números: um "t" que é texto
+            # ou um NaN não dá um marco errado, dá um trecho que o ffmpeg se
+            # recusa a encodar — e o sintoma é um buraco no vídeo exportado.
+            if "keyframes" in payload:
+                o.keyframes = A.normalizar_marcos(payload["keyframes"])
+            if "mask" in payload:
+                o.mask = A.normalizar_mascara(payload["mask"])
             project.save_plan()
             return {"ok": True, "overlay": o.to_dict()}
     raise HTTPException(404, "sobreposição não encontrada")
@@ -1491,7 +1505,13 @@ def api_blur_update(pid: str, bid: str, payload: dict = Body(...)) -> dict:
             if "shape" in payload:
                 b.shape = str(payload["shape"])
             if "keyframes" in payload:
-                b.keyframes = payload["keyframes"]
+                # antes isto gravava a lista CRUA que veio do cliente. O render
+                # monta expressão de ffmpeg com esses números, e um marco
+                # malformado não dá uma caixa errada: dá um trecho que o ffmpeg
+                # se recusa a encodar.
+                b.keyframes = A.normalizar_marcos(
+                    payload["keyframes"], A.CHAVES_DO_DESFOQUE,
+                    exigir_todas=True)
             if "enabled" in payload:
                 b.enabled = bool(payload["enabled"])
             project.save_plan()

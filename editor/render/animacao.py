@@ -256,3 +256,110 @@ def texto_dos_comandos(keyframes: list | None, chave: str, t0: float,
         linhas.append(f"{t:.4f} {filtro} {opcao} {v:.5f};")
         t += passo
     return "\n".join(linhas) + "\n"
+
+
+# ---------------------------------------------------- entrada do lado de fora
+# NADA QUE VEM DE FORA ENTRA NO PLANO SEM PASSAR POR AQUI. O plano é lido pelo
+# render, que monta expressão de ffmpeg com esses números: um "t" que é texto,
+# um NaN ou uma lista dentro de lista viram expressão inválida e o ffmpeg
+# ABORTA O TRECHO INTEIRO. O sintoma não é um marco errado — é um buraco no
+# vídeo exportado. A rota do desfoque já gravava keyframes crus, sem conferir
+# nada; estas funções existem para isso não se repetir.
+LIMITES = {
+    "x": (-2.0, 3.0),
+    "y": (-2.0, 3.0),
+    "scale": (0.01, 20.0),
+    "opacity": (0.0, 1.0),
+    "rotation": (-3600.0, 3600.0),
+    # os marcos do DESFOQUE falam de uma caixa, não das propriedades de uma
+    # janela: x, y, largura e altura, todos em fração do quadro
+    "w": (0.01, 1.0),
+    "h": (0.01, 1.0),
+}
+# o desfoque interpola com filters._piecewise, que trata chave AUSENTE como o
+# valor padrão em vez de ignorar o marco. Por isso um marco de desfoque só vale
+# se trouxer as QUATRO chaves: perder uma faria a caixa saltar para o padrão no
+# meio do movimento, em cima do rosto que ela existe para cobrir.
+CHAVES_DO_DESFOQUE = ("x", "y", "w", "h")
+MAX_MARCOS = 400          # 400 marcos são 13 s a 30 fps de movimento desenhado
+                          # à mão; acima disso é cliente com defeito, não gesto
+
+
+def _limitar(chave: str, v: float) -> float:
+    lo, hi = LIMITES.get(chave, (-1e6, 1e6))
+    return max(lo, min(hi, v))
+
+
+def normalizar_marcos(bruto, chaves=None, exigir_todas: bool = False) -> list:
+    """Lista de marcos confiável, ou [] — nunca levanta.
+
+    Descarta o que não dá para usar em silêncio, de propósito: recusar a
+    edição inteira porque um marco veio torto faria o usuário perder o gesto
+    todo. O que sobrevive é garantidamente numérico e finito.
+
+    ``chaves`` são as propriedades aceitas (por omissão as da sobreposição).
+    ``exigir_todas`` derruba o marco que não trouxer todas elas — é o que o
+    desfoque precisa, porque a interpolação dele completa chave ausente com o
+    padrão em vez de ignorar o marco.
+    """
+    import math
+
+    if not isinstance(bruto, list):
+        return []
+    aceitas = tuple(chaves) if chaves else tuple(PROPRIEDADES)
+    fora: list[dict] = []
+    for item in bruto[:MAX_MARCOS]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            t = float(item.get("t"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(t):
+            continue
+        marco: dict = {"t": round(max(0.0, t), 4)}
+        for chave in aceitas:
+            if chave not in item or item[chave] is None:
+                continue
+            try:
+                v = float(item[chave])
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v):
+                continue
+            marco[chave] = round(_limitar(chave, v), 6)
+        curva_pedida = str(item.get("easing", item.get("curva", "linear")))
+        if curva_pedida in CURVAS and curva_pedida != "linear":
+            marco["easing"] = curva_pedida
+        # marco que não fala de nenhuma propriedade não é marco
+        if exigir_todas:
+            if all(k in marco for k in aceitas):
+                fora.append(marco)
+        elif any(k in marco for k in aceitas):
+            fora.append(marco)
+    fora.sort(key=lambda m: m["t"])
+    return fora
+
+
+def normalizar_mascara(bruto) -> dict | None:
+    """Máscara confiável, ou None. ``{"shape": null}`` tira a máscara."""
+    import math
+
+    if not isinstance(bruto, dict):
+        return None
+    forma = str(bruto.get("shape", bruto.get("forma", "")) or "")
+    if forma not in FORMAS:
+        return None
+    limpa: dict = {"shape": forma}
+    faixas = {"cx": (0.0, 1.0, 0.5), "cy": (0.0, 1.0, 0.5),
+              "rx": (0.02, 1.0, 0.5), "ry": (0.02, 1.0, 0.5),
+              "radius": (0.01, 0.99, 0.18), "feather": (0.001, 1.0, 0.04)}
+    for chave, (lo, hi, padrao) in faixas.items():
+        try:
+            v = float(bruto.get(chave, padrao))
+        except (TypeError, ValueError):
+            v = padrao
+        if not math.isfinite(v):
+            v = padrao
+        limpa[chave] = round(max(lo, min(hi, v)), 5)
+    return limpa

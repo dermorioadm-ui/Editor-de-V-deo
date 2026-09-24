@@ -326,6 +326,8 @@ def main() -> int:
     testar_keyframes_animam_de_verdade()
     testar_marcos_acompanham_o_corte()
     testar_marcos_nao_reencodam_o_resto()
+    testar_faixas_empilham_e_rotas_aceitam()
+    testar_emudecer_um_bloco_sai_no_arquivo()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4393,6 +4395,266 @@ def testar_marcos_nao_reencodam_o_resto() -> None:
               f"trechos da janela animada acham o próprio arquivo "
               f"({len(novos)} novos; com o t absoluto eram 4)")
     finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_faixas_empilham_e_rotas_aceitam() -> None:
+    """Faixa decide quem fica na frente, e a tela consegue pedir isso.
+
+    Duas metades, as duas necessárias:
+
+    1) EMPILHAMENTO. ``overlay_chain`` encadeia uma sobreposição sobre a outra
+       na ordem em que as recebe, e quem vem depois fica por cima. Essa ordem
+       era a da lista, e a ordem da lista é a ordem em que o usuário anexou:
+       para pôr um cartão ATRÁS de uma janela já anexada não havia gesto —
+       só apagar as duas e anexar na ordem contrária. Conferido no pixel.
+
+    2) O CAMINHO ATÉ LÁ. Rotação, faixa, marcos e máscara existiam no modelo e
+       o render já os consumia, mas NENHUMA rota os aceitava: a capacidade
+       estava inalcançável pela tela. E o que vem de fora passa a ser
+       normalizado — o render monta expressão de ffmpeg com esses números, e um
+       marco malformado não dá um marco errado, dá um trecho que o ffmpeg se
+       recusa a encodar.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.models import Clip, Overlay
+    from editor.render import animacao as A
+    from editor.render.filters import overlay_chain, overlay_inputs
+    from editor.server import app
+
+    # ---- 1) empilhamento, no pixel ------------------------------------
+    tmp = Path(tempfile.mkdtemp(prefix="faixas_"))
+    try:
+        base = tmp / "base.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=black:s=320x240:r=10:d=1",
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", str(base)], check=True)
+        cores = {}
+        for nome, cor in (("vermelho", "red"), ("azul", "blue")):
+            alvo = tmp / f"{nome}.png"
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                            "-i", f"color=c={cor}:s=120x120:d=1", "-frames:v", "1",
+                            str(alvo)], check=True)
+            cores[nome] = alvo
+
+        def quem_esta_na_frente(track_vermelho: int, track_azul: int) -> str:
+            """Renderiza as duas na MESMA janela e no MESMO lugar e lê o centro."""
+            ov = [
+                Overlay(id="o_vm", media_id="vm", out_start=0.0, out_end=1.0,
+                        x=0.5, y=0.5, anim_in="none", anim_out="none",
+                        track=track_vermelho),
+                Overlay(id="o_az", media_id="az", out_start=0.0, out_end=1.0,
+                        x=0.5, y=0.5, anim_in="none", anim_out="none",
+                        track=track_azul),
+            ]
+            caminhos = {"vm": str(cores["vermelho"]), "az": str(cores["azul"])}
+            ordenadas = overlay_inputs(ov, 0.0, 1.0)
+            g, ent = overlay_chain(ordenadas, caminhos, 0.0, 320, 240, 1,
+                                   "0:v", "vout", ref_height=240, ref_width=320)
+            cmd = [FFMPEG, "-y", "-v", "error", "-i", str(base)]
+            for e in ent:
+                cmd += ["-loop", "1", "-framerate", "10", "-t", "2", "-i", e["path"]]
+            saida = tmp / f"pilha_{track_vermelho}{track_azul}.mp4"
+            cmd += ["-filter_complex", g, "-map", "[vout]", "-t", "1", str(saida)]
+            subprocess.run(cmd, check=True)
+            px = subprocess.run([FFMPEG, "-v", "error", "-ss", "0.5", "-i", str(saida),
+                                 "-frames:v", "1", "-f", "rawvideo",
+                                 "-pix_fmt", "rgb24", "-"],
+                                capture_output=True).stdout
+            i = (120 * 320 + 160) * 3
+            r, _g, b = px[i], px[i + 1], px[i + 2]
+            return "vermelho" if r > b else "azul"
+
+        check(quem_esta_na_frente(0, 1) == "azul",
+              "com o azul na faixa de cima, o azul aparece")
+        check(quem_esta_na_frente(1, 0) == "vermelho",
+              "invertendo as faixas, o vermelho aparece — é a faixa que manda, "
+              "não a ordem em que foi anexado")
+
+        # desempate: mesma faixa volta a ser a ordem da lista, que é o que
+        # plano antigo (tudo em track=0) sempre fez
+        ids = [o.id for o in overlay_inputs(
+            [Overlay(id=x, out_start=0, out_end=2) for x in ("p", "q", "r")], 0, 2)]
+        check(ids == ["p", "q", "r"],
+              "na mesma faixa vale a ordem da lista — plano antigo desenha igual")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- 2) as rotas aceitam, e limpam o que vem sujo -----------------
+    tmp2 = Path(tempfile.mkdtemp(prefix="faixas_rota_"))
+    projeto = None
+    try:
+        fonte = tmp2 / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "color=c=0x303030:s=320x240:r=30:d=6",
+                        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                        "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+        selo = tmp2 / "selo.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=yellow:s=60x60:d=1", "-frames:v", "1",
+                        str(selo)], check=True)
+        projeto = svc.create(str(fonte), "faixas", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=6.0)]
+        projeto.save_plan()
+        midia = svc.add_media(projeto.id, str(selo), "image", "selo")
+        cliente = TestClient(app)
+
+        r = cliente.post(f"/api/projects/{projeto.id}/overlays", json={
+            "media_id": midia["id"], "out_start": 1.0, "out_end": 4.0,
+            "rotation": 12.5, "track": 2,
+            "keyframes": [{"t": 1.0, "x": 0.2}, {"t": 4.0, "x": 0.8,
+                                                 "easing": "suave"}],
+            "mask": {"shape": "elipse", "feather": 0.1},
+        })
+        check(r.status_code == 200, f"a rota aceita criar com os campos novos ({r.status_code})")
+        o = r.json()["overlay"]
+        check(abs(o["rotation"] - 12.5) < 1e-6 and o["track"] == 2,
+              f"rotação e faixa chegam (rotation={o['rotation']}, track={o['track']})")
+        check(len(o["keyframes"]) == 2 and o["keyframes"][1]["easing"] == "suave",
+              f"os marcos chegam com a curva ({o['keyframes']})")
+        check((o["mask"] or {}).get("shape") == "elipse",
+              f"a máscara chega ({o['mask']})")
+        oid = o["id"]
+
+        # o PUT também, e o que vem sujo é limpo em vez de virar buraco no vídeo
+        r2 = cliente.put(f"/api/projects/{projeto.id}/overlays/{oid}", json={
+            "track": 5, "rotation": -30.0,
+            "keyframes": [{"t": "isto nao e numero", "x": 0.5},
+                          {"t": 2.0, "x": 99.0},
+                          {"t": 1.0, "opacity": 0.4, "easing": "xpto"},
+                          "nem isto e um marco"],
+            "mask": {"shape": "poligono_maluco"},
+        })
+        check(r2.status_code == 200, f"o PUT aceita ({r2.status_code})")
+        o2 = r2.json()["overlay"]
+        check(o2["track"] == 5 and abs(o2["rotation"] + 30.0) < 1e-6,
+              "faixa e rotação atualizam pelo PUT")
+        ts = [m["t"] for m in o2["keyframes"]]
+        check(ts == [1.0, 2.0],
+              f"o marco com t inválido e o que não é dicionário caem; o resto "
+              f"fica em ordem ({ts})")
+        check(o2["keyframes"][1]["x"] <= 3.0,
+              f"x fora de faixa é limitado em vez de virar expressão absurda "
+              f"({o2['keyframes'][1]['x']})")
+        check("easing" not in o2["keyframes"][0],
+              "curva desconhecida cai para linear em vez de entrar no plano")
+        check(o2["mask"] is None,
+              f"forma que não existe não vira máscara ({o2['mask']})")
+
+        # e o marco do desfoque exige as quatro chaves da caixa
+        r3 = cliente.post(f"/api/projects/{projeto.id}/blurs",
+                          json={"out_start": 1.0, "out_end": 2.0})
+        if r3.status_code == 200:
+            bid = r3.json()["blur"]["id"]
+            r4 = cliente.put(f"/api/projects/{projeto.id}/blurs/{bid}", json={
+                "keyframes": [{"t": 1.0, "x": 0.3, "y": 0.3, "w": 0.2, "h": 0.2},
+                              {"t": 1.5, "x": 0.4}]})
+            if r4.status_code == 200:
+                kfs = r4.json()["blur"]["keyframes"]
+                check(len(kfs) == 1,
+                      f"marco de desfoque sem as quatro chaves da caixa cai — "
+                      f"completar com o padrão faria a caixa saltar de cima do "
+                      f"rosto ({len(kfs)} de 2)")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp2, ignore_errors=True)
+
+
+def testar_emudecer_um_bloco_sai_no_arquivo() -> None:
+    """Mandar calar um bloco tem que calar no arquivo, não só na tela.
+
+    O áudio final tem cache: o loudnorm são duas passadas sobre a faixa
+    inteira, e ela não muda quando o retoque foi visual. A chave desse cache
+    perguntava ``getattr(clip, "muted", False)`` — e Clip NUNCA teve campo
+    ``muted``. O getattr devolvia o padrão para todo bloco, sempre. O campo
+    real é ``audio``.
+
+    O efeito era o pior que um cache pode ter: o usuário emudecia o bloco, a
+    tela mostrava o bloco mudo, a chave não mexia, o audio.wav era
+    reaproveitado — e a voz continuava no vídeo que foi para a pasta. Este
+    teste exporta duas vezes e OUVE o resultado.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import projects as svc
+    from editor.config import ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import extract_wav, read_wav_mono
+    from editor.models import Clip
+    from editor.render.export import _hash_audio
+    from tests.e2e import Ctx
+
+    # a chave tem que reagir ao campo certo
+    from editor.models import EditPlan
+    plano = EditPlan()
+    plano.clips = [Clip(src_start=0.0, src_end=2.0), Clip(src_start=2.0, src_end=4.0)]
+    fontes = {"main": {"path": "/x.mp4"}}
+    antes = _hash_audio(plano, Timeline(plano.active_clips, 30.0), {}, fontes)
+    plano.clips[1].audio = "mute"
+    depois = _hash_audio(plano, Timeline(plano.active_clips, 30.0), {}, fontes)
+    check(antes != depois,
+          "emudecer um bloco MUDA a chave do áudio (era o campo inexistente "
+          "'muted' — a chave nunca mexia)")
+
+    # e no arquivo: dois blocos com tom, o segundo emudecido na segunda volta
+    tmp = Path(tempfile.mkdtemp(prefix="mudo_"))
+    projeto = None
+    try:
+        dur = 4.0
+        fonte = write_video(tmp / "fonte.mp4", build([(0.2, 1.8), (2.2, 3.8)], dur),
+                            dur, 180, 320, 30)
+        projeto = svc.create(str(fonte), "mudo", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=2.0),
+                              Clip(src_start=2.0, src_end=4.0)]
+        projeto.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                           preset="ultrafast", crf=30)
+        projeto.save_plan()
+        ctx = Ctx(quiet=True)
+
+        def energia_do_fim() -> float:
+            r = svc.export(svc.load(projeto.id), ctx,
+                           {"filename": "mudo.mp4", "overwrite": True,
+                            "output_dir": str(tmp)})
+            saida = Path(r["output"])
+            wav = tmp / "saida.wav"
+            extract_wav(saida, wav, 16000, 1)
+            amostras, sr = read_wav_mono(wav)
+            # a metade final do arquivo é o segundo bloco
+            metade = amostras[len(amostras) // 2:]
+            return float(np.sqrt(np.mean(metade.astype(np.float64) ** 2)))
+
+        com_som = energia_do_fim()
+        p2 = svc.load(projeto.id)
+        p2.plan.clips[1].audio = "mute"
+        p2.save_plan()
+        mudo = energia_do_fim()
+        check(com_som > 1e-4,
+              f"o segundo bloco tinha som antes ({com_som:.5f})")
+        check(mudo < com_som * 0.35,
+              f"e depois de mandar calar ele CALOU no arquivo "
+              f"({com_som:.5f} → {mudo:.5f}) — com a chave antiga o áudio "
+              f"vinha do cache e a voz continuava lá")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
         shutil.rmtree(tmp, ignore_errors=True)
 
 
