@@ -325,6 +325,7 @@ def main() -> int:
     testar_resumo_para_caber()
     testar_keyframes_animam_de_verdade()
     testar_marcos_acompanham_o_corte()
+    testar_marcos_nao_reencodam_o_resto()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4105,7 +4106,8 @@ def testar_keyframes_animam_de_verdade() -> None:
     from editor.config import FFMPEG
     from editor.models import Overlay
     from editor.render import animacao as A
-    from editor.render.filters import overlay_chain
+    from editor.render import mascara as Msk
+    from editor.render.filters import janela_no_trecho, overlay_chain
 
     # 1) o motor: um marco só é valor fixo; dois marcos iguais não é animação
     check(not A.tem_animacao([{"t": 0, "x": 0.3}], "x"),
@@ -4146,9 +4148,30 @@ def testar_keyframes_animam_de_verdade() -> None:
                         "-i", "color=c=red:s=100x100:d=1", "-frames:v", "1",
                         str(png)], check=True)
 
+        def montar(ov: Overlay) -> tuple[str, list]:
+            """O mesmo preparo que o renderer faz antes de montar o grafo."""
+            mascaras, comandos = {}, {}
+            if getattr(ov, "mask", None):
+                m = Msk.preparar(ov.mask, str(png), tmp / "sobrepor")
+                if m:
+                    mascaras[ov.id] = m
+            kfs = getattr(ov, "keyframes", None) or []
+            if A.tem_animacao(kfs, "opacity"):
+                ini, fim = janela_no_trecho(ov, 0.0)
+                texto = A.texto_dos_comandos(kfs, "opacity", ini, fim - ini, 10.0,
+                                             "colorchannelmixer", "aa",
+                                             repouso=ov.opacity)
+                if texto:
+                    (tmp / "sobrepor").mkdir(parents=True, exist_ok=True)
+                    alvo = tmp / "sobrepor" / f"op_{ov.id}.txt"
+                    alvo.write_text(texto, encoding="utf-8")
+                    comandos[ov.id] = str(alvo)
+            return overlay_chain([ov], {"m": str(png)}, 0.0, 320, 240, 1,
+                                 "0:v", "vout", ref_height=240, ref_width=320,
+                                 mascaras=mascaras, comandos=comandos)
+
         def render(ov: Overlay, saida: str) -> Path:
-            g, ent = overlay_chain([ov], {"m": str(png)}, 0.0, 320, 240, 1,
-                                   "0:v", "vout", ref_height=240, ref_width=320)
+            g, ent = montar(ov)
             cmd = [FFMPEG, "-y", "-v", "error", "-i", str(base)]
             for e in ent:
                 cmd += ["-loop", "1", "-framerate", "10", "-t", "3", "-i", e["path"]]
@@ -4230,23 +4253,37 @@ def testar_keyframes_animam_de_verdade() -> None:
         check(reto[(3 * 100 + 3) * 4 + 3] == 255,
               "e a de retângulo mantém o canto (as formas são mesmo diferentes)")
 
-        # 5) UM geq SÓ para máscara e opacidade — geq é por pixel, é o filtro caro
-        ov3 = Overlay(media_id="m", out_start=0.0, out_end=2.0, opacity=0.5,
-                      mask={"shape": "elipse"},
+        # 5) NENHUM geq no caminho do render — é a armadilha de desempenho.
+        # Medido nesta máquina, numa janela em tela cheia (1080x1920, 60
+        # quadros): crua 1,2 s; com geq de máscara 24,3 s; com geq de opacidade
+        # 15,1 s. Com PNG pronto + alphamerge + sendcmd: 2,5 s. Numa janela de
+        # 60 s a diferença passa de dez minutos de espera.
+        ov3 = Overlay(id="o_teste", media_id="m", out_start=0.0, out_end=2.0,
+                      opacity=0.5, mask={"shape": "elipse"},
                       keyframes=[{"t": 0.0, "opacity": 0.2},
                                  {"t": 2.0, "opacity": 0.9}])
-        g3, _ = overlay_chain([ov3], {"m": str(png)}, 0.0, 320, 240, 1, "a", "b",
-                              ref_height=240, ref_width=320)
-        check(g3.count("geq=") == 1,
-              f"máscara e opacidade animada saem num geq só ({g3.count('geq=')})")
+        g3, ent3 = montar(ov3)
+        check("geq=" not in g3,
+              "o render NÃO usa geq por quadro (em tela cheia custaria 20x)")
+        check("alphamerge" in g3 and len(ent3) == 2,
+              f"a máscara entra como PNG pronto num alphamerge "
+              f"({len(ent3)} entradas: a mídia e a máscara)")
+        check("sendcmd" in g3 and "colorchannelmixer" in g3,
+              "e a opacidade animada vai por sendcmd no colorchannelmixer")
+        check("scale2ref" not in g3,
+              "e sem scale2ref, que em tela cheia fez o sistema matar o processo")
 
-        # 6) sem marco nenhum, NADA muda: nem geq, nem eval=frame, nem rotate
+        # 6) sem marco nenhum, NADA muda: nem alphamerge, nem eval=frame,
+        # nem rotate, nem sendcmd — o caminho de antes, intacto
         simples = Overlay(media_id="m", out_start=0.0, out_end=2.0)
-        g4, _ = overlay_chain([simples], {"m": str(png)}, 0.0, 320, 240, 1, "a", "b",
-                              ref_height=240, ref_width=320)
-        check("geq=" not in g4 and "eval=frame" not in g4.split("overlay=")[0]
-              and "rotate=" not in g4,
-              "sobreposição sem marcos não paga por nada disso (nem geq, nem rotate)")
+        g4, ent4 = overlay_chain([simples], {"m": str(png)}, 0.0, 320, 240, 1,
+                                 "a", "b", ref_height=240, ref_width=320)
+        antes_do_overlay = g4.split("overlay=")[0]
+        check("alphamerge" not in g4 and "sendcmd" not in g4
+              and "rotate=" not in g4 and "eval=frame" not in antes_do_overlay
+              and len(ent4) == 1,
+              "sobreposição sem marcos não paga por nada disso e continua "
+              "com uma entrada só")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -4278,6 +4315,85 @@ def testar_marcos_acompanham_o_corte() -> None:
     ts = [round(float(k["t"]), 2) for k in o.keyframes]
     check(ts == [2.0, 6.0],
           f"E OS MARCOS DELA TAMBÉM ({ts} — sem isto, o movimento chegava atrasado)")
+
+
+def testar_marcos_nao_reencodam_o_resto() -> None:
+    """Um corte no começo não pode reencodar o vídeo por causa dos marcos.
+
+    A chave de cache de cada trecho é de CONTEÚDO, e tudo que é posicional
+    entra nela RELATIVO ao começo do trecho — é isso que faz um corte no minuto
+    2 não mexer na chave do minuto 5. Mas ``_relativo`` descia só em
+    ``out_start`` e ``out_end``: os MARCOS de animação entravam com tempo
+    absoluto. Bastava um corte no começo para o ``t`` de todos os marcos
+    seguintes mudar, e com ele a chave de todo trecho que a janela cobre.
+
+    Isto valia para os marcos do desfoque desde que eles existem. Passou a
+    valer para os da sobreposição no instante em que ela ganhou animação — e é
+    exatamente o defeito que a chave relativa existe para impedir.
+    """
+    import subprocess
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit import ops
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan, Overlay
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    tmp = Path(tempfile.mkdtemp(prefix="marcos_cache_"))
+    try:
+        dur = 6.0
+        video = write_video(tmp / "fonte.mp4", build([], dur), dur, 180, 320, 30)
+        info = probe(video)
+        png = tmp / "selo.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=yellow:s=40x40:d=1", "-frames:v", "1",
+                        str(png)], check=True)
+        plan = EditPlan()
+        plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                   preset="ultrafast", crf=30)
+        blocos = lambda: [Clip(src_start=float(k), src_end=float(k + 1))  # noqa: E731
+                          for k in range(6)]
+        plan.clips = blocos()
+        # a janela cobre os dois ÚLTIMOS blocos, bem longe de onde o corte vai
+        plan.overlays = [Overlay(id="o_selo", media_id="sel", out_start=4.0,
+                                 out_end=6.0, y=0.5, anim_in="none",
+                                 anim_out="none",
+                                 keyframes=[{"t": 4.0, "x": 0.2},
+                                            {"t": 6.0, "x": 0.8}])]
+        sources = {"main": {"path": str(video), "info": info, "kind": "video"}}
+        caminhos = {"main": str(video), "sel": str(png)}
+        work = tmp / "segs"
+
+        def render() -> set[str]:
+            tl = Timeline(plan.active_clips, 30.0)
+            segs = plan_segments(plan, tl, sources, info)
+            render_video_segments(segs, plan, info, [], work, caminhos, None)
+            return {f.name for f in work.glob("seg_*.mp4")}
+
+        antes = render()
+        check(len(antes) == 6, f"seis blocos com a janela animada no fim "
+                              f"({len(antes)} trechos)")
+
+        # corta 0,3 s no meio do bloco 2 e reancora a janela, como o servidor faz
+        tl_antes = Timeline(plan.active_clips, 30.0)
+        plan.clips, _ = ops.cut_source_range(plan.clips, 1.3, 1.6)
+        tl_depois = Timeline(plan.active_clips, 30.0)
+        ops.remap_output_items(plan, tl_antes, tl_depois)
+        o = plan.overlays[0]
+        check(abs(o.out_start - 3.7) < 0.05,
+              f"a janela andou com o corte (4,0 s → {o.out_start:.2f} s)")
+        check(abs(float(o.keyframes[0]["t"]) - 3.7) < 0.05,
+              f"e o primeiro marco também ({o.keyframes[0]['t']})")
+
+        depois = render()
+        novos = depois - antes
+        check(len(novos) == 2,
+              f"o corte reencoda SÓ as duas metades do bloco cortado — os "
+              f"trechos da janela animada acham o próprio arquivo "
+              f"({len(novos)} novos; com o t absoluto eram 4)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

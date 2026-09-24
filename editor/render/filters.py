@@ -137,6 +137,19 @@ def blur_chain(blurs: list, clip_out_start: float, clip_out_end: float,
     return ";".join(parts), True
 
 
+def janela_no_trecho(o, clip_out_start: float) -> tuple[float, float]:
+    """Onde a janela começa e acaba DENTRO deste trecho, em tempo local.
+
+    Existe para o grafo e para quem prepara os arquivos da sobreposição (a
+    máscara e os comandos de opacidade) usarem a MESMA conta. Quando as duas
+    divergem, a animação sai deslocada do tanto que elas discordam — e o
+    sintoma aparece só no arquivo exportado, nunca na prévia.
+    """
+    start = max(0.0, float(o.out_start) - clip_out_start)
+    end = max(start + 0.05, float(o.out_end) - clip_out_start)
+    return start, end
+
+
 def overlay_inputs(overlays: list, clip_out_start: float,
                    clip_out_end: float) -> list:
     return [o for o in overlays
@@ -158,7 +171,8 @@ def e_video(path: str) -> bool:
 def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                   width: int, height: int, first_input_index: int,
                   tag_in: str, tag_out: str, ref_height: int = 0,
-                  ref_width: int = 0) -> tuple[str, list[dict]]:
+                  ref_width: int = 0, mascaras: dict | None = None,
+                  comandos: dict | None = None) -> tuple[str, list[dict]]:
     """PNGs — e vídeos, como janela (picture-in-picture) — por cima do quadro.
 
     Devolve o grafo e a lista de ENTRADAS, uma por sobreposição, na ordem em
@@ -199,8 +213,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         if not path:
             continue
         idx = first_input_index + len(inputs)
-        start = max(0.0, o.out_start - clip_out_start)
-        end = max(start + 0.05, o.out_end - clip_out_start)
+        start, end = janela_no_trecho(o, clip_out_start)
         video = e_video(path)
         # o trecho pode começar no MEIO da janela (a janela atravessa a
         # fronteira de dois trechos): o vídeo sobreposto entra já adiantado
@@ -214,50 +227,47 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         })
         scaled = f"__ov{i}"
         kfs = getattr(o, "keyframes", None) or []
-        # DOIS RELÓGIOS. Dentro da cadeia da sobreposição (scale/geq/rotate) o
-        # tempo conta do primeiro quadro dela, que é onde a janela começa a
+        # DOIS RELÓGIOS. Dentro da cadeia da sobreposição (scale/rotate/sendcmd)
+        # o tempo conta do primeiro quadro dela, que é onde a janela começa a
         # aparecer NESTE trecho; no ``overlay``, que roda sobre o quadro
         # principal, o tempo é o do trecho. Misturar os dois desloca a animação
         # pelo tanto que a janela está adiantada dentro do trecho.
         t0_propria = clip_out_start + start
         t0_principal = clip_out_start
 
+        # MÁSCARA ANTES DA ESCALA, com PNG pronto. Antes da escala o tamanho é
+        # fixo, então a máscara casa com a imagem pixel a pixel sem nenhum
+        # redimensionamento — e continua casando quando a escala é animada,
+        # porque a animação vem depois. O porquê de ser arquivo e não expressão
+        # está medido em render/mascara.py: em tela cheia o geq por quadro custa
+        # vinte vezes mais, e o scale2ref custa tanto que o sistema mata o
+        # processo.
+        cabeca = f"[{idx}:v]format=rgba"
+        png_mascara = (mascaras or {}).get(o.id, "")
+        if png_mascara:
+            idx_m = first_input_index + len(inputs)
+            inputs.append({"path": str(png_mascara), "video": False,
+                           "ss": 0.0, "t": round((end - start) + 0.5, 3)})
+            parts.append(f"{cabeca}[__ovr{i}]")
+            parts.append(f"[{idx_m}:v]format=gray[__ovm{i}]")
+            cabeca = f"[__ovr{i}][__ovm{i}]alphamerge"
+
         if A.tem_animacao(kfs, "scale"):
             e = A.curva(kfs, "scale", t0_propria, repouso=o.scale)
             scale_w = f"iw*({e})*{fator:.6f}"
+            eval_escala = ":eval=frame"
         else:
             escala = A.valor_em(kfs, "scale", t0_propria, repouso=o.scale)
             scale_w = f"iw*{escala * fator:.4f}"
+            eval_escala = ""
         # largura par: o encoder yuv420p recusa dimensão ímpar, e um vídeo
         # escalado para 731 px derrubava o trecho inteiro
-        eval_escala = ":eval=frame" if A.tem_animacao(kfs, "scale") else ""
-        chain = [f"[{idx}:v]format=rgba,"
-                 f"scale=w='trunc(({scale_w})/2)*2':h=-2{eval_escala}"]
-
-        # OPACIDADE E MÁSCARA NO MESMO geq. geq avalia por pixel e é o filtro
-        # caro da cadeia: chamar duas vezes custa o dobro por nada. Quando não
-        # há animação nem máscara, nem geq existe — segue o colorchannelmixer
-        # de sempre, que é barato.
-        fatores = []
-        if A.tem_animacao(kfs, "opacity"):
-            fatores.append(A.curva(kfs, "opacity", t0_propria,
-                                   repouso=o.opacity, relogio="T"))
-            opac_fixa = None
-        else:
-            opac_fixa = A.valor_em(kfs, "opacity", t0_propria, repouso=o.opacity)
-        mascara = A.mascara_fator(getattr(o, "mask", None))
-        if mascara:
-            fatores.append(mascara)
-            if opac_fixa is not None and opac_fixa < 0.999:
-                fatores.append(f"{opac_fixa:.4f}")
-                opac_fixa = None
-        if fatores:
-            chain.append(A.geq_alfa(fatores))
-        if opac_fixa is not None and opac_fixa < 0.999:
-            chain.append(f"colorchannelmixer=aa={opac_fixa:.3f}")
+        chain = [cabeca, f"scale=w='trunc(({scale_w})/2)*2':h=-2{eval_escala}"]
 
         # ROTAÇÃO depois da máscara: mascarar depois de girar recortaria a caixa
-        # diagonal, e o usuário desenhou a máscara na imagem em pé.
+        # diagonal, e o usuário desenhou a máscara na imagem em pé. A caixa de
+        # saída TEM que ser fixa — ow/oh são avaliados uma vez na inicialização
+        # e não conhecem t; com ow=rotw(...) o ffmpeg aborta o trecho inteiro.
         if A.tem_animacao(kfs, "rotation"):
             g = A.curva(kfs, "rotation", t0_propria, repouso=o.rotation)
             chain.append(f"rotate=a='({g})*PI/180':c=none:"
@@ -268,6 +278,17 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
             if abs(graus) > 1e-3:
                 chain.append(f"rotate=a={graus * 3.14159265358979 / 180.0:.6f}:"
                              f"c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'")
+
+        # OPACIDADE. colorchannelmixer não aceita expressão de tempo, mas aceita
+        # COMANDO: o sendcmd alimenta o mesmo filtro quadro a quadro, com o
+        # resultado idêntico no pixel e por um trigésimo do custo do geq.
+        cmd_opacidade = (comandos or {}).get(o.id, "")
+        opac0 = A.valor_em(kfs, "opacity", t0_propria, repouso=o.opacity)
+        if cmd_opacidade and A.tem_animacao(kfs, "opacity"):
+            chain.append(f"sendcmd=f='{escape_filter_path(cmd_opacidade)}'")
+            chain.append(f"colorchannelmixer=aa={opac0:.4f}")
+        elif opac0 < 0.999:
+            chain.append(f"colorchannelmixer=aa={opac0:.3f}")
 
         if o.anim_in == "fade" and o.dur_in > 0:
             chain.append(f"fade=t=in:st=0:d={o.dur_in:.3f}:alpha=1")

@@ -33,8 +33,10 @@ from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
                             run_with_progress, write_wav)
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
+from . import animacao as A
 from . import filters as F
 from . import looks
+from . import mascara as Msk
 
 AUDIO_SR = 48000
 FADE_MS = 12
@@ -565,10 +567,36 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     overlays = F.overlay_inputs(plan.overlays, seg.t_start,
                                 seg.t_start + seg.nominal)
     if overlays:
+        # OS ARQUIVOS DA SOBREPOSIÇÃO, preparados antes de montar o grafo.
+        # Máscara: um PNG cinza no tamanho nativo da mídia, desenhado uma vez e
+        # reaproveitado pelo hash do conteúdo. Opacidade animada: um comando por
+        # quadro num arquivo de texto, porque o filtergraph viaja na linha de
+        # comando e no Windows ela para em 32767 caracteres.
+        pasta_ov = ass_dir.parent / "sobrepor"
+        mascaras: dict[str, str] = {}
+        comandos: dict[str, str] = {}
+        for o in overlays:
+            caminho = media_paths.get(o.media_id)
+            if getattr(o, "mask", None) and caminho:
+                png = Msk.preparar(o.mask, caminho, pasta_ov)
+                if png:
+                    mascaras[o.id] = png
+            kfs = getattr(o, "keyframes", None) or []
+            if A.tem_animacao(kfs, "opacity"):
+                ini, fim = F.janela_no_trecho(o, seg.t_start)
+                texto = A.texto_dos_comandos(
+                    kfs, "opacity", seg.t_start + ini, fim - ini, fps,
+                    "colorchannelmixer", "aa", repouso=o.opacity)
+                if texto:
+                    pasta_ov.mkdir(parents=True, exist_ok=True)
+                    alvo = pasta_ov / f"op_{seg.index:04d}_{o.id}.txt"
+                    alvo.write_text(texto, encoding="utf-8")
+                    comandos[o.id] = str(alvo)
         ov_graph, ov_inputs = F.overlay_chain(
             overlays, media_paths, seg.t_start, width, height,
             first_input_index=1, tag_in=cur_tag, tag_out="__vo",
-            ref_height=main.display_size[1], ref_width=main.display_size[0])
+            ref_height=main.display_size[1], ref_width=main.display_size[0],
+            mascaras=mascaras, comandos=comandos)
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
@@ -699,10 +727,29 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         if plan.export.burn_subtitles else []
 
     def _relativo(d: dict) -> dict:
+        """Tudo que é tempo vira RELATIVO ao começo do trecho — inclusive o que
+        está dentro de lista.
+
+        Antes, ``_relativo`` descia só em ``out_start`` e ``out_end``, e os
+        MARCOS de animação entravam na chave com tempo absoluto. O efeito era
+        exatamente o que a chave relativa existe para impedir: um corte no
+        minuto 2 mudava o ``t`` de todos os marcos seguintes, a chave de todos
+        os trechos depois do corte mudava com eles, e o "retoque barato"
+        reencodava o vídeo inteiro dali para a frente. Valia para os marcos do
+        desfoque desde que eles existem; passou a valer para os da sobreposição
+        no momento em que ela ganhou animação.
+        """
         d = dict(d)
         for k in ("out_start", "out_end"):
             if k in d and d[k] is not None:
                 d[k] = round(float(d[k]) - t0, 3)
+        marcos = d.get("keyframes")
+        if isinstance(marcos, list):
+            d["keyframes"] = [
+                ({**kf, "t": round(float(kf.get("t", 0.0)) - t0, 3)}
+                 if isinstance(kf, dict) else kf)
+                for kf in marcos
+            ]
         return d
 
     seg_blurs = [_relativo(b.to_dict()) for b in plan.blurs

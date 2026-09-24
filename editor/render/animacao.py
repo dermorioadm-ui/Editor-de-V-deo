@@ -222,3 +222,37 @@ def geq_alfa(fatores: list[str]) -> str:
     produto = "*".join(f"({f})" for f in limpos)
     return (f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
             f"a='alpha(X,Y)*clip({produto},0,1)'")
+
+
+# ------------------------------------------------------- opacidade animada
+# POR QUE sendcmd E NÃO geq. ``colorchannelmixer=aa`` não aceita expressão de
+# tempo — a coluna de flags do ffmpeg mostra ``T``, que é "aceita COMANDO em
+# tempo de execução", não "aceita expressão". Fazer a opacidade variar por
+# ``geq`` no canal alfa funciona e foi medido: numa janela em tela cheia
+# (1080x1920, 60 quadros) custou 15,1 s contra 1,2 s da sobreposição crua.
+# Com ``sendcmd`` alimentando o mesmo ``colorchannelmixer``, o resultado é
+# IDÊNTICO no pixel (brilho 8 → 42 → 71 contra 7 → 42 → 72 do geq) e custa
+# +0,3 s. É a mesma conta, feita em C uma vez por quadro em vez de uma vez por
+# pixel.
+#
+# O texto vai para ARQUIVO, não embutido no grafo: o filtergraph viaja na linha
+# de comando e no Windows ela para em 32767 caracteres. Uma janela de 60 s a
+# 30 fps são 1800 comandos — sozinhos passariam de 60 KB.
+def texto_dos_comandos(keyframes: list | None, chave: str, t0: float,
+                       duracao: float, fps: float, filtro: str, opcao: str,
+                       repouso: float | None = None) -> str:
+    """Um comando por quadro, em tempo LOCAL da cadeia da sobreposição.
+
+    Devolve "" quando não há animação — quem chama então usa o valor fixo.
+    """
+    if not tem_animacao(keyframes, chave):
+        return ""
+    passo = 1.0 / max(1.0, float(fps))
+    fim = max(passo, float(duracao))
+    linhas: list[str] = []
+    t = 0.0
+    while t <= fim + 1e-9:
+        v = valor_em(keyframes, chave, t0 + t, repouso=repouso)
+        linhas.append(f"{t:.4f} {filtro} {opcao} {v:.5f};")
+        t += passo
+    return "\n".join(linhas) + "\n"
