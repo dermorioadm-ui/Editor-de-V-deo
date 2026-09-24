@@ -91,6 +91,10 @@ class Clip:
     label: str = ""
     photo: dict | None = None       # {duration, ken_burns, annotations}
     fit: dict | None = None         # {tonemap, brightness, saturation, contrast}
+    # EFEITOS do quadro inteiro neste bloco: [{"kind": ...}]. Rodam DENTRO do
+    # mesmo passe de encode do trecho — nenhum efeito acrescenta geração de
+    # compressão. O vocabulário está em render/animacao.EFEITOS_DO_CLIPE.
+    effects: list = field(default_factory=list)
 
     @property
     def src_duration(self) -> float:

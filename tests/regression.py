@@ -328,6 +328,7 @@ def main() -> int:
     testar_marcos_nao_reencodam_o_resto()
     testar_faixas_empilham_e_rotas_aceitam()
     testar_emudecer_um_bloco_sai_no_arquivo()
+    testar_efeitos_mexem_no_pixel()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4655,6 +4656,188 @@ def testar_emudecer_um_bloco_sai_no_arquivo() -> None:
                 svc.delete_project(projeto.id)
             except Exception:  # noqa: BLE001
                 pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_efeitos_mexem_no_pixel() -> None:
+    """Efeito é grandeza medida no quadro, nunca campo gravado.
+
+    Um teste que confere se ``effects`` entrou no plano prova que o JSON foi
+    salvo, não que o vídeo mudou. Aqui cada efeito é medido pelo que ele faz:
+    o desfoque derruba o gradiente, a vinheta escurece o canto e não o centro,
+    o flash é um pico de brilho que começa e acaba, o chroma deixa o fundo
+    aparecer e o tremor tira a janela do lugar ao longo do tempo.
+
+    Tudo roda DENTRO do mesmo passe de encode do trecho — nenhum efeito
+    acrescenta geração de compressão.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan, Overlay
+    from editor.render import animacao as A
+    from editor.render.filters import overlay_chain
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    tmp = Path(tempfile.mkdtemp(prefix="efeitos_"))
+    try:
+        # ---- efeitos do QUADRO INTEIRO, pelo caminho de render de verdade ---
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "testsrc2=s=320x240:r=30:d=2",
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", str(fonte)], check=True)
+        info = probe(fonte)
+
+        def render_com(efeitos: list, marca: str) -> Path:
+            plan = EditPlan()
+            plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                       preset="ultrafast", crf=28)
+            plan.clips = [Clip(src_start=0.0, src_end=2.0, effects=efeitos)]
+            tl = Timeline(plan.active_clips, 30.0)
+            segs = plan_segments(plan, tl,
+                                 {"main": {"path": str(fonte), "info": info,
+                                           "kind": "video"}}, info)
+            work = tmp / f"w_{marca}"
+            render_video_segments(segs, plan, info, [], work,
+                                  {"main": str(fonte)}, None)
+            return sorted(work.glob("seg_*.mp4"))[0]
+
+        def quadro(v: Path, t: float) -> np.ndarray:
+            """O quadro em cinza, no tamanho que o arquivo REALMENTE tem.
+
+            Adivinhar a largura a partir do número de bytes dá uma matriz
+            torta, e uma matriz torta mede gradiente de coisa nenhuma — o
+            número sai plausível e não quer dizer nada.
+            """
+            w, h = probe(v).display_size
+            d = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(v),
+                                "-frames:v", "1", "-f", "rawvideo",
+                                "-pix_fmt", "gray", "-"],
+                               capture_output=True).stdout
+            return np.frombuffer(d[:w * h], dtype=np.uint8).reshape(h, w).astype(float)
+
+        def gradiente(q: np.ndarray) -> float:
+            return float(np.abs(np.diff(q, axis=1)).mean())
+
+        # O DESFOQUE é medido por MONOTONICIDADE, não por um limiar escolhido a
+        # dedo: mais sigma tem que dar menos gradiente, sempre. Um limiar fixo
+        # aqui diria mais sobre a fonte de teste que sobre o filtro — numa
+        # imagem de blocos lisos como a testsrc2, o que sobra depois do
+        # desfoque são as bordas dos blocos, que são degraus fortes e
+        # sobrevivem a qualquer sigma.
+        limpo = render_com([], "limpo")
+        borrado = render_com(
+            A.normalizar_efeitos([{"kind": "desfoque", "sigma": 8}],
+                                 A.EFEITOS_DO_CLIPE), "borrado")
+        muito = render_com(
+            A.normalizar_efeitos([{"kind": "desfoque", "sigma": 30}],
+                                 A.EFEITOS_DO_CLIPE), "muito")
+        g0 = gradiente(quadro(limpo, 1.0))
+        g1 = gradiente(quadro(borrado, 1.0))
+        g2 = gradiente(quadro(muito, 1.0))
+        check(g0 > g1 > g2,
+              f"o DESFOQUE derruba o gradiente, e mais sigma derruba mais "
+              f"({g0:.2f} → {g1:.2f} → {g2:.2f})")
+        check(g1 < g0 * 0.7,
+              f"e a queda é grande já no sigma baixo ({g1 / g0:.2f} do original)")
+
+        vinhetado = render_com(
+            A.normalizar_efeitos([{"kind": "vinheta", "amount": 1.0}],
+                                 A.EFEITOS_DO_CLIPE), "vinheta")
+        qv, ql = quadro(vinhetado, 1.0), quadro(limpo, 1.0)
+        canto_v = qv[:20, :20].mean()
+        canto_l = ql[:20, :20].mean()
+        h, w = qv.shape
+        centro_v = qv[h // 2 - 10:h // 2 + 10, w // 2 - 10:w // 2 + 10].mean()
+        centro_l = ql[h // 2 - 10:h // 2 + 10, w // 2 - 10:w // 2 + 10].mean()
+        check(canto_v < canto_l * 0.7,
+              f"a VINHETA escurece o canto ({canto_l:.0f} → {canto_v:.0f})")
+        check(centro_v > centro_l * 0.75,
+              f"e deixa o centro quase igual ({centro_l:.0f} → {centro_v:.0f})")
+
+        piscado = render_com(
+            A.normalizar_efeitos([{"kind": "flash", "at": 1.0, "duration": 0.3,
+                                   "amount": 0.8}], A.EFEITOS_DO_CLIPE), "flash")
+        antes = quadro(piscado, 0.5).mean()
+        durante = quadro(piscado, 1.15).mean()
+        depois = quadro(piscado, 1.7).mean()
+        check(durante > antes * 1.15 and durante > depois * 1.15,
+              f"o FLASH é um pico que começa e acaba "
+              f"({antes:.0f} → {durante:.0f} → {depois:.0f})")
+
+        # ---- efeitos da SOBREPOSIÇÃO ---------------------------------------
+        base = tmp / "base.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=0x0000FF:s=320x240:r=10:d=1",
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", str(base)], check=True)
+        verde = tmp / "verde.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=0x00FF00:s=120x120:d=1", "-frames:v", "1",
+                        str(verde)], check=True)
+
+        def render_ov(ov: Overlay, nome: str) -> Path:
+            g, ent = overlay_chain([ov], {"m": str(verde)}, 0.0, 320, 240, 1,
+                                   "0:v", "vout", ref_height=240, ref_width=320)
+            cmd = [FFMPEG, "-y", "-v", "error", "-i", str(base)]
+            for e in ent:
+                cmd += ["-loop", "1", "-framerate", "10", "-t", "2", "-i", e["path"]]
+            saida = tmp / f"{nome}.mp4"
+            cmd += ["-filter_complex", g, "-map", "[vout]", "-t", "1", str(saida)]
+            subprocess.run(cmd, check=True)
+            return saida
+
+        def rgb(v: Path, t: float, x: int, y: int) -> tuple:
+            d = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(v),
+                                "-frames:v", "1", "-f", "rawvideo",
+                                "-pix_fmt", "rgb24", "-"],
+                               capture_output=True).stdout
+            i = (y * 320 + x) * 3
+            return d[i], d[i + 1], d[i + 2]
+
+        comum = {"media_id": "m", "out_start": 0.0, "out_end": 1.0,
+                 "x": 0.5, "y": 0.5, "anim_in": "none", "anim_out": "none"}
+        sem = render_ov(Overlay(id="o_sem", **comum), "ov_sem")
+        _r0, g0v, b0 = rgb(sem, 0.5, 160, 120)
+        check(g0v > 150 and b0 < 100,
+              f"sem chroma, o verde cobre o fundo azul (G={g0v}, B={b0})")
+        com = render_ov(Overlay(id="o_ck", effects=A.normalizar_efeitos(
+            [{"kind": "chroma", "color": "0x00FF00", "similarity": 0.3}],
+            A.EFEITOS_DA_SOBREPOSICAO), **comum), "ov_chroma")
+        _r1, g1v, b1 = rgb(com, 0.5, 160, 120)
+        check(b1 > 150 and g1v < 100,
+              f"com CHROMA, o verde some e o fundo azul aparece "
+              f"(G={g1v}, B={b1})")
+
+        # TREMOR: a janela sai do lugar ao longo do tempo
+        tremido = render_ov(Overlay(id="o_tr", effects=A.normalizar_efeitos(
+            [{"kind": "tremor", "amplitude": 0.08, "frequency": 3.0}],
+            A.EFEITOS_DA_SOBREPOSICAO), **comum), "ov_tremor")
+
+        def centro_x(v: Path, t: float) -> float:
+            d = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(v),
+                                "-frames:v", "1", "-f", "rawvideo",
+                                "-pix_fmt", "rgb24", "-"],
+                               capture_output=True).stdout
+            linha = [x for x in range(320)
+                     if d[(120 * 320 + x) * 3 + 1] > 150]
+            return (linha[0] + linha[-1]) / 2.0 if linha else -1.0
+
+        posicoes = [centro_x(tremido, t) for t in (0.0, 0.1, 0.2, 0.3)]
+        parado = [centro_x(sem, t) for t in (0.0, 0.1, 0.2, 0.3)]
+        variou = max(posicoes) - min(posicoes)
+        firme = max(parado) - min(parado)
+        check(variou > 8 and firme < 2,
+              f"o TREMOR move a janela ao longo do tempo (variação {variou:.1f} px) "
+              f"e sem ele ela fica firme ({firme:.1f} px)")
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 

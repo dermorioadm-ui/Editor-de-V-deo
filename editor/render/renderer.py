@@ -55,6 +55,7 @@ class VideoSegment:
     info: MediaInfo | None = None
     photo: dict | None = None
     fit: dict | None = None
+    effects: list = field(default_factory=list)   # efeitos do quadro inteiro
     zoom: float = 1.0          # jogo de zoom do corte, aplicado neste encode
     out_start: float = 0.0     # preenchido com a soma das durações MEDIDAS
     t_start: float = 0.0       # posição na linha do tempo das legendas (nominal)
@@ -382,7 +383,8 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         src_start=0.0, src_duration=out_dur, speed=1.0,
                         out_theoretical=out_dur, clip_id=clip.id, info=info,
                         t_start=out_a,
-                        photo=clip.photo or {}, fit=clip.fit))
+                        photo=clip.photo or {}, fit=clip.fit,
+                        effects=list(getattr(clip, "effects", None) or [])))
                 else:
                     frac_a = (out_a - placed.out_start) / max(placed.out_duration, 1e-9)
                     frac_b = (out_b - placed.out_start) / max(placed.out_duration, 1e-9)
@@ -393,7 +395,8 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         kind="main" if clip.source == "main" else "insert",
                         src_start=s0, src_duration=s1 - s0, speed=clip.speed,
                         out_theoretical=out_dur, clip_id=clip.id, info=info,
-                        t_start=out_a, fit=clip.fit, zoom=clip.zoom))
+                        t_start=out_a, fit=clip.fit, zoom=clip.zoom,
+                        effects=list(getattr(clip, "effects", None) or [])))
             else:
                 cpath = sources.get(cut.media_id, {}).get("path")
                 cinfo = sources.get(cut.media_id, {}).get("info")
@@ -409,7 +412,8 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         src_duration=(frac_b - frac_a) * clip.src_duration,
                         speed=clip.speed, out_theoretical=out_dur,
                         clip_id=clip.id, info=info, t_start=out_a,
-                        zoom=clip.zoom))
+                        zoom=clip.zoom,
+                        effects=list(getattr(clip, "effects", None) or [])))
                 else:
                     offset = (out_a - cut.out_start) * cut.speed
                     segs.append(VideoSegment(
@@ -531,6 +535,11 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
             elif seg.kind != "main":
                 chain.append(f"scale={width}:{height}")
 
+    # EFEITOS DO QUADRO INTEIRO, no fim da cadeia do clipe: depois do
+    # enquadramento (senão o desfoque seria recortado junto com a imagem) e
+    # ANTES do desfoque de proteção, das sobreposições e da legenda — nada do
+    # que está por cima pode ser borrado ou lavado pelo efeito do fundo.
+    chain.extend(A.filtros_do_clipe(getattr(seg, "effects", None)))
     graph_parts.append(f"[{cur_tag}]" + ",".join(chain) + "[__v0]")
     cur_tag = "__v0"
 
@@ -763,6 +772,7 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "src": seg.source_path, "start": round(seg.src_start, 4),
         "dur": round(seg.src_duration, 4), "speed": seg.speed,
         "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
+        "efeitos": getattr(seg, "effects", None) or [],
         "zoom": round(seg.zoom, 4),
         "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
         "unsharp": plan.zoom.unsharp,

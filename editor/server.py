@@ -576,6 +576,54 @@ def api_look(pid: str, payload: dict = Body(...)) -> dict:
             "timeline": svc.timeline_summary(project)}
 
 
+@app.post("/api/projects/{pid}/ops/efeito")
+def api_efeito(pid: str, payload: dict = Body(...)) -> dict:
+    """Efeitos de um bloco ou de uma sobreposição.
+
+    A lista que vem no payload SUBSTITUI a que estava lá — é o que faz o gesto
+    de tirar um efeito ser o mesmo de pôr outro, sem uma rota de remoção. Lista
+    vazia limpa.
+
+    O vocabulário difere pelo alvo, e não é arbitrário: ``chroma`` só faz
+    sentido em cima de uma sobreposição (furar o verde de um quadro inteiro
+    apagaria o vídeo), e ``vinheta`` e ``flash`` só fazem sentido no quadro
+    inteiro. Pedir um efeito que não vale para o alvo não é erro — ele
+    simplesmente não entra, como todo o resto que vem de fora.
+    """
+    project = _project(pid)
+    alvo = str(payload.get("alvo", "clipe"))
+    item_id = str(payload.get("id", ""))
+    if alvo in ("sobreposicao", "overlay"):
+        item = next((o for o in project.plan.overlays if o.id == item_id), None)
+        if item is None:
+            raise HTTPException(404, "sobreposição não encontrada")
+        item.effects = A.normalizar_efeitos(payload.get("effects"),
+                                            A.EFEITOS_DA_SOBREPOSICAO)
+        project.save_plan()
+        return {"ok": True, "alvo": "sobreposicao", "id": item_id,
+                "effects": item.effects}
+    item = next((c for c in project.plan.clips if c.id == item_id), None)
+    if item is None:
+        raise HTTPException(404, "bloco não encontrado")
+    item.effects = A.normalizar_efeitos(payload.get("effects"),
+                                        A.EFEITOS_DO_CLIPE)
+    project.save_plan()
+    return {"ok": True, "alvo": "clipe", "id": item_id, "effects": item.effects,
+            "timeline": svc.timeline_summary(project)}
+
+
+@app.get("/api/efeitos")
+def api_efeitos_disponiveis() -> dict:
+    """O que existe, para a tela montar o menu sem adivinhar nomes."""
+    return {
+        "clipe": list(A.EFEITOS_DO_CLIPE),
+        "sobreposicao": list(A.EFEITOS_DA_SOBREPOSICAO),
+        "curvas": list(A.CURVAS),
+        "formas_de_mascara": list(A.FORMAS),
+        "propriedades_com_marco": list(A.PROPRIEDADES),
+    }
+
+
 @app.get("/api/output-dir")
 def api_output_dir() -> dict:
     """Onde o vídeo pronto é salvo."""
@@ -1431,7 +1479,9 @@ def api_overlay(pid: str, payload: dict = Body(...)) -> dict:
                 rotation=float(payload.get("rotation", 0.0)),
                 track=int(payload.get("track", 0)),
                 keyframes=A.normalizar_marcos(payload.get("keyframes")),
-                mask=A.normalizar_mascara(payload.get("mask")))
+                mask=A.normalizar_mascara(payload.get("mask")),
+                effects=A.normalizar_efeitos(payload.get("effects"),
+                                             A.EFEITOS_DA_SOBREPOSICAO))
     project.plan.overlays.append(o)
     project.save_plan()
     return {"ok": True, "overlay": o.to_dict(), "ajustes": janela.ajustes}
@@ -1459,6 +1509,9 @@ def api_overlay_update(pid: str, oid: str, payload: dict = Body(...)) -> dict:
                 o.keyframes = A.normalizar_marcos(payload["keyframes"])
             if "mask" in payload:
                 o.mask = A.normalizar_mascara(payload["mask"])
+            if "effects" in payload:
+                o.effects = A.normalizar_efeitos(payload["effects"],
+                                                 A.EFEITOS_DA_SOBREPOSICAO)
             project.save_plan()
             return {"ok": True, "overlay": o.to_dict()}
     raise HTTPException(404, "sobreposição não encontrada")

@@ -363,3 +363,147 @@ def normalizar_mascara(bruto) -> dict | None:
             v = padrao
         limpa[chave] = round(max(lo, min(hi, v)), 5)
     return limpa
+
+
+# --------------------------------------------------------------- efeitos
+# Cada efeito é um dicionário {"kind": ..., parâmetros}. O vocabulário segue o
+# precedente do ``fit`` que já existe no plano: chave em inglês, valor em
+# português. Tudo roda DENTRO do mesmo passe de encode do trecho — nenhum
+# efeito acrescenta geração de compressão.
+#
+# O que NÃO está aqui, de propósito: tremor do QUADRO INTEIRO. Na sobreposição
+# o tremor é de graça, porque é só somar um deslocamento na expressão de
+# posição que o overlay já avalia por quadro. No quadro inteiro ele exige
+# recortar com margem e reescalar de volta, e isso entra no meio da cadeia que
+# decide o enquadramento (o recorte concêntrico no rosto) — mexer ali para
+# acrescentar um tremor é trocar o certo pelo bonito. Fica anotado como o que
+# falta, não escondido atrás de um efeito que trema errado.
+EFEITOS_DA_SOBREPOSICAO = ("desfoque", "cor", "chroma", "tremor")
+EFEITOS_DO_CLIPE = ("desfoque", "cor", "vinheta", "flash")
+
+
+def _f(d: dict, chave: str, padrao: float, lo: float, hi: float) -> float:
+    import math
+
+    try:
+        v = float(d.get(chave, padrao))
+    except (TypeError, ValueError):
+        return padrao
+    if not math.isfinite(v):
+        return padrao
+    return max(lo, min(hi, v))
+
+
+def normalizar_efeitos(bruto, permitidos: tuple[str, ...]) -> list:
+    """Lista de efeitos confiável, ou []. Descarta o que não reconhece."""
+    if not isinstance(bruto, list):
+        return []
+    fora: list[dict] = []
+    for item in bruto[:12]:
+        if not isinstance(item, dict):
+            continue
+        tipo = str(item.get("kind", item.get("tipo", "")) or "")
+        if tipo not in permitidos:
+            continue
+        e: dict = {"kind": tipo}
+        if tipo == "desfoque":
+            e["sigma"] = round(_f(item, "sigma", 8.0, 0.5, 60.0), 3)
+        elif tipo == "cor":
+            e["brightness"] = round(_f(item, "brightness", 0.0, -1.0, 1.0), 4)
+            e["saturation"] = round(_f(item, "saturation", 1.0, 0.0, 3.0), 4)
+            e["contrast"] = round(_f(item, "contrast", 1.0, 0.0, 3.0), 4)
+        elif tipo == "chroma":
+            cor = str(item.get("color", "0x00FF00"))
+            limpa = "".join(c for c in cor if c in "0123456789abcdefABCDEFxX")[:8]
+            e["color"] = limpa or "0x00FF00"
+            e["similarity"] = round(_f(item, "similarity", 0.25, 0.01, 1.0), 4)
+            e["blend"] = round(_f(item, "blend", 0.1, 0.0, 1.0), 4)
+        elif tipo == "tremor":
+            e["amplitude"] = round(_f(item, "amplitude", 0.01, 0.0, 0.2), 5)
+            e["frequency"] = round(_f(item, "frequency", 6.0, 0.1, 30.0), 3)
+        elif tipo == "vinheta":
+            e["amount"] = round(_f(item, "amount", 0.5, 0.0, 1.0), 4)
+        elif tipo == "flash":
+            e["at"] = round(_f(item, "at", 0.0, 0.0, 36000.0), 4)
+            e["duration"] = round(_f(item, "duration", 0.18, 0.02, 3.0), 4)
+            e["amount"] = round(_f(item, "amount", 0.6, 0.0, 1.0), 4)
+        fora.append(e)
+    return fora
+
+
+def filtros_da_sobreposicao(efeitos: list | None) -> list[str]:
+    """Filtros que entram na cadeia da PRÓPRIA sobreposição, na ordem.
+
+    O ``tremor`` não sai por aqui — ele é deslocamento de posição e sai por
+    ``tremor_da_sobreposicao``, somado na expressão que o ``overlay`` já
+    avalia por quadro. Assim ele não custa filtro nenhum.
+    """
+    saida: list[str] = []
+    for e in efeitos or []:
+        tipo = e.get("kind")
+        if tipo == "chroma":
+            # o chroma vem PRIMEIRO: furar o verde depois de desfocar espalha o
+            # verde na borda do que sobrou, e aí a borda fica esverdeada
+            saida.insert(0, f"chromakey={e['color']}:{e['similarity']:g}:"
+                            f"{e['blend']:g}")
+        elif tipo == "desfoque":
+            # UMA passada. O desfoque de proteção do rosto usa steps=3, e eu
+            # tentei copiar isso aqui: medido, sigma 12 num quadro de 240x180
+            # dá gradiente 1,72 com uma passada e 1,69 com três — três passadas
+            # de custo para nada visível. Para esconder um documento a
+            # diferença importa; para um efeito, não.
+            saida.append(f"gblur=sigma={e['sigma']:g}")
+        elif tipo == "cor":
+            saida.append(f"eq=brightness={e['brightness']:g}:"
+                         f"saturation={e['saturation']:g}:"
+                         f"contrast={e['contrast']:g}")
+    return saida
+
+
+def tremor_da_sobreposicao(efeitos: list | None) -> tuple[str, str]:
+    """Deslocamento ("dx", "dy") em pixels do quadro, ou ("", "").
+
+    Duas frequências levemente diferentes nos dois eixos de propósito: com a
+    mesma frequência o movimento vira uma diagonal que parece defeito de
+    monitor, não câmera na mão.
+    """
+    for e in efeitos or []:
+        if e.get("kind") != "tremor":
+            continue
+        a = float(e.get("amplitude", 0.01))
+        f = float(e.get("frequency", 6.0))
+        if a <= 1e-6:
+            continue
+        w = f"({a:.5f}*main_w*sin({2 * 3.14159265358979 * f:.4f}*t))"
+        h = f"({a:.5f}*main_h*cos({2 * 3.14159265358979 * f * 0.83:.4f}*t))"
+        return w, h
+    return "", ""
+
+
+def filtros_do_clipe(efeitos: list | None) -> list[str]:
+    """Filtros do QUADRO INTEIRO, dentro do mesmo passe de encode do trecho."""
+    saida: list[str] = []
+    for e in efeitos or []:
+        tipo = e.get("kind")
+        if tipo == "desfoque":
+            saida.append(f"gblur=sigma={e['sigma']:g}")
+        elif tipo == "cor":
+            saida.append(f"eq=brightness={e['brightness']:g}:"
+                         f"saturation={e['saturation']:g}:"
+                         f"contrast={e['contrast']:g}")
+        elif tipo == "vinheta":
+            # o ângulo é o que controla o quanto a borda escurece; PI/5 é uma
+            # vinheta discreta e PI/2.2 é forte
+            ang = 0.628 + (1.428 - 0.628) * float(e.get("amount", 0.5))
+            saida.append(f"vignette=angle={ang:.4f}")
+        elif tipo == "flash":
+            # um pulso de brilho que sobe e desce dentro da duração. eq aceita
+            # expressão com eval=frame; fora da janela o termo é zero, então o
+            # filtro é transparente no resto do trecho.
+            t0 = float(e.get("at", 0.0))
+            d = max(0.02, float(e.get("duration", 0.18)))
+            amp = float(e.get("amount", 0.6))
+            p = f"clip((t-{t0:.4f})/{d:.4f},0,1)"
+            pulso = f"({amp:.4f}*sin(3.14159265*{p})*between(t,{t0:.4f},{t0 + d:.4f}))"
+            saida.append(f"eq=brightness='{pulso}':eval=frame")
+    return saida

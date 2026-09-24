@@ -295,6 +295,12 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                 chain.append(f"rotate=a={graus * 3.14159265358979 / 180.0:.6f}:"
                              f"c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'")
 
+        # EFEITOS DA SOBREPOSIÇÃO, depois da máscara e da escala: o chroma
+        # precisa do verde ainda cheio (furar depois de desfocar deixa a borda
+        # esverdeada) e o desfoque precisa do tamanho final, senão a força dele
+        # muda quando a escala muda.
+        chain.extend(A.filtros_da_sobreposicao(getattr(o, "effects", None)))
+
         # OPACIDADE. colorchannelmixer não aceita expressão de tempo, mas aceita
         # COMANDO: o sendcmd alimenta o mesmo filtro quadro a quadro, com o
         # resultado idêntico no pixel e por um trigésimo do custo do geq.
@@ -318,6 +324,12 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         ey = A.curva(kfs, "y", t0_principal, repouso=o.y)
         cx = f"(({ex})*main_w-overlay_w/2)"
         cy = f"(({ey})*main_h-overlay_h/2)"
+        # TREMOR é deslocamento, não filtro: somado aqui ele custa zero, porque
+        # o overlay já avalia esta expressão por quadro.
+        dx, dy = A.tremor_da_sobreposicao(getattr(o, "effects", None))
+        if dx:
+            cx = f"({cx}+{dx})"
+            cy = f"({cy}+{dy})"
         x_expr, y_expr = cx, cy
         p = max(o.dur_in, 1e-3)
         rel = f"(t-{start:.3f})"
