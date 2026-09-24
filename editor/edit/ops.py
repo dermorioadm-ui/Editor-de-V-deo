@@ -323,8 +323,15 @@ def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
                               "to": [round(a, 3), round(b, 3)]})
             item.out_start = round(a, 4)
             item.out_end = round(b, 4)
-            if kind == "blur" and getattr(item, "keyframes", None):
+            # Os MARCOS de animação também vivem na linha de saída — tanto os
+            # do desfoque, que acompanham um rosto, quanto os da sobreposição,
+            # que movem uma janela. Sem reancorá-los, cortar dez segundos no
+            # começo deixa a caixa no lugar certo e o movimento dela no lugar
+            # errado: a janela chega atrasada ao ponto que o usuário marcou.
+            if getattr(item, "keyframes", None):
                 for kf in item.keyframes:
+                    if not isinstance(kf, dict):
+                        continue
                     nt = remap(float(kf.get("t", 0.0)))
                     if nt is not None:
                         kf["t"] = round(nt, 4)

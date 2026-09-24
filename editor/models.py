@@ -169,6 +169,24 @@ class Overlay:
     anim_out: str = "fade"
     dur_in: float = 0.35
     dur_out: float = 0.35
+    rotation: float = 0.0           # graus, sentido horário
+    # FAIXA. Sobreposições eram desenhadas na ordem da lista, e a ordem da lista
+    # é a ordem em que ela foi anexada: para pôr um cartão ATRÁS de uma janela
+    # já anexada não havia gesto nenhum. A faixa é o empilhamento declarado —
+    # número maior fica na frente — e o desempate continua sendo a ordem da
+    # lista, então plano antigo (tudo em 0) desenha exatamente como antes.
+    track: int = 0
+    # KEYFRAMES: [{"t", "x"?, "y"?, "scale"?, "opacity"?, "rotation"?, "easing"?}]
+    # ``t`` é absoluto na linha do tempo de SAÍDA — igual aos do desfoque. É o
+    # que faz ops.remap_output_items reancorá-los de graça quando um corte
+    # encurta o vídeo. Um marco só fala das propriedades que ele traz: mexer na
+    # escala num instante não arrasta a posição junto.
+    keyframes: list = field(default_factory=list)
+    # MÁSCARA: {"shape": "retangulo"|"elipse"|"arredondado", "cx","cy","rx","ry",
+    #           "radius", "feather"} — None = sem máscara.
+    mask: dict | None = None
+    # EFEITOS: [{"kind": ..., ...}] aplicados na cadeia da própria sobreposição.
+    effects: list = field(default_factory=list)
     enabled: bool = True
 
     def to_dict(self) -> dict:

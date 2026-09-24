@@ -323,6 +323,8 @@ def main() -> int:
     testar_corte_na_primeira_tela()
     testar_armadilhas_de_musica_e_cartao()
     testar_resumo_para_caber()
+    testar_keyframes_animam_de_verdade()
+    testar_marcos_acompanham_o_corte()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -4074,6 +4076,208 @@ def testar_resumo_para_caber() -> None:
         except Exception:  # noqa: BLE001
             pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_keyframes_animam_de_verdade() -> None:
+    """Uma sobreposição que ANDA, CRESCE, some e aparece — no pixel.
+
+    Antes, uma janela anexada ficava parada onde foi solta: posição, tamanho e
+    opacidade eram um número só, para o clipe inteiro. Quem faz criativo precisa
+    do contrário — o cartão entra deslizando, a janela cresce enquanto a pessoa
+    fala, o selo some no fim.
+
+    O motor já existia e servia a UMA coisa: o ``_piecewise`` do desfoque, que
+    faz a caixa acompanhar um rosto. Agora ele é geral (editor/render/animacao.py),
+    com curva de aceleração, e vale para posição, escala, opacidade e rotação.
+
+    NADA DISSO REENCODA O VÍDEO DE BASE. Os filtros entram na cadeia da própria
+    sobreposição, que é uma entrada separada do ffmpeg, e nas expressões de
+    posição do ``overlay``. Continua uma geração de encode.
+
+    O que este teste prova é o PIXEL, não o campo gravado: o vermelho está no
+    lugar certo e do tamanho certo em cada instante, e o número que a prévia
+    usaria é o mesmo que saiu no arquivo.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor.config import FFMPEG
+    from editor.models import Overlay
+    from editor.render import animacao as A
+    from editor.render.filters import overlay_chain
+
+    # 1) o motor: um marco só é valor fixo; dois marcos iguais não é animação
+    check(not A.tem_animacao([{"t": 0, "x": 0.3}], "x"),
+          "um marco sozinho é valor fixo, não animação")
+    check(not A.tem_animacao([{"t": 0, "x": 0.3}, {"t": 2, "x": 0.3}], "x"),
+          "dois marcos com o mesmo valor também não é animação")
+    check(A.tem_animacao([{"t": 0, "x": 0.3}, {"t": 2, "x": 0.7}], "x"),
+          "dois marcos com valores diferentes, aí sim")
+
+    # um marco fala SÓ das propriedades que traz: mexer na escala num instante
+    # não pode arrastar a posição junto
+    mistos = [{"t": 0.0, "x": 0.2, "scale": 1.0}, {"t": 2.0, "scale": 2.0}]
+    check(not A.tem_animacao(mistos, "x"),
+          "marco que só traz escala não inventa animação de posição")
+    check(A.tem_animacao(mistos, "scale"), "mas anima a escala que ele traz")
+
+    # fora dos marcos o valor SEGURA — extrapolar joga a janela para fora da tela
+    kf = [{"t": 1.0, "x": 0.2}, {"t": 3.0, "x": 0.8}]
+    check(abs(A.valor_em(kf, "x", 0.0) - 0.2) < 1e-9
+          and abs(A.valor_em(kf, "x", 9.0) - 0.8) < 1e-9,
+          "antes do primeiro e depois do último marco o valor segura, não extrapola")
+    check(abs(A.valor_em(kf, "x", 2.0) - 0.5) < 1e-9,
+          "no meio, interpolação linear")
+    suave = [{"t": 0.0, "x": 0.0}, {"t": 2.0, "x": 1.0, "easing": "suave"}]
+    check(abs(A.valor_em(suave, "x", 1.0) - 0.5) < 1e-9
+          and A.valor_em(suave, "x", 0.5) < 0.25,
+          "a curva suave sai devagar e chega devagar (meio igual, quartos mais lentos)")
+
+    tmp = Path(tempfile.mkdtemp(prefix="kf_"))
+    try:
+        base = tmp / "base.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=black:s=320x240:r=10:d=2",
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", str(base)], check=True)
+        png = tmp / "ov.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=red:s=100x100:d=1", "-frames:v", "1",
+                        str(png)], check=True)
+
+        def render(ov: Overlay, saida: str) -> Path:
+            g, ent = overlay_chain([ov], {"m": str(png)}, 0.0, 320, 240, 1,
+                                   "0:v", "vout", ref_height=240, ref_width=320)
+            cmd = [FFMPEG, "-y", "-v", "error", "-i", str(base)]
+            for e in ent:
+                cmd += ["-loop", "1", "-framerate", "10", "-t", "3", "-i", e["path"]]
+            out = tmp / saida
+            cmd += ["-filter_complex", g, "-map", "[vout]", "-t", "2", str(out)]
+            subprocess.run(cmd, check=True)
+            return out
+
+        def linha(v: Path, t: float) -> list[int]:
+            d = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(v),
+                                "-frames:v", "1", "-f", "rawvideo",
+                                "-pix_fmt", "gray", "-"],
+                               capture_output=True).stdout
+            return [i for i, px in enumerate(d[120 * 320:121 * 320]) if px > 40]
+
+        # 2) ANDA e CRESCE: x de 0,2 a 0,8 e escala de 0,2 a 0,8 em 2 s
+        marcos = [{"t": 0.0, "x": 0.2, "scale": 0.2},
+                  {"t": 2.0, "x": 0.8, "scale": 0.8}]
+        ov = Overlay(media_id="m", out_start=0.0, out_end=2.0, anim_in="none",
+                     anim_out="none", y=0.5, keyframes=marcos)
+        v = render(ov, "anda.mp4")
+        erros_x, erros_w = [], []
+        for t in (0.0, 0.5, 1.0, 1.5, 1.9):
+            xs = linha(v, t)
+            if not xs:
+                erros_x.append(("sumiu", t))
+                continue
+            centro = (xs[0] + xs[-1]) / 2 / 320
+            esperado_x = A.valor_em(marcos, "x", t, repouso=0.5)
+            esperado_w = A.valor_em(marcos, "scale", t, repouso=1.0) * 100
+            erros_x.append(abs(centro - esperado_x))
+            erros_w.append(abs(len(xs) - esperado_w))
+        ok_x = bool(erros_x) and all(isinstance(e, float) and e < 0.02
+                                     for e in erros_x)
+        ok_w = bool(erros_w) and all(e < 3 for e in erros_w)
+        detalhe_x = (f"erro máximo de {max(erros_x):.4f} da largura" if ok_x
+                     else f"medidas: {erros_x}")
+        detalhe_w = (f"erro máximo de {max(erros_w):.1f} px" if ok_w
+                     else f"medidas: {erros_w}")
+        check(ok_x, f"a janela ANDA para onde os marcos mandam ({detalhe_x})")
+        check(ok_w, f"e CRESCE do tamanho que eles mandam ({detalhe_w})")
+        check(ok_x and ok_w,
+              "o número que a prévia calcula é o mesmo que saiu no arquivo "
+              "(valor_em == pixel medido)")
+
+        # 3) OPACIDADE: de 10% a 100% — o brilho do vermelho tem que subir
+        marcos_o = [{"t": 0.0, "opacity": 0.1}, {"t": 2.0, "opacity": 1.0}]
+        ov2 = Overlay(media_id="m", out_start=0.0, out_end=2.0, anim_in="none",
+                      anim_out="none", x=0.5, y=0.5, keyframes=marcos_o)
+        v2 = render(ov2, "some.mp4")
+
+        def brilho(t: float) -> int:
+            d = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(v2),
+                                "-frames:v", "1", "-f", "rawvideo",
+                                "-pix_fmt", "gray", "-"],
+                               capture_output=True).stdout
+            return d[120 * 320 + 160]
+
+        b0, b1, b2 = brilho(0.0), brilho(1.0), brilho(1.9)
+        check(b0 < b1 < b2 and b0 < 20 and b2 > 60,
+              f"a sobreposição APARECE ao longo do tempo (brilho {b0} → {b1} → {b2})")
+
+        # 4) MÁSCARA: elipse fura os cantos e deixa o miolo
+        alfa = subprocess.run(
+            [FFMPEG, "-v", "error", "-loop", "1", "-i", str(png), "-frames:v", "1",
+             "-vf", f"format=rgba,{A.geq_alfa([A.mascara_fator({'shape': 'elipse', 'feather': 0.06})])}",
+             "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+            capture_output=True).stdout
+        centro = alfa[(50 * 100 + 50) * 4 + 3]
+        canto = alfa[(3 * 100 + 3) * 4 + 3]
+        check(centro == 255 and canto == 0,
+              f"a máscara de elipse deixa o miolo e fura o canto "
+              f"(alfa centro={centro}, canto={canto})")
+        reto = subprocess.run(
+            [FFMPEG, "-v", "error", "-loop", "1", "-i", str(png), "-frames:v", "1",
+             "-vf", f"format=rgba,{A.geq_alfa([A.mascara_fator({'shape': 'retangulo', 'feather': 0.06})])}",
+             "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+            capture_output=True).stdout
+        check(reto[(3 * 100 + 3) * 4 + 3] == 255,
+              "e a de retângulo mantém o canto (as formas são mesmo diferentes)")
+
+        # 5) UM geq SÓ para máscara e opacidade — geq é por pixel, é o filtro caro
+        ov3 = Overlay(media_id="m", out_start=0.0, out_end=2.0, opacity=0.5,
+                      mask={"shape": "elipse"},
+                      keyframes=[{"t": 0.0, "opacity": 0.2},
+                                 {"t": 2.0, "opacity": 0.9}])
+        g3, _ = overlay_chain([ov3], {"m": str(png)}, 0.0, 320, 240, 1, "a", "b",
+                              ref_height=240, ref_width=320)
+        check(g3.count("geq=") == 1,
+              f"máscara e opacidade animada saem num geq só ({g3.count('geq=')})")
+
+        # 6) sem marco nenhum, NADA muda: nem geq, nem eval=frame, nem rotate
+        simples = Overlay(media_id="m", out_start=0.0, out_end=2.0)
+        g4, _ = overlay_chain([simples], {"m": str(png)}, 0.0, 320, 240, 1, "a", "b",
+                              ref_height=240, ref_width=320)
+        check("geq=" not in g4 and "eval=frame" not in g4.split("overlay=")[0]
+              and "rotate=" not in g4,
+              "sobreposição sem marcos não paga por nada disso (nem geq, nem rotate)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_marcos_acompanham_o_corte() -> None:
+    """Cortar dez segundos no começo não pode atrasar o movimento da janela.
+
+    A caixa já era reancorada (``remap_output_items``): o instante de saída vira
+    instante da FONTE pela linha antiga e volta pela nova. Os MARCOS dela não
+    eram — só os do desfoque. O resultado era a janela no lugar certo e o
+    movimento no lugar errado, que é pior que não animar.
+    """
+    from editor.edit.ops import remap_output_items
+    from editor.edit.timeline import Timeline
+    from editor.models import Clip, EditPlan, Overlay
+
+    # antes: um bloco de 0 a 20 s da fonte. depois: os 10 primeiros segundos
+    # saíram, então a fonte 10..20 vira a saída 0..10.
+    antes = Timeline([Clip(src_start=0.0, src_end=20.0)])
+    depois = Timeline([Clip(src_start=10.0, src_end=20.0)])
+    plan = EditPlan()
+    plan.overlays = [Overlay(id="o_1", media_id="m", out_start=12.0, out_end=16.0,
+                             keyframes=[{"t": 12.0, "x": 0.1},
+                                        {"t": 16.0, "x": 0.9}])]
+    remap_output_items(plan, antes, depois)
+    o = plan.overlays[0]
+    check(abs(o.out_start - 2.0) < 0.01 and abs(o.out_end - 6.0) < 0.01,
+          f"a janela anda com o corte (12–16 s → {o.out_start:.1f}–{o.out_end:.1f} s)")
+    ts = [round(float(k["t"]), 2) for k in o.keyframes]
+    check(ts == [2.0, 6.0],
+          f"E OS MARCOS DELA TAMBÉM ({ts} — sem isto, o movimento chegava atrasado)")
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

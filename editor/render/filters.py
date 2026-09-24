@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..ffmpeg_utils import escape_filter_path
+from . import animacao as A
 
 # Conversão só de transferência e primárias. Num teste de ida e volta
 # (SDR -> HLG/BT.2020 -> de volta) esta reconstrói o original com erro médio de
@@ -212,12 +213,62 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
             "t": round((end - start) + 0.5, 3),
         })
         scaled = f"__ov{i}"
-        scale_w = f"iw*{o.scale * fator:.4f}"
+        kfs = getattr(o, "keyframes", None) or []
+        # DOIS RELÓGIOS. Dentro da cadeia da sobreposição (scale/geq/rotate) o
+        # tempo conta do primeiro quadro dela, que é onde a janela começa a
+        # aparecer NESTE trecho; no ``overlay``, que roda sobre o quadro
+        # principal, o tempo é o do trecho. Misturar os dois desloca a animação
+        # pelo tanto que a janela está adiantada dentro do trecho.
+        t0_propria = clip_out_start + start
+        t0_principal = clip_out_start
+
+        if A.tem_animacao(kfs, "scale"):
+            e = A.curva(kfs, "scale", t0_propria, repouso=o.scale)
+            scale_w = f"iw*({e})*{fator:.6f}"
+        else:
+            escala = A.valor_em(kfs, "scale", t0_propria, repouso=o.scale)
+            scale_w = f"iw*{escala * fator:.4f}"
         # largura par: o encoder yuv420p recusa dimensão ímpar, e um vídeo
         # escalado para 731 px derrubava o trecho inteiro
-        chain = [f"[{idx}:v]format=rgba,scale=trunc(({scale_w})/2)*2:-2"]
-        if o.opacity < 0.999:
-            chain.append(f"colorchannelmixer=aa={o.opacity:.3f}")
+        eval_escala = ":eval=frame" if A.tem_animacao(kfs, "scale") else ""
+        chain = [f"[{idx}:v]format=rgba,"
+                 f"scale=w='trunc(({scale_w})/2)*2':h=-2{eval_escala}"]
+
+        # OPACIDADE E MÁSCARA NO MESMO geq. geq avalia por pixel e é o filtro
+        # caro da cadeia: chamar duas vezes custa o dobro por nada. Quando não
+        # há animação nem máscara, nem geq existe — segue o colorchannelmixer
+        # de sempre, que é barato.
+        fatores = []
+        if A.tem_animacao(kfs, "opacity"):
+            fatores.append(A.curva(kfs, "opacity", t0_propria,
+                                   repouso=o.opacity, relogio="T"))
+            opac_fixa = None
+        else:
+            opac_fixa = A.valor_em(kfs, "opacity", t0_propria, repouso=o.opacity)
+        mascara = A.mascara_fator(getattr(o, "mask", None))
+        if mascara:
+            fatores.append(mascara)
+            if opac_fixa is not None and opac_fixa < 0.999:
+                fatores.append(f"{opac_fixa:.4f}")
+                opac_fixa = None
+        if fatores:
+            chain.append(A.geq_alfa(fatores))
+        if opac_fixa is not None and opac_fixa < 0.999:
+            chain.append(f"colorchannelmixer=aa={opac_fixa:.3f}")
+
+        # ROTAÇÃO depois da máscara: mascarar depois de girar recortaria a caixa
+        # diagonal, e o usuário desenhou a máscara na imagem em pé.
+        if A.tem_animacao(kfs, "rotation"):
+            g = A.curva(kfs, "rotation", t0_propria, repouso=o.rotation)
+            chain.append(f"rotate=a='({g})*PI/180':c=none:"
+                         f"ow='hypot(iw,ih)':oh='hypot(iw,ih)'")
+        else:
+            graus = A.valor_em(kfs, "rotation", t0_propria,
+                               repouso=getattr(o, "rotation", 0.0))
+            if abs(graus) > 1e-3:
+                chain.append(f"rotate=a={graus * 3.14159265358979 / 180.0:.6f}:"
+                             f"c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'")
+
         if o.anim_in == "fade" and o.dur_in > 0:
             chain.append(f"fade=t=in:st=0:d={o.dur_in:.3f}:alpha=1")
         if o.anim_out == "fade" and o.dur_out > 0:
@@ -226,8 +277,10 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         chain.append(f"setpts=PTS-STARTPTS+{start:.3f}/TB")
         parts.append(",".join(chain) + f"[{scaled}]")
 
-        cx = f"({o.x:.4f}*main_w-overlay_w/2)"
-        cy = f"({o.y:.4f}*main_h-overlay_h/2)"
+        ex = A.curva(kfs, "x", t0_principal, repouso=o.x)
+        ey = A.curva(kfs, "y", t0_principal, repouso=o.y)
+        cx = f"(({ex})*main_w-overlay_w/2)"
+        cy = f"(({ey})*main_h-overlay_h/2)"
         x_expr, y_expr = cx, cy
         p = max(o.dur_in, 1e-3)
         rel = f"(t-{start:.3f})"
