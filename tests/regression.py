@@ -343,6 +343,7 @@ def main() -> int:
     testar_formato_de_feed_e_sem_legenda()
     testar_broll_depois_da_edicao()
     testar_trocar_a_musica()
+    testar_banco_de_broll()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -6655,6 +6656,347 @@ def testar_trocar_a_musica() -> None:
             except Exception:  # noqa: BLE001
                 pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _banco_falso(pasta: Path, clipe: Path) -> tuple[str, dict]:
+    """Um Pexels e um Pixabay de mentira em 127.0.0.1, com o formato da API.
+
+    Devolve o endereço e um registro do que chegou: cabeçalhos, parâmetros e
+    quantos arquivos foram baixados — é assim que o teste prova que a chave
+    foi no lugar certo e que a biblioteca reaproveita sem rede.
+    """
+    import http.server
+    import threading
+    from urllib.parse import parse_qs, urlparse
+
+    registro: dict = {"pedidos": [], "downloads": 0, "falhar_pixabay": False}
+    base_holder: dict = {}
+
+    def arquivos(n: int) -> list[dict]:
+        b = base_holder["base"]
+        return [
+            {"id": n * 10 + 1, "quality": "sd", "file_type": "video/mp4",
+             "width": 360, "height": 640, "fps": 25, "link": f"{b}/arquivos/{n}_sd.mp4"},
+            {"id": n * 10 + 2, "quality": "hd", "file_type": "video/mp4",
+             "width": 1080, "height": 1920, "fps": 25, "link": f"{b}/arquivos/{n}_hd.mp4"},
+            {"id": n * 10 + 3, "quality": "uhd", "file_type": "video/mp4",
+             "width": 2160, "height": 3840, "fps": 25, "link": f"{b}/arquivos/{n}_4k.mp4"},
+            {"id": n * 10 + 4, "quality": "hls", "file_type": "video/mp4",
+             "width": None, "height": None, "fps": None,
+             "link": f"{b}/arquivos/{n}.m3u8"},
+        ]
+
+    def video_pexels(n: int) -> dict:
+        b = base_holder["base"]
+        v = {"id": n, "width": 1080, "height": 1920, "duration": 7,
+             "url": f"https://www.pexels.com/video/{n}/",
+             "image": f"{b}/mini/{n}.jpg", "full_res": None, "tags": [],
+             "user": {"id": 5, "name": f"Autora {n}",
+                      "url": "https://www.pexels.com/@autora"},
+             "video_files": arquivos(n),
+             "video_pictures": [{"id": 1, "picture": f"{b}/mini/{n}.jpg", "nr": 0}]}
+        if n == 666:
+            # o banco mandando baixar de fora dele: tem que ser recusado
+            for f in v["video_files"]:
+                f["link"] = "https://golpe.example.com/x.mp4"
+        return v
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D401
+            pass
+
+        def _json(self, dados, codigo=200):
+            corpo = json.dumps(dados).encode()
+            self.send_response(codigo)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(corpo)))
+            self.end_headers()
+            self.wfile.write(corpo)
+
+        def do_GET(self):  # noqa: N802
+            u = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            registro["pedidos"].append({"caminho": u.path, "params": q,
+                                        "auth": self.headers.get("Authorization")})
+            if u.path == "/videos/search":
+                if self.headers.get("Authorization") != "chave-pexels-9999":
+                    return self._json({"error": "unauthorized"}, 401)
+                return self._json({"page": 1, "per_page": 15, "total_results": 3,
+                                   "videos": [video_pexels(n) for n in (1, 2, 666)]})
+            if u.path.startswith("/videos/videos/"):
+                return self._json(video_pexels(int(u.path.rsplit("/", 1)[1])))
+            if u.path == "/api/videos/":
+                if q.get("key") != "chave-pixabay-8888":
+                    return self._json({"erro": "[ERROR 400] Invalid or missing API key"}, 400)
+                if registro["falhar_pixabay"]:
+                    return self._json({"erro": "interno"}, 500)
+                b = base_holder["base"]
+                hits = [{"id": 70 + k, "pageURL": f"https://pixabay.com/videos/x-{70 + k}/",
+                         "type": "film", "tags": "academia, treino", "duration": 9,
+                         "user_id": 3, "user": "fotografo",
+                         "videos": {
+                             "large": {"url": "", "width": 0, "height": 0, "size": 0,
+                                       "thumbnail": ""},
+                             "medium": {"url": f"{b}/arquivos/p{k}_m.mp4",
+                                        "width": w, "height": h, "size": 1000,
+                                        "thumbnail": f"{b}/mini/p{k}.jpg"},
+                             "small": {"url": f"{b}/arquivos/p{k}_s.mp4",
+                                       "width": w // 2, "height": h // 2, "size": 500,
+                                       "thumbnail": f"{b}/mini/p{k}.jpg"}}}
+                        for k, (w, h) in enumerate([(1920, 1080), (1080, 1920)])]
+                if q.get("id"):
+                    hits = [x for x in hits if str(x["id"]) == q["id"]]
+                return self._json({"total": 2, "totalHits": 2, "hits": hits})
+            if u.path.startswith("/arquivos/"):
+                registro["downloads"] += 1
+                corpo = clipe.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(corpo)))
+                self.end_headers()
+                self.wfile.write(corpo)
+                return
+            self._json({"erro": "rota"}, 404)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    base_holder["base"] = f"http://127.0.0.1:{srv.server_address[1]}"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    registro["_srv"] = srv
+    return base_holder["base"], registro
+
+
+def testar_banco_de_broll() -> None:
+    """O banco de b-roll grátis (Pexels e Pixabay), contra um banco falso.
+
+    A rede daqui não alcança os dois, então o teste sobe um servidor com o
+    MESMO formato da API deles e prova o que importa: a chave vai no lugar
+    certo e nunca volta para a tela nem aparece em mensagem de erro, só a
+    palavra da busca sai, o arquivo é escolhido no servidor (nunca por URL
+    vinda da tela), baixa para a biblioteca local, é reaproveitado sem rede
+    e entra como b-roll no vídeo. E o Claude pelo MCP faz o mesmo caminho.
+    """
+    import json as _json
+    import subprocess
+    import tempfile
+    import time as _time
+    from pathlib import Path
+
+    from editor import banco, db
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.jobs import get_queue
+    from editor.mcp import ferramentas as F
+    from editor.mcp.cliente import Cliente
+    from editor.server import app
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    # ---- sem rede nenhuma ------------------------------------------------
+    termos = banco.sugerir_termos(
+        "Olha, eu comecei a academia e a academia mudou a minha rotina de treino")
+    check(termos[:1] == ["academia"] and "rotina" in termos and "olha" not in termos,
+          f"as palavras de busca saem da fala, sem as vazias ({termos})")
+    item = {"arquivos": [{"url": "a", "largura": 2160, "altura": 3840, "tamanho": 0},
+                         {"url": "b", "largura": 1080, "altura": 1920, "tamanho": 0},
+                         {"url": "c", "largura": 540, "altura": 960, "tamanho": 0}]}
+    check(banco.escolher_arquivo(item, 1080, 1920)["url"] == "b",
+          "baixa o menor arquivo que ainda tem a nitidez do quadro — não o 4K")
+    check(banco.escolher_arquivo(item, 2160, 3840)["url"] == "a"
+          and banco.escolher_arquivo({"arquivos": item["arquivos"][2:]},
+                                     1080, 1920)["url"] == "c",
+          "e o maior que houver quando nenhum chega lá")
+
+    tmp = Path(tempfile.mkdtemp(prefix="banco_"))
+    projeto = None
+    # chave de ambiente na máquina de quem roda o teste passaria por cima
+    ambiente = {v: os.environ.pop(v, None) for v in banco.AMBIENTE.values()}
+    base_antiga = (banco.URL_PEXELS, banco.URL_PIXABAY)
+    chaves_antigas = {f: db.get_setting(banco.CHAVES[f], "") for f in banco.FONTES}
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    srv = None
+    try:
+        for f in banco.FONTES:
+            db.set_setting(banco.CHAVES[f], "")
+        cliente = TestClient(app)
+        e = cliente.get("/api/banco/estado").json()
+        check(e["alguma"] is False, "sem chave, a tela sabe que falta a chave")
+        r = cliente.get("/api/banco/buscar", params={"q": "academia"})
+        check(r.status_code == 400 and "chave" in r.json()["detail"],
+              "e a busca sem chave diz o que falta, sem erro 500")
+
+        clipe = tmp / "clipe.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=0xff00ff:s=180x320:r=25:d=4", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(clipe)],
+                       check=True)
+        base, reg = _banco_falso(tmp, clipe)
+        srv = reg["_srv"]
+        banco.URL_PEXELS = banco.URL_PIXABAY = base
+        banco._cache_busca.clear()
+        banco._itens.clear()
+
+        e = cliente.post("/api/banco/chaves",
+                         json={"pexels": "chave-pexels-9999",
+                               "pixabay": "chave-pixabay-8888"}).json()
+        texto_estado = _json.dumps(e)
+        check(e["pexels"]["tem_chave"] and e["pixabay"]["tem_chave"]
+              and e["pexels"]["final"] == "9999",
+              "as chaves ficam guardadas, e a tela vê só o final")
+        check("chave-pexels" not in texto_estado and "chave-pixabay" not in texto_estado,
+              "a chave NUNCA volta por rota nenhuma")
+
+        # ---- um projeto vertical com fala ---------------------------------
+        frases = ["eu comecei a academia esse ano",
+                  "a academia mudou a minha rotina",
+                  "e o treino ficou facil de manter"]
+        install(frases)
+        amostras, _m, dur = build_track([(f, 0.7) for f in frases])
+        fonte = make_video(tmp / "fala.mp4", amostras, dur, 180, 320, 30)
+        projeto = svc.create(str(fonte), "banco", "VSL")
+        svc.one_click(svc.load(projeto.id), Ctx(quiet=True))
+        pid = projeto.id
+
+        sug = cliente.get(f"/api/projects/{pid}/banco/sugestao",
+                          params={"t": 1.0}).json()
+        check(sug["orientacao"] == "portrait" and "academia" in sug["termos"],
+              f"no cursor, a sugestão vem da FALA e na orientação do vídeo "
+              f"({sug['termos']}, {sug['orientacao']})")
+
+        r = cliente.get("/api/banco/buscar", params={"q": "academia", "pid": pid})
+        corpo = r.json()
+        itens = corpo["itens"]
+        ped_pexels = next(x for x in reg["pedidos"] if x["caminho"] == "/videos/search")
+        ped_pixabay = next(x for x in reg["pedidos"] if x["caminho"] == "/api/videos/")
+        check(r.status_code == 200 and len(itens) == 5,
+              f"a busca junta os dois bancos ({len(itens)} vídeos)")
+        check(ped_pexels["auth"] == "chave-pexels-9999"
+              and ped_pexels["params"].get("orientation") == "portrait"
+              and ped_pexels["params"].get("locale") == "pt-BR",
+              "Pexels: chave no cabeçalho, orientação do vídeo e busca em português")
+        check(ped_pixabay["params"].get("key") == "chave-pixabay-8888"
+              and ped_pixabay["params"].get("lang") == "pt"
+              and ped_pixabay["params"].get("q") == "academia",
+              "Pixabay: chave na consulta (o único jeito que ele aceita), em português")
+        check({x["fonte"] for x in itens[:3]} == {"pexels", "pixabay"},
+              "os dois bancos aparecem já no começo da lista (intercalados)")
+        check(itens[-1]["id"] == "pixabay:70",
+              "o vídeo deitado vai para o FIM num projeto em pé")
+        check(all("arquivos" not in x and x.get("previa") for x in itens),
+              "a tela recebe a prévia, mas NUNCA a lista de onde baixar")
+        check(all(x.get("autor") for x in itens),
+              "e o nome do autor, para o crédito")
+        n_pedidos = len(reg["pedidos"])
+        cliente.get("/api/banco/buscar", params={"q": "academia", "pid": pid})
+        check(len(reg["pedidos"]) == n_pedidos,
+              "a mesma busca não vai à rede de novo (o Pixabay pede 24 h de cache)")
+
+        # ---- a chave nunca aparece num erro --------------------------------
+        banco._cache_busca.clear()
+        reg["falhar_pixabay"] = True
+        r = cliente.get("/api/banco/buscar", params={"q": "treino"})
+        check(r.status_code == 200 and r.json()["itens"]
+              and any("Pixabay" in a for a in r.json()["avisos"]),
+              "um banco fora do ar não derruba o outro — vem o aviso")
+        check("chave-pixabay" not in r.text, "e o aviso não carrega a chave")
+        reg["falhar_pixabay"] = False
+        banco.URL_PIXABAY = "http://127.0.0.1:9"
+        banco._cache_busca.clear()
+        r = cliente.get("/api/banco/buscar", params={"q": "corrida"})
+        check("chave-pixabay" not in r.text and "sem conexão" in r.text,
+              "sem conexão: a mensagem diz isso, sem a URL (que tem a chave)")
+        banco.URL_PIXABAY = base
+
+        # ---- usar: baixa e põe no vídeo -----------------------------------
+        r = cliente.post(f"/api/projects/{pid}/banco/usar",
+                         json={"ids": ["https://golpe.example.com/x.mp4"], "at": 0})
+        check(r.status_code == 400, "id que não é do banco é recusado na porta")
+        antes_dl = reg["downloads"]
+        job = cliente.post(f"/api/projects/{pid}/banco/usar",
+                           json={"ids": ["pexels:1", "pixabay:71", "pexels:666"],
+                                 "at": 0.4, "duracao": 1.5,
+                                 "termo": "academia"}).json()
+        fim = _time.time() + 120
+        while _time.time() < fim:
+            j = next((x for x in cliente.get("/api/jobs",
+                                             params={"project_id": pid}).json()
+                      if x["id"] == job["id"]), {})
+            if j.get("status") in ("ok", "erro", "cancelado"):
+                break
+            _time.sleep(0.3)
+        check(j.get("status") == "ok", f"o download roda como trabalho de fundo "
+                                       f"({j.get('status')}: {j.get('error')})")
+        res = j.get("result") or {}
+        postos = res.get("postos") or []
+        check(len(postos) == 2, f"dois b-rolls do banco entraram no vídeo ({len(postos)})")
+        check(any("fora dele" in x["motivo"] for x in res.get("recusados") or []),
+              "o vídeo que mandava baixar de outro endereço foi RECUSADO")
+        check(reg["downloads"] - antes_dl == 2, "e nada foi baixado dele")
+        nomes = sorted(x["name"] for x in postos)
+        check(any("_360x640" in n for n in nomes),
+              f"do Pexels veio o menor arquivo que dá o quadro, não o 4K ({nomes})")
+        biblioteca = cliente.get("/api/banco/baixados").json()
+        check(len(biblioteca) == 2 and all(Path(b["path"]).exists() for b in biblioteca)
+              and all(b["autor"] for b in biblioteca),
+              "os dois ficam na biblioteca local, com o crédito do autor")
+        check(all(Path(b["path"]).parent == banco.pasta() for b in biblioteca),
+              "na pasta de dados, não no projeto — servem para os próximos vídeos")
+        q = svc.load(pid)
+        check(len(q.plan.cutaways) == 2 and all(c.audio != "mute"
+                                                 for c in q.plan.active_clips),
+              "como b-roll (cobre a imagem), com a fala por baixo")
+
+        # ---- o Claude pelo MCP --------------------------------------------
+        c = Cliente(transporte=cliente)
+        texto = F.chamar(c, "buscar_broll", {"projeto": pid, "em": 1.0})
+        check("academia" in texto and "pexels:1" in texto,
+              "pelo MCP, a busca sugere pela fala e devolve os ids")
+        antes_dl = reg["downloads"]
+        t0 = _time.time()
+        texto = F.chamar(c, "broll_do_banco",
+                         {"projeto": pid, "ids": ["pexels:1"], "em": 4.0})
+        levou = _time.time() - t0
+        check("b-roll" in texto and "Autora 1" in texto,
+              f"e põe no vídeo, com o crédito ({texto[:80]!r})")
+        check(levou < 60, f"a ferramenta volta quando o trabalho acaba "
+                          f"({levou:.1f} s) — antes ela esperava a hora inteira")
+        check(reg["downloads"] == antes_dl,
+              "o que já foi baixado é reaproveitado sem rede")
+
+        # e uma falha de trabalho é contada como falha, não como sucesso
+        job_ruim = get_queue().submit("teste-falha", pid,
+                                      lambda ctx: (_ for _ in ()).throw(RuntimeError("quebrou")))
+        fimj = c.esperar_job(pid, job_ruim.id, limite=30, passo=0.2)
+        check(F._falhou(fimj) and "quebrou" in F._falhou(fimj),
+              "um trabalho que dá erro é contado como ERRO pelo MCP")
+    finally:
+        svc.previa_da_edicao = previa_real
+        for k, v in ambiente.items():
+            if v is not None:
+                os.environ[k] = v
+        banco.URL_PEXELS, banco.URL_PIXABAY = base_antiga
+        for f, v in chaves_antigas.items():
+            db.set_setting(banco.CHAVES[f], v)
+        if srv is not None:
+            srv.shutdown()
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(banco.pasta(), ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- a tela ----------------------------------------------------------
+    frente = Path("frontend/src/components")
+    tela = (frente / "BancoBroll.tsx").read_text(encoding="utf-8")
+    midia = (frente / "MediaPanel.tsx").read_text(encoding="utf-8")
+    check("<BancoBroll" in midia, "o banco aparece na aba Mídia")
+    check("api.bancoUsar(" in tela and "url" not in
+          tela.split("api.bancoUsar(")[1].split(")")[0],
+          "a tela manda IDs para baixar, nunca uma URL")
+    check("Pexels" in tela and "Pixabay" in tela and "autor" in tela,
+          "e mostra de onde vem e de quem é cada vídeo")
 
 if __name__ == "__main__":
     install(["frase %d" % i for i in range(20)])

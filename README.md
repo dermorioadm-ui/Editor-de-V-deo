@@ -774,7 +774,34 @@ Cada um cobre até 5 s (ou menos, se o vídeo for mais curto); estique a borda
 no trilho para mudar. A fala continua por baixo: nenhuma palavra sai do lugar
 e a duração do vídeo não muda. O que não couber (fim do vídeo, imagem em vez
 de vídeo) volta com o motivo escrito. Imagem entra pela aba Mídia, como
-janela ou como foto. Uma janela de vídeo
+janela ou como foto.
+
+### Banco de b-roll grátis (Pexels e Pixabay)
+
+Na aba **Mídia**, a primeira seção é o **Banco de b-roll grátis**: milhões
+de vídeos do [Pexels](https://www.pexels.com) e do
+[Pixabay](https://pixabay.com), de uso livre inclusive em anúncio, sem
+precisar dar crédito.
+
+1. **Uma vez só:** os dois pedem uma chave grátis (é só criar a conta). Clique
+   em **criar chave grátis** ao lado de cada um, copie a chave e cole ali.
+   Basta uma; com as duas a busca acha mais. A chave fica neste computador e
+   nunca aparece de volta na tela.
+2. **Buscar:** o editor já sugere palavras a partir do que você está falando
+   no ponto do cursor (os botões abaixo da busca). A busca é em português e
+   já vem na orientação do seu vídeo (em pé, deitado ou quadrado). Passe o
+   mouse num vídeo para ver a prévia.
+3. **Usar:** marque um ou vários (entram na ordem em que você marcou) e
+   clique **pôr em …**. Eles são baixados e entram como b-roll a partir do
+   cursor, um depois do outro, com a sua fala por baixo.
+
+O que sai do seu computador é **só a palavra buscada**; o seu vídeo não vai
+para lugar nenhum. O b-roll baixado fica na biblioteca local (pasta de dados,
+`media/broll`) e aparece em **já baixados**, para usar em outros vídeos sem
+internet. O editor baixa o menor arquivo que ainda tem a nitidez do seu
+vídeo, e não o 4K. Quem prefere não ter chave em disco pode usar as
+variáveis de ambiente `EDITOR_PEXELS_KEY` e `EDITOR_PIXABAY_KEY` no
+`iniciar.bat`. Uma janela de vídeo
 estica até o fim da mídia dela e para ali, avisando — nunca congela o último
 quadro. Soltar um item em cima de um trecho cortado o encosta no bloco mantido
 mais perto (antes soltar num corte simplesmente não fazia nada).
@@ -1379,9 +1406,11 @@ Em português, do jeito que você falaria:
 - *"põe essa música de fundo em -20 dB"*
 - *"exporta e me diz onde ficou"*
 
-São vinte ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+São vinte e duas ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
 transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
-**b-roll** (vários vídeos por cima da fala, em sequência), animar, recortar em
+**b-roll** (vários vídeos por cima da fala, em sequência), **buscar b-roll no
+banco grátis** e **pôr b-roll do banco** (ele lê o que você fala no ponto,
+procura e põe), animar, recortar em
 forma, efeitos, trilha, formatos (inclusive o 4:5 do feed), exportar,
 acrescentar vídeo, juntar vídeos, gravações, listar projetos e estado do
 editor.

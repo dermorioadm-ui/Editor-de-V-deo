@@ -2442,9 +2442,13 @@ def inserir_brolls(project: Project, caminhos: list[str], inicio: float,
                             for c in project.plan.cutaways if c.enabled]
         vaga = _vaga_do_broll(ocupados, cursor, quer, limite)
         if vaga is None:
-            recusados.append({"path": caminho, "motivo":
-                              f"não coube: o vídeo termina em {limite:.1f} s e "
-                              f"não sobrou vão livre depois de {cursor:.1f} s"})
+            coberto = any(b > cursor + 0.05 for a, b in ocupados)
+            recusados.append({"path": caminho, "motivo": (
+                f"não coube: de {cursor:.1f} s até o fim ({limite:.1f} s) já "
+                f"está tudo coberto — apague um b-roll no trilho ou ponha o "
+                f"cursor antes" if coberto else
+                f"não coube: o vídeo termina em {limite:.1f} s, perto demais "
+                f"do cursor ({cursor:.1f} s) — ponha o cursor antes")})
             continue
         try:
             midia = add_media(project.id, caminho, "video", papel="anexo")
@@ -2470,6 +2474,62 @@ def inserir_brolls(project: Project, caminhos: list[str], inicio: float,
     if postos:
         project.save_plan()
     return {"postos": postos, "recusados": recusados}
+
+
+def broll_do_banco(project: Project, ctx, pedido: dict) -> dict:
+    """Baixa os vídeos escolhidos no banco grátis e põe como b-roll no cursor.
+
+    JOB: baixar leva de segundos a minutos. Cada vídeo vai para a biblioteca
+    local (reusado sem rede na próxima vez) e entra pelo mesmo caminho do
+    "+ b-roll": em sequência, cada um no primeiro vão livre, com a fala por
+    baixo. O projeto é RECARREGADO antes de mexer no plano, para não apagar
+    o que ele retocou enquanto o download corria.
+    """
+    from . import banco
+
+    ids = [str(x) for x in (pedido.get("ids") or []) if str(x).strip()][:12]
+    if not ids:
+        raise ValueError("escolha pelo menos um vídeo do banco")
+    try:
+        w, h = (int(x) for x in project.info.display_size)
+    except Exception:  # noqa: BLE001
+        w, h = 1080, 1920
+    termo = str(pedido.get("termo") or "")
+    n = len(ids)
+    caminhos: list[str] = []
+    creditos: list[dict] = []
+    falhas: list[dict] = []
+    for i, item_id in enumerate(ids):
+        ctx.stage("banco", f"baixando o b-roll {i + 1} de {n}")
+        try:
+            r = banco.baixar(item_id, w, h, termo,
+                             on_progress=ctx.scoped(0.9 * i / n, 0.9 * (i + 1) / n,
+                                                    "banco"),
+                             cancelado=ctx.cancelled)
+        except banco.ErroDoBanco as exc:
+            falhas.append({"path": item_id, "motivo": str(exc)})
+            continue
+        caminhos.append(r["path"])
+        creditos.append({"fonte": r["fonte"], "autor": r["autor"],
+                         "pagina": r["pagina"], "arquivo": r["arquivo"]})
+    if not caminhos:
+        raise RuntimeError("; ".join(f["motivo"] for f in falhas)
+                           or "nenhum vídeo baixou")
+    ctx.progress(0.95, "pondo no vídeo", "banco")
+    res = inserir_brolls(load(project.id), caminhos,
+                         float(pedido.get("at") or 0.0),
+                         float(pedido.get("duracao") or DURACAO_DO_BROLL))
+    return {**res, "recusados": falhas + res["recusados"], "creditos": creditos}
+
+
+def termos_no_cursor(project: Project, t: float, janela: float = 4.0) -> dict:
+    """O que está sendo DITO perto do cursor, e as palavras para buscar."""
+    from . import banco
+
+    falas = [s.text.replace("\n", " ") for s in project.plan.subtitles
+             if s.end >= t - janela and s.start <= t + janela]
+    texto = " ".join(falas).strip()
+    return {"texto": texto, "termos": banco.sugerir_termos(texto)}
 
 
 def timeline_summary(project: Project) -> dict:

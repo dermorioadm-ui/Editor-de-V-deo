@@ -54,9 +54,9 @@ def _falhou(job: dict) -> str | None:
         return (f"ainda rodando depois do tempo que esperei "
                 f"({job.get('stage') or '?'}, {int(job.get('progress', 0) * 100)}%). "
                 f"O editor continua trabalhando — pergunte o estado daqui a pouco.")
-    if job.get("status") == "error":
+    if job.get("status") in ("erro", "error"):
         return f"deu erro: {job.get('error') or 'sem detalhe'}"
-    if job.get("status") == "cancelled":
+    if job.get("status") in ("cancelado", "cancelled"):
         return "foi cancelado."
     return None
 
@@ -82,7 +82,7 @@ def estado_do_editor(c: Cliente, _a: dict) -> str:
         f" em {dev.get('device', '?')}",
         f"vídeos salvos em: {pasta.get('path') or pasta.get('dir') or '?'}",
     ]
-    rodando = [j for j in jobs if j.get("status") == "running"]
+    rodando = [j for j in jobs if j.get("status") in ("rodando", "fila", "running")]
     linhas.append(f"trabalhando agora: {len(rodando)} — "
                   + (", ".join(f"{j['kind']} {int(j.get('progress', 0) * 100)}%"
                                for j in rodando) if rodando else "nada"))
@@ -411,6 +411,96 @@ def broll(c: Cliente, a: dict) -> str:
               for p in r.get("postos") or []]
     for x in r.get("recusados") or []:
         linhas.append(f"não entrou {x.get('path')}: {x.get('motivo')}")
+    return "\n".join(linhas) or "nada entrou"
+
+
+@ferramenta(
+    "buscar_broll",
+    "Procura vídeos de b-roll GRÁTIS (Pexels e Pixabay, uso comercial livre) "
+    "por palavra, em português. Com 'projeto' e 'em', sugere as palavras a "
+    "partir do que está sendo dito naquele ponto e já filtra pela orientação "
+    "do vídeo. Devolve os ids que broll_do_banco usa. Só a palavra sai da "
+    "máquina; precisa da chave grátis do Pexels ou do Pixabay colada no editor.",
+    {
+        "properties": {
+            "termo": {"type": "string", "description": "o que procurar (ex.: café, academia)"},
+            "projeto": {"type": "string"},
+            "em": {"type": "number",
+                   "description": "segundo do vídeo, para sugerir pela fala"},
+        },
+        "required": [],
+    },
+)
+def buscar_broll(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    termo = str(a.get("termo") or "").strip()
+    linhas: list[str] = []
+    orientacao = ""
+    if pid:
+        sug = c.get(f"/api/projects/{pid}/banco/sugestao", t=float(a.get("em") or 0.0))
+        orientacao = sug.get("orientacao") or ""
+        if sug.get("texto"):
+            linhas.append(f"fala nesse ponto: \"{sug['texto'][:160]}\"")
+        if sug.get("termos"):
+            linhas.append("palavras sugeridas: " + ", ".join(sug["termos"]))
+        if not termo and sug.get("termos"):
+            termo = sug["termos"][0]
+    if not termo:
+        return "\n".join(linhas + ["diga o que procurar em 'termo'"])
+    r = c.get("/api/banco/buscar", q=termo, orientacao=orientacao, pid=pid)
+    itens = r.get("itens") or []
+    linhas.append(f"busca: {termo} ({len(itens)} vídeos)")
+    for it in itens[:15]:
+        linhas.append(f"- {it['id']}: {_seg(it.get('duracao'))}, "
+                      f"{it.get('largura')}x{it.get('altura')}, de "
+                      f"{it.get('autor') or '?'}"
+                      + (f" — {it['descricao']}" if it.get("descricao") else ""))
+    for aviso in r.get("avisos") or []:
+        linhas.append(f"aviso: {aviso}")
+    linhas.append("próximo passo: broll_do_banco com os ids escolhidos")
+    return "\n".join(linhas)
+
+
+@ferramenta(
+    "broll_do_banco",
+    "Baixa vídeos do banco grátis (ids de buscar_broll) para a máquina dele e "
+    "põe como b-roll por cima da fala, em sequência a partir do segundo 'em'. "
+    "O que já foi baixado antes é reaproveitado sem rede.",
+    {
+        "properties": {
+            "projeto": {"type": "string"},
+            "ids": {"type": "array", "items": {"type": "string"},
+                    "description": "ids de buscar_broll, na ordem em que entram"},
+            "em": {"type": "number", "description": "segundo em que o primeiro entra"},
+            "dura": {"type": "number",
+                     "description": "quanto cada um cobre no máximo (padrão 5 s)"},
+        },
+        "required": ["projeto", "ids", "em"],
+    },
+)
+def broll_do_banco(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    ids = a.get("ids") or []
+    if isinstance(ids, str):
+        ids = [ids]
+    corpo = {"ids": [str(x) for x in ids], "at": float(a.get("em") or 0.0)}
+    if a.get("dura"):
+        corpo["duracao"] = float(a["dura"])
+    job = c.post(f"/api/projects/{pid}/banco/usar", corpo)
+    fim = c.esperar_job(pid, job.get("id", ""))
+    ruim = _falhou(fim)
+    if ruim:
+        return f"o b-roll do banco {ruim}"
+    r = fim.get("result") or {}
+    linhas = [f"b-roll {p.get('name') or p.get('media_id')}: "
+              f"{_seg(p.get('out_start'))} a {_seg(p.get('out_end'))}"
+              for p in r.get("postos") or []]
+    for x in r.get("recusados") or []:
+        linhas.append(f"não entrou {x.get('path')}: {x.get('motivo')}")
+    autores = sorted({f"{k.get('autor')} ({k.get('fonte')})"
+                      for k in r.get("creditos") or [] if k.get("autor")})
+    if autores:
+        linhas.append("vídeos de: " + ", ".join(autores))
     return "\n".join(linhas) or "nada entrou"
 
 

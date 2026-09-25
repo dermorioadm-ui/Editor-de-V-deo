@@ -4,6 +4,7 @@ import TonemapCompare from './TonemapCompare'
 import PhotoPanel from './PhotoPanel'
 import Positioner from './Positioner'
 import GerarIA from './GerarIA'
+import BancoBroll from './BancoBroll'
 import CartoesIA from './CartoesIA'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
@@ -70,6 +71,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
 
   return (
     <div className="p-4 space-y-5 max-w-5xl">
+      <BancoBroll projectId={project.id} onChanged={onChanged} snapshot={snapshot} />
       <CartoesIA projectId={project.id} onChanged={onChanged} snapshot={snapshot}
                  cartoes={(view.overlays ?? [])
                    .filter((o: any) => String(o.media_id).startsWith('k_'))

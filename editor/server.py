@@ -2444,6 +2444,84 @@ def api_ia_gerar(pid: str, payload: dict = Body(...)) -> dict:
     return job.to_dict()
 
 
+# ------------------------------------------------------ banco de b-roll
+# Pexels e Pixabay: bancos grátis, de uso comercial livre. Só a palavra da
+# busca sai da máquina; o vídeo dele nunca. Ver editor/banco.py.
+def _orientacao_do_projeto(project) -> str:
+    from . import banco
+
+    try:
+        w, h = project.info.display_size
+    except Exception:  # noqa: BLE001
+        return ""
+    return banco.orientacao_de(w, h)
+
+
+@app.get("/api/banco/estado")
+def api_banco_estado() -> dict:
+    """Quais bancos têm chave — NUNCA a chave (ver /api/ai/config)."""
+    from . import banco
+
+    return {**banco.estado(), "baixados": len(banco.baixados())}
+
+
+@app.post("/api/banco/chaves")
+def api_banco_chaves(payload: dict = Body(...)) -> dict:
+    from . import banco
+
+    for fonte in banco.FONTES:
+        if fonte in payload:
+            banco.guardar_chave(fonte, str(payload.get(fonte) or ""))
+    return {**banco.estado(), "baixados": len(banco.baixados())}
+
+
+@app.get("/api/banco/buscar")
+def api_banco_buscar(q: str = "", orientacao: str = "", pagina: int = 1,
+                     pid: str = "") -> dict:
+    from . import banco
+
+    if not orientacao and pid:
+        orientacao = _orientacao_do_projeto(_project(pid))
+    try:
+        return banco.buscar(q, orientacao, max(1, min(50, pagina)))
+    except banco.ErroDoBanco as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/banco/baixados")
+def api_banco_baixados() -> list[dict]:
+    from . import banco
+
+    return banco.baixados()
+
+
+@app.get("/api/projects/{pid}/banco/sugestao")
+def api_banco_sugestao(pid: str, t: float = 0.0) -> dict:
+    project = _project(pid)
+    return {**svc.termos_no_cursor(project, float(t)),
+            "orientacao": _orientacao_do_projeto(project)}
+
+
+@app.post("/api/projects/{pid}/banco/usar")
+def api_banco_usar(pid: str, payload: dict = Body(...)) -> dict:
+    """Baixa os escolhidos (job) e põe como b-roll a partir de ``at``."""
+    from . import banco
+
+    _project(pid)
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "escolha pelo menos um vídeo do banco")
+    if not all(str(x).partition(":")[0] in banco.FONTES for x in ids):
+        raise HTTPException(400, "id de b-roll inválido")
+    pedido = {"ids": [str(x) for x in ids][:12],
+              "at": float(payload.get("at") or 0.0),
+              "duracao": float(payload.get("duracao") or svc.DURACAO_DO_BROLL),
+              "termo": str(payload.get("termo") or "")[:100]}
+    job = get_queue().submit("banco-broll", pid,
+                             lambda ctx: svc.broll_do_banco(svc.load(pid), ctx, pedido))
+    return job.to_dict()
+
+
 @app.get("/{path:path}", response_class=HTMLResponse)
 def spa(path: str) -> HTMLResponse:
     if path.startswith("api/"):

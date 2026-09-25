@@ -217,6 +217,18 @@ export const api = {
     put<any>(`/api/projects/${id}/blurs/${bid}`, payload),
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
+  // banco de b-roll grátis (Pexels + Pixabay): a tela manda IDS, nunca URLs
+  bancoEstado: () => req<any>('/api/banco/estado'),
+  bancoChaves: (chaves: { pexels?: string; pixabay?: string }) =>
+    post<any>('/api/banco/chaves', chaves),
+  bancoBuscar: (q: string, orientacao: string, pid: string, pagina = 1) =>
+    req<any>(`/api/banco/buscar?${new URLSearchParams({
+      q, orientacao, pid, pagina: String(pagina) })}`),
+  bancoBaixados: () => req<any[]>('/api/banco/baixados'),
+  bancoSugestao: (pid: string, t: number) =>
+    req<any>(`/api/projects/${pid}/banco/sugestao?t=${t.toFixed(2)}`),
+  bancoUsar: (pid: string, ids: string[], at: number, termo: string) =>
+    post<any>(`/api/projects/${pid}/banco/usar`, { ids, at, termo }),
   /** b-roll por cima da fala: vários vídeos, em sequência a partir de `at` */
   brolls: (id: string, paths: string[], at: number, duracao?: number) =>
     post<{ ok: boolean; postos: any[]; recusados: { path: string; motivo: string }[] }>(
