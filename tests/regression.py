@@ -336,6 +336,7 @@ def main() -> int:
     testar_gravar_dentro_do_app()
     testar_pacote_numa_esteira_so()
     testar_gravacao_e_teleprompter_na_tela()
+    testar_olhar_na_lente()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -5633,6 +5634,150 @@ def testar_gravacao_e_teleprompter_na_tela() -> None:
     check("fontes_extras: fontesExtras" in apis,
           "e o clique único recebe as outras gravações como FONTE, não como "
           "anexo — elas são continuação da montagem, não janela por cima")
+
+
+def testar_olhar_na_lente() -> None:
+    """O desvio do olhar em graus — e a conta conferida contra medida física.
+
+    O problema do teleprompter é geométrico antes de ser tecnológico: você lê o
+    texto, o texto está num lugar da tela, a lente está em outro, e a diferença
+    é um ÂNGULO. Quem assiste não vê o texto; vê o desvio.
+
+    A tecnologia que redesenha o olho (NVIDIA Broadcast, Apple) conserta o
+    sintoma e é boa — e como ela expõe uma CÂMERA VIRTUAL, ela já funciona nesta
+    tela, que lista todas as câmeras. O que o editor acrescenta é a causa: o
+    ângulo, que se resolve movendo o texto, de graça e sem GPU.
+
+    Este teste confere a conta contra a realidade, não contra ela mesma: a
+    altura de uma tela de 24 polegadas em 16:9 é 29,9 cm — isso é medida de
+    régua, não opinião. Se a fórmula errar isso, o número de graus que a tela
+    mostra é decoração.
+    """
+    import json
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    node = _shutil.which("node")
+    esbuild = Path("frontend/node_modules/.bin/esbuild")
+    if not node or not esbuild.exists():
+        print("  --    olhar na lente: sem Node/esbuild aqui, pulado")
+        return
+
+    tmp = Path(tempfile.mkdtemp(prefix="olhar_"))
+    try:
+        pacote = tmp / "olhar.mjs"
+        r = subprocess.run([str(esbuild.resolve()), "src/lib/olhar.ts", "--bundle",
+                            "--format=esm", f"--outfile={pacote}",
+                            "--log-level=error"],
+                           cwd="frontend", capture_output=True, text=True)
+        check(r.returncode == 0,
+              f"o módulo do olhar compila ({r.stderr.strip()[:120]})")
+        if r.returncode != 0:
+            return
+
+        roteiro = tmp / "roda.mjs"
+        roteiro.write_text(
+            "import * as O from " + json.dumps(str(pacote)) + ";\n"
+            "const base = {lenteY:0, alturaJanelaPx:1080, diagonalPolegadas:24,"
+            " proporcaoTela:16/9, distanciaCm:60};\n"
+            "const fora = {\n"
+            "  altura_24_16x9: O.alturaDaTelaCm(24, 16/9),\n"
+            "  altura_24_4x3: O.alturaDaTelaCm(24, 4/3),\n"
+            "  altura_15_16x10: O.alturaDaTelaCm(15.6, 16/10),\n"
+            "  na_lente: O.desvioDoOlhar({...base, linhaY:0.02}),\n"
+            "  perto: O.desvioDoOlhar({...base, linhaY:0.14}),\n"
+            "  meio: O.desvioDoOlhar({...base, linhaY:0.5}),\n"
+            "  embaixo: O.desvioDoOlhar({...base, linhaY:0.8}),\n"
+            "  // a MESMA altura numa tela grande desvia mais\n"
+            "  meio_tela_grande: O.desvioDoOlhar({...base, linhaY:0.5,"
+            " diagonalPolegadas:32}),\n"
+            "  // e mais longe da tela desvia menos\n"
+            "  meio_longe: O.desvioDoOlhar({...base, linhaY:0.5, distanciaCm:120}),\n"
+            "  colado: O.linhaParaOAngulo(base),\n"
+            "  colado_8: O.linhaParaOAngulo({...base, grausAlvo:8}),\n"
+            "  virtual: ['NVIDIA Broadcast Camera','OBS Virtual Camera',"
+            "'Integrated Webcam','Logitech C920'].map(O.ehCameraVirtual),\n"
+            "};\n"
+            "console.log(JSON.stringify(fora));\n",
+            encoding="utf-8")
+        saida = subprocess.run([node, str(roteiro)], capture_output=True, text=True)
+        check(saida.returncode == 0, f"e roda ({saida.stderr.strip()[:140]})")
+        if saida.returncode != 0:
+            return
+        d = json.loads(saida.stdout.strip().split("\n")[-1])
+
+        # ---- a conta contra a régua ---------------------------------
+        check(abs(d["altura_24_16x9"] - 29.9) < 0.1,
+              f"uma tela de 24\" em 16:9 tem 29,9 cm de altura "
+              f"({d['altura_24_16x9']:.1f})")
+        check(abs(d["altura_24_4x3"] - 36.6) < 0.1,
+              f"a MESMA diagonal em 4:3 tem 36,6 cm — a proporção entra na "
+              f"conta, e é por isso que a diagonal sozinha não serve "
+              f"({d['altura_24_4x3']:.1f})")
+        check(abs(d["altura_15_16x10"] - 21.0) < 0.2,
+              f"e um notebook de 15,6\" em 16:10 tem 21 cm "
+              f"({d['altura_15_16x10']:.1f})")
+
+        # ---- o ângulo, e o que ele significa ------------------------
+        check(d["na_lente"]["graus"] < 2 and d["na_lente"]["veredito"] == "imperceptivel",
+              f"texto colado na lente: {d['na_lente']['graus']}° — "
+              f"{d['na_lente']['veredito']}")
+        check(d["meio"]["graus"] > 12 and d["meio"]["veredito"] == "aparece",
+              f"texto no MEIO da tela: {d['meio']['graus']}° — aparece que "
+              f"está lendo (era exatamente onde o teleprompter estava antes)")
+        check(d["embaixo"]["graus"] > d["meio"]["graus"] > d["perto"]["graus"]
+              > d["na_lente"]["graus"],
+              f"o desvio cresce conforme o texto desce "
+              f"({d['na_lente']['graus']}° → {d['perto']['graus']}° → "
+              f"{d['meio']['graus']}° → {d['embaixo']['graus']}°)")
+
+        # ---- o que faz a tela e a distância importarem ---------------
+        check(d["meio_tela_grande"]["graus"] > d["meio"]["graus"] + 2,
+              f"a MESMA altura numa tela de 32\" desvia mais "
+              f"({d['meio']['graus']}° → {d['meio_tela_grande']['graus']}°) — "
+              f"é por isso que a conta pede o tamanho da tela")
+        check(d["meio_longe"]["graus"] < d["meio"]["graus"] / 1.6,
+              f"e sentar mais longe desvia menos "
+              f"({d['meio']['graus']}° a 60 cm → {d['meio_longe']['graus']}° "
+              f"a 120 cm)")
+
+        # ---- "colar na lente" põe o texto onde cabe ------------------
+        colado = d["colado"]
+        check(0.02 < colado < 0.35,
+              f"'colar na lente' põe o texto a {colado * 100:.0f}% da tela — "
+              f"nem na borda (ilegível) nem no meio (aparece)")
+        check(d["colado_8"] > colado,
+              f"e aceitar 8° de desvio deixa o texto descer mais, porque texto "
+              f"mais baixo é mais fácil de ler ({colado * 100:.0f}% → "
+              f"{d['colado_8'] * 100:.0f}%)")
+
+        # ---- a câmera virtual do corretor de olhar -------------------
+        check(d["virtual"] == [True, True, False, False],
+              f"reconhece a câmera virtual do NVIDIA Broadcast e do OBS, e não "
+              f"confunde com webcam comum ({d['virtual']})")
+
+        # ---- e a tela usa isso -------------------------------------
+        g = Path("frontend/src/components/Gravar.tsx").read_text(encoding="utf-8")
+        check("desvioDoOlhar({" in g and "olhar.graus" in g,
+              "a tela MOSTRA o desvio em graus, em vez de deixar ele adivinhar")
+        check("linhaParaOAngulo({" in g,
+              "e tem o botão que cola o texto na lente")
+        check("lente" in g and "top: `max(2px, ${lenteY * 100}%)`" in g,
+              "com a marca de onde a câmera está — 'olhe para a câmera' sem "
+              "endereço não ajuda ninguém")
+        check("ehCameraVirtual(d.label)" in g and "NVIDIA Broadcast" in g,
+              "e avisa quando existe uma câmera com correção de olhar na "
+              "máquina, que é a tecnologia que redesenha o olho")
+        check("width: 'min(46%, 620px)'" in g,
+              "o texto virou COLUNA ESTREITA: linha curta mantém o olho perto "
+              "do centro em vez de varrer a tela de ponta a ponta")
+        check("top: `${linhaY * 100}%`" in g and "top-1/4" not in g,
+              "e não é mais o bloco que cobria os três quartos de baixo — ler "
+              "ali é olhar para baixo, o desvio mais visível que existe")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

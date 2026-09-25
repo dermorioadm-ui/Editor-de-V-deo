@@ -1402,6 +1402,47 @@ máquina.
   gravação começa e para no fim. Velocidade, tamanho da letra e espelhamento
   (para vidro de teleprompter) ficam na mão. O texto **não entra no vídeo** —
   só aparece na sua tela.
+
+### O olhar na lente
+
+Ler o teleprompter e olhar para a câmera são coisas diferentes, e a diferença
+entre as duas é um **ângulo**. Quem assiste não vê o texto: vê o desvio.
+
+O painel mostra esse desvio **em graus**, em tempo real:
+
+| desvio | o que aparece no vídeo |
+|---|---|
+| **abaixo de 4°** | ninguém nota que você está lendo |
+| **4° a 8°** | parece que você olha para a tela, não para a lente |
+| **acima de 8°** | dá para ver que você está lendo |
+
+Para a conta sair certa ela pede duas coisas que só você sabe: o **tamanho da
+tela em polegadas** e a **distância até ela em centímetros**. O motivo é que o
+mesmo texto na mesma altura desvia mais numa tela grande e menos numa pequena —
+o que conta é o ângulo, não o tanto de pixels. Numa tela de 24" a 60 cm: texto
+no meio da tela = **14°** (aparece); texto colado na lente = **0,6°**
+(invisível).
+
+O botão **colar o texto na lente** põe o texto na altura mais baixa que ainda
+fica abaixo de 4°. A marca redonda com a palavra *lente* mostra onde a câmera
+está; se a sua webcam não fica em cima, arraste a **altura da lente**.
+
+### A correção que redesenha o olho
+
+Existe tecnologia que **re-renderiza os seus olhos** para eles apontarem para a
+lente — o **NVIDIA Broadcast** faz isso de graça em placa RTX, e o iPhone/Mac
+fazem sozinhos no FaceTime.
+
+**Ela já funciona aqui, sem o editor precisar de nada.** O NVIDIA Broadcast
+cria uma *câmera virtual*; instalado e com "Eye Contact" ligado, ela aparece na
+lista de câmeras desta tela e a imagem chega aqui **já corrigida**. O app
+reconhece essa câmera pelo nome e avisa quando encontra uma.
+
+> Por que o editor não traz um modelo desses embutido: um olho mal corrigido
+> fica morto, e num criativo isso é pior que olhar 5° fora da lente. Além
+> disso, esses modelos exigem GPU específica. A posição do texto resolve a
+> causa; o modelo conserta o sintoma — e quando você tem os dois, melhor
+> ainda.
 - Aperte **gravar**. Uma contagem de 3 segundos dá tempo de tirar a mão do
   mouse e olhar para a lente.
 - A tomada cai na lista embaixo. A que não prestou, **apagar**. As que

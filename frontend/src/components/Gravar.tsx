@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { toast } from '../state/store'
+import { desvioDoOlhar, ehCameraVirtual, linhaParaOAngulo } from '../lib/olhar'
 
 /**
  * O AMBIENTE DE GRAVAÇÃO.
@@ -85,6 +86,20 @@ export default function Gravar({ onFechar, onUsar }: Props) {
   const [espelhado, setEspelhado] = useState(false)
   const [mostrarTexto, setMostrarTexto] = useState(true)
   const prompter = useRef<HTMLDivElement | null>(null)
+  // ONDE O OLHO OLHA. A linha de leitura é onde o texto passa; a lente é onde
+  // a câmera está. A diferença entre as duas é um ÂNGULO, e é o ângulo que
+  // quem assiste vê — não o texto. Por isso os dois são ajustáveis e o desvio
+  // é mostrado em graus: adivinhar "está mais ou menos na altura da câmera"
+  // é o que faz o criativo sair com cara de quem está lendo.
+  const [linhaY, setLinhaY] = useState(0.14)
+  const [lenteY, setLenteY] = useState(0)
+  const [diagonal, setDiagonal] = useState(24)
+  const [distancia, setDistancia] = useState(60)
+  const [alturaJanela, setAlturaJanela] = useState(
+    typeof window === 'undefined' ? 1080 : window.innerHeight)
+  const [proporcaoTela, setProporcaoTela] = useState(
+    typeof window === 'undefined' ? 16 / 9
+      : window.screen.width / Math.max(1, window.screen.height))
 
   const listar = useCallback(async () => {
     try { setTomadas(await api.gravacoes()) } catch { /* lista vazia é ok */ }
@@ -126,6 +141,14 @@ export default function Gravar({ onFechar, onUsar }: Props) {
   }, [camera, microfone, somenteAudio])
 
   useEffect(() => { abrirCamera(); listar() }, [abrirCamera, listar])
+
+  // A conta do ângulo depende da altura da JANELA em pixels: sem ouvir o
+  // resize, mudar a janela deixava o número certo para o tamanho de antes.
+  useEffect(() => {
+    const medir = () => setAlturaJanela(window.innerHeight)
+    window.addEventListener('resize', medir)
+    return () => window.removeEventListener('resize', medir)
+  }, [])
 
   // A CÂMERA TEM QUE APAGAR AO SAIR. Sem isto a luz ao lado da lente fica
   // acesa depois de fechar a tela, e o usuário fica achando que está sendo
@@ -232,7 +255,16 @@ export default function Gravar({ onFechar, onUsar }: Props) {
     }
   }
 
+  const olhar = desvioDoOlhar({
+    lenteY, linhaY, alturaJanelaPx: alturaJanela,
+    diagonalPolegadas: diagonal, proporcaoTela, distanciaCm: distancia,
+  })
+  const corDoOlhar = olhar.veredito === 'imperceptivel' ? 'text-emerald-300'
+    : olhar.veredito === 'leve' ? 'text-amber-300' : 'text-red-300'
   const camaras = dispositivos.filter((d) => d.kind === 'videoinput')
+  const virtual = camaras.find((d) => ehCameraVirtual(d.label))
+  const usandoVirtual = !!virtual && (camera === virtual.deviceId
+    || (!camera && camaras[0]?.deviceId === virtual.deviceId))
   const micros = dispositivos.filter((d) => d.kind === 'audioinput')
 
   return (
@@ -279,21 +311,61 @@ export default function Gravar({ onFechar, onUsar }: Props) {
             </div>
           )}
 
-          {/* ----------------------------------------------- teleprompter */}
+          {/* ------------------------------------------------- a lente
+              A marca de onde a câmera está. Sem ela, "olhe para a câmera" é um
+              conselho sem endereço: em notebook a lente fica acima da borda de
+              cima, em monitor com webcam presa fica um pouco abaixo, e em
+              webcam de mesa pode ficar em qualquer altura. */}
+          <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none
+                          flex flex-col items-center"
+               style={{ top: `max(2px, ${lenteY * 100}%)` }}>
+            <div className="w-3 h-3 rounded-full border-2 border-accent
+                            bg-accent/30" />
+            <span className="text-[10px] text-accent/90 mt-0.5">lente</span>
+          </div>
+
+          {/* ----------------------------------------------- teleprompter
+              COLUNA ESTREITA NA ALTURA DA LENTE, não um bloco embaixo.
+              O bloco de antes cobria os três quartos de baixo da tela: ler ali
+              é olhar PARA BAIXO, que é o desvio mais visível que existe. Numa
+              tela de 24" a 60 cm, texto no meio da tela dá 14° de desvio —
+              aparece. Colado na lente dá 1,4° — ninguém nota. A coluna é
+              estreita pelo mesmo motivo no eixo horizontal: linha curta mantém
+              o olho perto do centro em vez de varrer a tela de ponta a ponta.
+              A conta está em lib/olhar.ts e o número aparece ao lado. */}
           {mostrarTexto && texto.trim() && (
-            <div ref={prompter}
-                 className="absolute left-0 right-0 bottom-0 top-1/4 overflow-hidden
-                            px-[8%] py-6 bg-gradient-to-t from-black/85 to-black/50
-                            pointer-events-none"
-                 style={{ transform: espelhado ? 'scaleX(-1)' : undefined }}>
-              <div style={{ fontSize: corpo, lineHeight: 1.45 }}
-                   className="text-white font-medium whitespace-pre-wrap text-center">
-                {/* respiro no fim para a última linha poder subir até o meio
-                    da tela, em vez de parar colada embaixo */}
-                {texto}
-                <div style={{ height: '50vh' }} />
+            <>
+              <div ref={prompter}
+                   className="absolute overflow-hidden pointer-events-none"
+                   style={{
+                     top: `${linhaY * 100}%`,
+                     left: '50%',
+                     width: 'min(46%, 620px)',
+                     height: '30%',
+                     transform: `translate(-50%, -50%)${espelhado ? ' scaleX(-1)' : ''}`,
+                     // o texto entra e sai desbotando: borda dura corta a
+                     // palavra no meio e o olho volta para procurá-la
+                     maskImage: 'linear-gradient(to bottom, transparent, #000 22%,'
+                       + ' #000 78%, transparent)',
+                     WebkitMaskImage: 'linear-gradient(to bottom, transparent,'
+                       + ' #000 22%, #000 78%, transparent)',
+                   }}>
+                <div style={{ fontSize: corpo, lineHeight: 1.5,
+                              paddingTop: '15%', paddingBottom: '15%',
+                              textShadow: '0 2px 10px rgba(0,0,0,.95)' }}
+                     className="text-white font-semibold whitespace-pre-wrap
+                                text-center">
+                  {texto}
+                  {/* respiro no fim: a última linha precisa poder subir até a
+                      linha de leitura, em vez de parar antes dela */}
+                  <div style={{ height: '30vh' }} />
+                </div>
               </div>
-            </div>
+              {/* a linha de leitura, para ele saber onde o olho tem que ficar */}
+              <div className="absolute left-0 right-0 pointer-events-none
+                              border-t border-accent/25"
+                   style={{ top: `${linhaY * 100}%` }} />
+            </>
           )}
         </div>
 
@@ -409,6 +481,96 @@ export default function Gravar({ onFechar, onUsar }: Props) {
               O texto começa a rolar sozinho quando você aperta gravar, e para
               ao acabar. Ele não entra no vídeo — só aparece aqui na tela.
             </p>
+          </div>
+
+          {/* ------------------------------------------- o olhar na lente
+              Esta é a parte que decide se o criativo tem cara de quem está
+              lendo. O desvio do olhar é um ÂNGULO: a diferença entre onde o
+              texto está e onde a lente está. Abaixo de 4° ninguém nota; acima
+              de 8° aparece. Em vez de "deixe mais ou menos na altura da
+              câmera", aqui está o número. */}
+          <div className="space-y-2 border-t border-line pt-3">
+            <div className="flex items-center gap-2">
+              <strong className="text-slate-300">olhar na lente</strong>
+              <span className={`chip ml-auto ${corDoOlhar}`}>
+                {olhar.graus}° de desvio
+              </span>
+            </div>
+            <p className={`leading-snug ${corDoOlhar}`}>{olhar.recado}</p>
+            <button className="btn btn-xs w-full btn-primary"
+                    onClick={() => setLinhaY(linhaParaOAngulo({
+                      lenteY, alturaJanelaPx: alturaJanela,
+                      diagonalPolegadas: diagonal, proporcaoTela,
+                      distanciaCm: distancia,
+                    }))}>
+              colar o texto na lente
+            </button>
+            <label className="block">
+              <span className="text-slate-500">
+                altura do texto: {Math.round(linhaY * 100)}% da tela
+              </span>
+              <input type="range" min={2} max={90} value={Math.round(linhaY * 100)}
+                     className="w-full"
+                     onChange={(e) => setLinhaY(Number(e.target.value) / 100)} />
+            </label>
+            <label className="block">
+              <span className="text-slate-500">
+                altura da lente: {Math.round(lenteY * 100)}%
+                {lenteY === 0 && ' (notebook / webcam em cima)'}
+              </span>
+              <input type="range" min={0} max={100} value={Math.round(lenteY * 100)}
+                     className="w-full"
+                     onChange={(e) => setLenteY(Number(e.target.value) / 100)} />
+            </label>
+            <div className="flex gap-2">
+              <label className="flex-1">
+                <span className="text-slate-500">tela (polegadas)</span>
+                <input type="number" min={10} max={80} value={diagonal}
+                       className="w-full mt-1"
+                       onChange={(e) => setDiagonal(Number(e.target.value) || 24)} />
+              </label>
+              <label className="flex-1">
+                <span className="text-slate-500">distância (cm)</span>
+                <input type="number" min={20} max={300} value={distancia}
+                       className="w-full mt-1"
+                       onChange={(e) => setDistancia(Number(e.target.value) || 60)} />
+              </label>
+            </div>
+            <p className="text-slate-600 leading-snug">
+              Esses dois números existem porque o mesmo texto na mesma altura
+              desvia mais numa tela grande e menos numa pequena — o que conta é
+              o ângulo, não o tanto de pixels.
+            </p>
+
+            {/* A CORREÇÃO NEURAL DO OLHAR, quando ela existe na máquina.
+                NVIDIA Broadcast e companhia redesenham o olho e expõem uma
+                CÂMERA VIRTUAL. Como esta tela lista todas as câmeras, ela já
+                funciona aqui — só escolher. Quem tem a placa quase sempre não
+                sabe que o recurso está ali, então vale dizer. */}
+            {virtual && !usandoVirtual && (
+              <div className="chip border-accent/60 text-accent block
+                              whitespace-normal leading-snug">
+                Achei <b>{virtual.label}</b> nas suas câmeras. Se ela tiver
+                correção de olhar ligada, escolha ela na lista de câmeras aí em
+                cima: a imagem chega aqui já com o olho apontado para a lente.
+              </div>
+            )}
+            {usandoVirtual && (
+              <div className="chip border-emerald-700 text-emerald-300 block
+                              whitespace-normal leading-snug">
+                Gravando pela <b>{virtual?.label}</b>. Se a correção de olhar
+                estiver ligada nela, o desvio acima deixa de importar.
+              </div>
+            )}
+            {!virtual && (
+              <p className="text-slate-600 leading-snug">
+                Existe tecnologia que <b>redesenha o olho</b> para ele apontar
+                para a lente — o NVIDIA Broadcast faz isso de graça em placa
+                RTX. Ele cria uma câmera virtual; instalado, ela aparece na
+                lista de câmeras aí em cima e a imagem já chega corrigida, sem
+                o editor precisar de nada.
+              </p>
+            )}
           </div>
         </div>
       </div>
