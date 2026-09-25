@@ -268,7 +268,7 @@ export default function Gravar({ onFechar, onUsar }: Props) {
   const micros = dispositivos.filter((d) => d.kind === 'audioinput')
 
   return (
-    <div className="fixed inset-0 z-50 bg-ink-950/95 flex flex-col">
+    <div className="fixed inset-0 z-50 bg-ink-900 flex flex-col">
       <div className="flex items-center gap-3 px-4 py-2 border-b border-line">
         <strong className="text-sm">Gravar</strong>
         <span className="text-[11px] text-slate-500">

@@ -339,6 +339,7 @@ def main() -> int:
     testar_olhar_na_lente()
     testar_tomadas_em_sequencia_nunca_por_cima()
     testar_nenhum_campo_branco_no_branco()
+    testar_nenhuma_cor_fora_da_paleta()
     testar_som_nao_estoura_com_trilha()
     testar_formato_de_feed_e_sem_legenda()
     testar_broll_depois_da_edicao()
@@ -5970,6 +5971,52 @@ def testar_nenhum_campo_branco_no_branco() -> None:
     check(not sem_estilo,
           f"nenhum campo de texto sem fundo escuro no app inteiro "
           f"({sem_estilo or 'todos com `field`'})")
+
+
+def testar_nenhuma_cor_fora_da_paleta() -> None:
+    """Toda cor usada nas telas existe na paleta.
+
+    O Tailwind não reclama de cor que não existe: ele só não gera a classe, e
+    o elemento fica sem cor nenhuma. A tela de gravação usava `bg-ink-950/95`,
+    e a paleta vai só até o 900. A tela abria TRANSPARENTE, e a primeira tela
+    aparecia por baixo das tomadas e do painel de controles: letras e botões
+    fantasmas.
+
+    Este teste confere cada tom usado contra o tailwind.config.js, e que a
+    tela de gravação tapa a de baixo por inteiro.
+    """
+    import re
+    from pathlib import Path
+
+    config = Path("frontend/tailwind.config.js").read_text(encoding="utf-8")
+    cores = re.search(r"colors:\s*\{(.*?)\n\s*\},", config, re.S).group(1)
+    paleta = {}
+    for nome, valor in re.findall(r"(\w+):\s*(\{[^}]*\}|'[^']*')", cores):
+        paleta[nome] = (set(re.findall(r"(\w+):", valor))
+                        if valor.startswith("{") else {"DEFAULT"})
+    check({"ink", "line", "accent"} <= set(paleta),
+          f"a paleta do app foi lida do tailwind.config.js ({sorted(paleta)})")
+
+    uso = re.compile(r"-(%s)(?:-(\w+))?\b" % "|".join(paleta))
+    fora = []
+    for arquivo in sorted(Path("frontend/src").rglob("*")):
+        if arquivo.suffix not in (".tsx", ".ts", ".css"):
+            continue
+        texto = arquivo.read_text(encoding="utf-8")
+        for m in uso.finditer(texto):
+            if (m.group(2) or "DEFAULT") not in paleta[m.group(1)]:
+                linha = texto[:m.start()].count("\n") + 1
+                fora.append(f"{arquivo.name}:{linha} {m.group(0)[1:]}")
+    check(not fora,
+          f"nenhuma cor fora da paleta no app inteiro "
+          f"({fora or 'todas existem'})")
+
+    gravar = Path("frontend/src/components/Gravar.tsx").read_text(encoding="utf-8")
+    raiz = re.search(r'className="fixed inset-0[^"]*"', gravar)
+    fundo = re.search(r"\bbg-ink-(\d+)(/\d+)?", raiz.group(0)) if raiz else None
+    check(bool(fundo) and fundo.group(1) in paleta["ink"] and not fundo.group(2),
+          "a tela de gravação tem fundo opaco: nada da primeira tela aparece "
+          "por baixo")
 
 
 def testar_som_nao_estoura_com_trilha() -> None:
