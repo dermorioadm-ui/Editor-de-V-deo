@@ -153,7 +153,7 @@ def abrir_video(c: Cliente, a: dict) -> str:
         "properties": {
             "projeto": {"type": "string"},
             "formato": {"type": "string",
-                        "description": "9:16, 1:1 ou 16:9 — o formato principal (opcional)"},
+                        "description": "9:16, 4:5 (feed), 1:1 ou 16:9 — o formato principal (opcional)"},
             "resumir_para": {"type": "number",
                              "description": "segundos que o vídeo tem que caber; a IA escolhe o que sai (opcional)"},
             "corte": {"type": "number",
@@ -531,7 +531,7 @@ def trilha(c: Cliente, a: dict) -> str:
         "properties": {
             "projeto": {"type": "string"},
             "principal": {"type": "string",
-                          "enum": ["fonte", "9:16", "1:1", "16:9"],
+                          "enum": ["fonte", "9:16", "4:5", "1:1", "16:9"],
                           "description": "'fonte' mantém a proporção do arquivo original"},
             "extras": {"type": "array", "items": {"type": "string"},
                        "description": "outros formatos a entregar junto"},
@@ -554,7 +554,7 @@ def formatos(c: Cliente, a: dict) -> str:
     extras = list(saiu.get("extras") or [])
     if principal != export["aspect"]:
         return (f"o editor não aceitou '{export['aspect']}' como formato "
-                f"principal (ficou '{principal}'). Valem: fonte, 9:16, 1:1, 16:9.")
+                f"principal (ficou '{principal}'). Valem: fonte, 9:16, 4:5, 1:1, 16:9.")
     return ("vai entregar em " + ", ".join([principal] + extras)
             + "\ncada um sai do mesmo corte, encodado a partir da fonte.")
 
@@ -636,7 +636,7 @@ def adicionar_video(c: Cliente, a: dict) -> str:
                 "description": "os caminhos na máquina, NA ORDEM DA MONTAGEM",
             },
             "formato": {"type": "string",
-                        "description": "9:16, 1:1, 16:9 ou fonte (opcional)"},
+                        "description": "9:16, 4:5 (feed), 1:1, 16:9 ou fonte (opcional)"},
             "resumir_para": {"type": "number",
                              "description": "segundos que o vídeo tem que caber (opcional)"},
             "preset": {"type": "string", "description": "VSL, Reels... (opcional)"},

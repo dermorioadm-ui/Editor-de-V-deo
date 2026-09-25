@@ -581,7 +581,11 @@ def api_probe(payload: dict = Body(...)) -> dict:
         raise HTTPException(400, f"não consegui ler o arquivo: {exc}") from exc
     w, h = info.display_size
     prop = w / max(h, 1e-9)
-    formato = ("16:9" if prop > 1.2 else "9:16" if prop < 0.85 else "1:1")
+    # 4:5 tem proporção 0,8 e caía na faixa do vertical: um vídeo gravado
+    # em 4:5 era chamado de 9:16 na tela, e o 4:5 nem aparecia como
+    # formato de origem
+    formato = ("16:9" if prop > 1.2 else "1:1" if prop >= 0.9
+               else "4:5" if prop >= 0.7 else "9:16")
     # o que dá para tirar deste material, e o quanto cada um estica
     derivados = {}
     for a, r in PROPORCOES.items():

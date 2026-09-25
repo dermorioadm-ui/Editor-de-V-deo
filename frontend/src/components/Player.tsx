@@ -50,6 +50,9 @@ interface Props {
   overlays?: any[]
   cutaways?: any[]
   media?: { id: string; name: string; kind?: string; info: any }[]
+  /** a legenda é QUEIMADA no arquivo? Se não for, a prévia não a desenha:
+   *  mostrar legenda num vídeo que sai sem é a prévia mentindo. */
+  legendaNoVideo?: boolean
   onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number
                                           rotation?: number; track?: number
                                           keyframes?: any[]; mask?: any
@@ -93,6 +96,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                                  proxyUrl, onDeleteSelection, onCutCue,
                                  overlays, cutaways, media,
                                  onOverlayChange, onOverlayDelete, onCutawayDelete,
+                                 legendaNoVideo = true,
                                  formato, formatos, onFormato, quadro, onQuadroChange,
                                  look, onStyleChange, music, onMusicChange }: Props) {
   const video = useRef<HTMLVideoElement>(null)
@@ -931,7 +935,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             </span>
           </div>
         )}
-        {cue && !linear && box.height > 0 && (() => {
+        {cue && legendaNoVideo && !linear && box.height > 0 && (() => {
           // A RÉGUA É A DA FONTE. O ASS é escrito com PlayRes = resolução da
           // fonte, e é nela que fontsize, margem e contorno estão medidos.
           // Usar a altura do ELEMENTO era o bug: com a prévia leve tocando, o

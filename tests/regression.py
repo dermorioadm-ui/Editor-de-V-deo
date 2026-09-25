@@ -340,6 +340,7 @@ def main() -> int:
     testar_tomadas_em_sequencia_nunca_por_cima()
     testar_nenhum_campo_branco_no_branco()
     testar_som_nao_estoura_com_trilha()
+    testar_formato_de_feed_e_sem_legenda()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -6053,6 +6054,109 @@ def testar_som_nao_estoura_com_trilha() -> None:
               "automático desligado e atraso compensado")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_formato_de_feed_e_sem_legenda() -> None:
+    """4:5 para o feed, e a opção de sair sem legenda — pelo caminho da tela.
+
+    O 4:5 é o formato que o feed do Instagram e do Facebook mostra MAIOR sem
+    cortar. A armadilha dele é a legenda: com proporção 0,8 ele caía na faixa
+    do vertical, com a legenda a 21,5% da base — altura calculada para passar
+    por cima da interface do Reels, que no feed quase não existe. A legenda
+    ficava alta no meio do peito.
+    """
+    import re
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.render.renderer import PROPORCOES, tamanho_derivado
+    from editor.server import app
+
+    # ---- o formato --------------------------------------------------
+    check("4:5" in PROPORCOES, "o 4:5 existe como formato")
+    w, h = tamanho_derivado(1080, 1920, "4:5")
+    check((w, h) == (1080, 1350),
+          f"de uma gravação vertical 1080x1920, o 4:5 sai 1080x1350 — o "
+          f"tamanho que o feed exibe ({w}x{h})")
+    check(w % 2 == 0 and h % 2 == 0,
+          "com as duas dimensões pares, que o encoder exige")
+
+    # ---- a legenda do feed, e a paridade das duas tabelas -------------
+    f45, m45, _c, ch45 = svc.padrao_de_legenda(1080, 1350)
+    f916, m916, _c2, ch916 = svc.padrao_de_legenda(1080, 1920)
+    check(m45 / 1350 < m916 / 1920 - 0.05,
+          f"a legenda do feed fica mais BAIXA que a do vertical "
+          f"({m45 / 1350:.1%} contra {m916 / 1920:.1%} da altura) — no feed "
+          f"não há a interface do Reels para desviar")
+    check(ch45 > ch916, f"e cabe mais texto por linha ({ch45} contra {ch916})")
+
+    tabela_py = [tuple(round(x, 4) for x in linha)
+                 for linha in svc.PADROES_DE_LEGENDA]
+    ts = Path("frontend/src/lib/formato.ts").read_text(encoding="utf-8")
+    # depois do "= [": antes dele está a anotação de tipo
+    # `[number, number, ...][]`, que também é colchete e viraria uma faixa
+    # vazia — foi o que fez este teste acusar divergência onde não havia
+    bloco = ts.split("const PADROES")[1].split("= [", 1)[1].split("]\n")[0]
+    tabela_ts = [tuple(round(float(x), 4) for x in re.findall(r"[\d.]+", linha))
+                 for linha in re.findall(r"\[([^\[\]]+)\]", bloco)]
+    check(tabela_py == tabela_ts,
+          f"a tabela de legenda da PRÉVIA é idêntica à do RENDER "
+          f"({len(tabela_py)} faixas) — são duas cópias, e uma mexida só "
+          f"numa faria a prévia mostrar uma legenda e o arquivo outra")
+    check("'4:5': 4 / 5" in ts and "'4:5': [1350, 1080, 900]" in ts,
+          "e a prévia conhece o 4:5 com os mesmos tamanhos")
+
+    # ---- o vídeo de origem 4:5 é chamado de 4:5 ----------------------
+    tmp = Path(tempfile.mkdtemp(prefix="feed_"))
+    projeto = None
+    try:
+        fonte = tmp / "feed.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "color=c=0x303030:s=432x540:r=30:d=2",
+                        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                        "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)],
+                       check=True)
+        cliente = TestClient(app)
+        r = cliente.post("/api/probe", json={"path": str(fonte)}).json()
+        check(r.get("formato") == "4:5",
+              f"um vídeo gravado em 4:5 é reconhecido como 4:5, e não como "
+              f"vertical ({r.get('formato')})")
+
+        # ---- sem legenda, pela receita da primeira tela ---------------
+        projeto = svc.create(str(fonte), "sem-legenda", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=2.0)]
+        projeto.save_plan()
+        cliente.post(f"/api/projects/{projeto.id}/params",
+                     json={"style": {"fontsize_scale": 1},
+                           "export": {"burn_subtitles": False}})
+        plano = svc.load(projeto.id).plan
+        check(plano.export.burn_subtitles is False,
+              "'sem legenda' na primeira tela chega ao plano")
+        check(plano.style.fontsize > 0,
+              f"e o tamanho da letra NÃO vai a zero ({plano.style.fontsize}) — "
+              f"fonte zero escreveria um ASS inválido; quem desliga é o "
+              f"burn_subtitles")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    home = Path("frontend/src/components/Home.tsx").read_text(encoding="utf-8")
+    check("<option value={0}>sem legenda</option>" in home
+          and "burn_subtitles: legenda > 0" in home,
+          "a primeira tela tem 'sem legenda' e manda isso na receita")
+    player = Path("frontend/src/components/Player.tsx").read_text(encoding="utf-8")
+    check("cue && legendaNoVideo" in player,
+          "e a prévia NÃO desenha legenda quando o arquivo sai sem — senão "
+          "ela mentiria sobre o que vai baixar")
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

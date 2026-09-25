@@ -148,12 +148,18 @@ PROPORCOES = {
     "1:1": 1.0,
     "16:9": 16 / 9,
     "9:16": 9 / 16,
+    # FEED. É o formato que o Instagram e o Facebook mostram maior no feed
+    # sem cortar — mais tela que o quadrado, sem a interface de Reels por cima
+    "4:5": 4 / 5,
 }
 # As alturas que os players esperam, da maior para a menor, por proporção.
 ESCADA_DERIVADA = {
     "1:1": (1080, 720),
     "16:9": (1080, 720, 540),
     "9:16": (1920, 1280, 960),
+    # 1080x1350 é o tamanho que o feed exibe; os degraus abaixo mantêm a
+    # largura par (864 e 720), que o encoder yuv420p exige
+    "4:5": (1350, 1080, 900),
 }
 # Quanto se aceita esticar. O teto de zoom do programa já trata 1,15x como o
 # limite do aceitável; aqui vale um pouco mais porque a alternativa é entregar

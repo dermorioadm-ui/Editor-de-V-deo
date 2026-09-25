@@ -90,7 +90,8 @@ export default function Home() {
 
   const FORMATOS: Record<string, string> = {
     '9:16': 'vertical (Reels, TikTok)',
-    '1:1': 'quadrado (feed)',
+    '4:5': 'feed (Instagram, Facebook)',
+    '1:1': 'quadrado',
     '16:9': 'horizontal (YouTube)',
   }
   const extrasPossiveis = Object.keys(FORMATOS)
@@ -185,8 +186,12 @@ export default function Home() {
       alvo_duracao: alvo,
       speed: { global_multiplier: velocidade },
       zoom: { intensity: zoomForca },
-      style: { fontsize_scale: legenda },
-      export: { scale: resolucao, extras, fps: fpsSaida },
+      // 0 = SEM LEGENDA. O tamanho nunca vai zero para o servidor: uma
+      // fonte de tamanho zero escreve um ASS inválido. Quem desliga é o
+      // burn_subtitles; o tamanho fica no padrão para o dia em que religar.
+      style: { fontsize_scale: legenda > 0 ? legenda : 1 },
+      export: { scale: resolucao, extras, fps: fpsSaida,
+                burn_subtitles: legenda > 0 },
       look: look || 'nenhum',
     }
   }
@@ -675,13 +680,15 @@ export default function Home() {
             <label className="label">Legenda</label>
             <select className="field w-full py-1.5 text-xs"
                     value={legenda} onChange={(e) => setLegenda(+e.target.value)}>
+              <option value={0}>sem legenda</option>
               <option value={0.8}>menor</option>
               <option value={1}>do formato</option>
               <option value={1.2}>maior</option>
               <option value={1.45}>bem maior</option>
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">
-              já sai no tamanho certo do vertical
+              {legenda > 0 ? 'já sai no tamanho certo do formato'
+                : 'o vídeo sai sem legenda queimada — o .srt continua saindo'}
             </p>
           </div>
 

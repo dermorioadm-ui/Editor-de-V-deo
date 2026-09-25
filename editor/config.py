@@ -239,7 +239,7 @@ class ExportParams:
     # formato do QUADRO. "fonte" = a proporção da gravação (o normal). Os
     # derivados saem do MESMO corte, com recorte concêntrico no rosto e a
     # legenda reescalada para o quadro novo.
-    aspect: str = "fonte"            # fonte | 1:1 | 16:9 | 9:16
+    aspect: str = "fonte"            # fonte | 1:1 | 16:9 | 9:16 | 4:5
     # Quadros por segundo da SAÍDA. 0 = os da gravação.
     #
     # Medido num 1920x1080 a 60 fps: a exportação inteira custa 2,45x o tempo

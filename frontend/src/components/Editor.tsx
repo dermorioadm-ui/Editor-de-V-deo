@@ -783,6 +783,7 @@ export default function Editor() {
                   overlays={project.plan?.overlays ?? []}
                   cutaways={project.plan?.cutaways ?? []}
                   media={project.media ?? []}
+                  legendaNoVideo={project.plan?.export?.burn_subtitles !== false}
                   onOverlayChange={async (id, patch) => {
                     snapshot()
                     try {

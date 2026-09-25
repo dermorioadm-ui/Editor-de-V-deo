@@ -263,6 +263,12 @@ def delete_project(pid: str) -> None:
 PADROES_DE_LEGENDA = (
     (1.50, 0.046, 0.080, 0.0044, 42),
     (0.90, 0.040, 0.110, 0.0042, 32),
+    # FEED (4:5). Sem esta faixa ele caía na do vertical, com a legenda a
+    # 21,5% da base — altura calculada para passar por cima da interface do
+    # Reels, que no feed quase não existe. A legenda ficava alta no meio do
+    # peito. Aqui ela desce para 14%, e a linha cabe um pouco mais que no
+    # vertical, porque o quadro é mais largo.
+    (0.75, 0.037, 0.140, 0.0040, 28),
     (0.00, 0.034, 0.215, 0.0039, 24),
 )
 

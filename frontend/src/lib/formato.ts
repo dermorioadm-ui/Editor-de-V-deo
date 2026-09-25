@@ -6,9 +6,12 @@ import type { Quadro } from '../types'
  * formato e o recorte concêntrico. A prévia usa isto para mostrar o 9:16 (ou
  * 1:1, 16:9) como ele vai sair — antes ela só mostrava a gravação.
  */
-export const PROPORCOES: Record<string, number> = { '1:1': 1, '16:9': 16 / 9, '9:16': 9 / 16 }
+export const PROPORCOES: Record<string, number> = {
+  '1:1': 1, '16:9': 16 / 9, '9:16': 9 / 16, '4:5': 4 / 5,
+}
 const ESCADA: Record<string, number[]> = {
   '1:1': [1080, 720], '16:9': [1080, 720, 540], '9:16': [1920, 1280, 960],
+  '4:5': [1350, 1080, 900],
 }
 const ESTICADA_MAXIMA = 1.25
 
@@ -41,6 +44,7 @@ export function tamanhoDerivado(w: number, h: number, aspecto: string): [number,
 const PADROES: [number, number, number, number, number][] = [
   [1.5, 0.046, 0.08, 0.0044, 42],
   [0.9, 0.04, 0.11, 0.0042, 32],
+  [0.75, 0.037, 0.14, 0.004, 28],
   [0.0, 0.034, 0.215, 0.0039, 24],
 ]
 export function padraoDeLegenda(w: number, h: number) {
