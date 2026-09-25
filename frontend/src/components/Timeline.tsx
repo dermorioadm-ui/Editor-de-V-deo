@@ -866,10 +866,10 @@ export default function Timeline(props: Props) {
                 title="Espaço">
           {props.playing ? '❚❚ pausa' : '▶ tocar'}
         </button>
-        {(view.tracks ?? []).filter((t) => (t.accepts ?? []).length).map((t) => (
+        {(view.tracks ?? []).filter((t) => (t.accepts ?? []).length && t.acao !== '').map((t) => (
           <button key={t.id} className="btn btn-xs" title={t.hint}
                   onClick={() => props.onAddToTrack(t.id)}>
-            + {t.label.toLowerCase()}
+            + {t.acao ?? t.label.toLowerCase()}
           </button>
         ))}
         <span className="w-px h-4 bg-line" />

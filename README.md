@@ -315,6 +315,12 @@ Depois, no painel da direita: volume, **mudo**, e o *ducking* (a trilha abaixa
 sozinha quando você fala). Para mudar onde ela entra e onde termina, arraste o
 bloco no trilho, ou as bordas dele.
 
+**Trocar de música** a qualquer hora: na primeira tela, com uma música já
+escolhida, o botão vira **trocar MP3…** e a lista **trocar por uma guardada…**
+continua ali. No editor, a aba **Áudio** tem a seção **Música de fundo** com
+**trocar música…**, a lista de guardadas e **tirar música**. Trocar mantém o
+volume, o ducking e onde ela toca — só o arquivo muda.
+
 ### Três jeitos de usar
 
 | Modo | Como | Quando serve |
@@ -752,13 +758,23 @@ A trilha tem faixas separadas, e cada uma aceita itens:
 | trilho | o que entra |
 |---|---|
 | **Vídeo** | o take principal, já cortado |
-| **Sobreposição** | vídeo ou imagem numa **janela** por cima do quadro (picture-in-picture), por tempo determinado — o vídeo entra sem o áudio dele, a fala continua |
+| **B-roll** | vídeo **por cima da fala** (b-roll), cobrindo o quadro inteiro, com o seu áudio por baixo; e também vídeo ou imagem numa **janela** (picture-in-picture) — o vídeo entra sem o áudio dele, a fala continua |
 | **Desfoque** | proteção de rosto e documento |
 | **Trilha** | música de fundo, com ducking automático na fala |
 
 Arraste um item para movê-lo, arraste a borda para mudar a duração,
-**Shift+clique** apaga. Os botões **+ sobreposição** e **+ trilha** na barra da
-timeline levam para a aba onde se importa o arquivo. Uma janela de vídeo
+**Shift+clique** apaga. Os botões **+ b-roll** e **+ trilha** na barra da
+timeline abrem a janela do Windows já no tipo certo.
+
+**B-roll depois da edição.** Posicione o cursor e clique **+ b-roll** (na
+barra da timeline ou na aba Mídia). Pode marcar **vários vídeos de uma vez**:
+eles entram **um depois do outro** a partir do cursor, cada um no primeiro vão
+livre — nunca um em cima do outro, e contornando o b-roll que já estiver lá.
+Cada um cobre até 5 s (ou menos, se o vídeo for mais curto); estique a borda
+no trilho para mudar. A fala continua por baixo: nenhuma palavra sai do lugar
+e a duração do vídeo não muda. O que não couber (fim do vídeo, imagem em vez
+de vídeo) volta com o motivo escrito. Imagem entra pela aba Mídia, como
+janela ou como foto. Uma janela de vídeo
 estica até o fim da mídia dela e para ali, avisando — nunca congela o último
 quadro. Soltar um item em cima de um trecho cortado o encosta no bloco mantido
 mais perto (antes soltar num corte simplesmente não fazia nada).
@@ -1363,10 +1379,12 @@ Em português, do jeito que você falaria:
 - *"põe essa música de fundo em -20 dB"*
 - *"exporta e me diz onde ficou"*
 
-São dezesseis ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+São vinte ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
 transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
-animar, recortar em forma, efeitos, trilha, formatos, exportar, listar projetos
-e estado do editor.
+**b-roll** (vários vídeos por cima da fala, em sequência), animar, recortar em
+forma, efeitos, trilha, formatos (inclusive o 4:5 do feed), exportar,
+acrescentar vídeo, juntar vídeos, gravações, listar projetos e estado do
+editor.
 
 ### O que ele NÃO pode fazer, de propósito
 

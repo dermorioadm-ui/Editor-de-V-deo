@@ -1433,6 +1433,31 @@ def api_cutaway(pid: str, payload: dict = Body(...)) -> dict:
             "timeline": svc.timeline_summary(project)}
 
 
+@app.post("/api/projects/{pid}/brolls")
+def api_brolls(pid: str, payload: dict = Body(...)) -> dict:
+    """B-roll depois da edição: um ou vários vídeos por cima da fala.
+
+    Entram em sequência a partir de ``at``, cada um no primeiro vão livre,
+    com o áudio original por baixo. O que não coube volta com o motivo.
+    """
+    project = _project(pid)
+    caminhos = payload.get("paths")
+    if caminhos is None and payload.get("path"):
+        caminhos = [payload.get("path")]
+    if not isinstance(caminhos, list) or not caminhos:
+        raise HTTPException(400, "mande a lista de vídeos em 'paths'")
+    try:
+        at = float(payload.get("at") or 0.0)
+        dura = float(payload.get("duracao") or svc.DURACAO_DO_BROLL)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "'at' e 'duracao' são segundos") from exc
+    res = svc.inserir_brolls(project, [str(c) for c in caminhos[:50]], at, dura)
+    if not res["postos"] and res["recusados"]:
+        raise HTTPException(400, "; ".join(
+            f"{Path(r['path']).name}: {r['motivo']}" for r in res["recusados"]))
+    return {"ok": True, **res, "timeline": svc.timeline_summary(project)}
+
+
 @app.put("/api/projects/{pid}/cutaways/{cid}")
 def api_cutaway_update(pid: str, cid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)

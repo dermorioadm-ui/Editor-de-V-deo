@@ -217,6 +217,10 @@ export const api = {
     put<any>(`/api/projects/${id}/blurs/${bid}`, payload),
   deleteBlur: (id: string, bid: string) => del<any>(`/api/projects/${id}/blurs/${bid}`),
   setMusic: (id: string, payload: any) => post<any>(`/api/projects/${id}/music`, payload),
+  /** b-roll por cima da fala: vários vídeos, em sequência a partir de `at` */
+  brolls: (id: string, paths: string[], at: number, duracao?: number) =>
+    post<{ ok: boolean; postos: any[]; recusados: { path: string; motivo: string }[] }>(
+      `/api/projects/${id}/brolls`, { paths, at, ...(duracao ? { duracao } : {}) }),
 
   setWhistle: (id: string, wid: string, enabled: boolean) =>
     post<any>(`/api/projects/${id}/whistles/${wid}`, { enabled }),

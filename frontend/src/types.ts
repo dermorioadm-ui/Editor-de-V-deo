@@ -62,6 +62,8 @@ export interface TrackItem {
 export interface Track {
   id: string; label: string; kind: string; accepts: string[]
   items: TrackItem[]; locked?: boolean; hint?: string
+  /** o texto do botão "+ …" do trilho, quando difere do nome */
+  acao?: string
 }
 
 export interface ZoomScene {

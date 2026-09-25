@@ -341,6 +341,8 @@ def main() -> int:
     testar_nenhum_campo_branco_no_branco()
     testar_som_nao_estoura_com_trilha()
     testar_formato_de_feed_e_sem_legenda()
+    testar_broll_depois_da_edicao()
+    testar_trocar_a_musica()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -6356,6 +6358,303 @@ def testar_trilha_toca_do_comeco_ao_fim() -> None:
     check("faixa?.db" in trilha_tsx and "duck_amount" in trilha_tsx,
           "e respeita a curva da IA e o abaixamento na fala")
 
+
+
+def testar_broll_depois_da_edicao() -> None:
+    """B-roll DEPOIS da edição: vários vídeos por cima da fala, em sequência.
+
+    O pedido foi "tem que ser possível inserir b-roll se quiser, pós edição".
+    O caminho existia (cutaway), mas escondido: o trilho se chamava
+    "Sobreposição", o botão "+ sobreposição", e soltar dois vídeos no mesmo
+    ponto dava erro de colisão no segundo. Agora o trilho é B-roll, aceita
+    vários de uma vez e cada um entra no primeiro vão livre depois do outro.
+
+    O teste vai até o ARQUIVO: exporta e confere a cor do quadro no meio de
+    cada b-roll, e que a duração do vídeo e a fala não mudaram.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.mcp import ferramentas as F
+    from editor.server import app
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="broll_"))
+    projeto = None
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    try:
+        frases = ["esse produto mudou a minha rotina",
+                  "olha como ele funciona na pratica",
+                  "e o resultado aparece rapido",
+                  "eu uso todos os dias de manha",
+                  "clica no link e garante o seu"]
+        install(frases)
+        amostras, _m, dur = build_track([(f, 0.7) for f in frases])
+        fonte = make_video(tmp / "fala.mp4", amostras, dur, 320, 180, 30)
+        cores = {"vermelho": ("0xff0000", 2.0), "verde": ("0x00ff00", 8.0),
+                 "azul": ("0x0000ff", 3.0)}
+        brolls = {}
+        for nome, (cor, d) in cores.items():
+            brolls[nome] = tmp / f"{nome}.mp4"
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                            f"color=c={cor}:s=320x180:r=30:d={d}",
+                            "-c:v", "libx264", "-preset", "ultrafast",
+                            "-pix_fmt", "yuv420p", str(brolls[nome])], check=True)
+        foto = tmp / "foto.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=white:s=64x64:d=0.1", "-frames:v", "1",
+                        str(foto)], check=True)
+
+        projeto = svc.create(str(fonte), "broll", "VSL")
+        svc.one_click(svc.load(projeto.id), Ctx(quiet=True))
+        q = svc.load(projeto.id)
+        duracao = svc.duracao_de_saida(q)
+        palavras_antes = [w for w in svc.timeline_summary(q)["subtitles"]]
+        check(duracao > 5, f"o vídeo editado existe ({duracao:.1f} s)")
+
+        # ---- o trilho se chama B-roll e o botão diz "+ b-roll" ----------
+        cliente = TestClient(app)
+        tl = cliente.get(f"/api/projects/{projeto.id}").json()["timeline"]
+        v2 = next(t for t in tl["tracks"] if t["id"] == "V2")
+        check(v2["label"] == "B-roll" and v2.get("acao") == "b-roll",
+              f"o trilho se chama B-roll e o botão dele diz '+ b-roll' "
+              f"({v2['label']!r}, {v2.get('acao')!r})")
+        v1 = next(t for t in tl["tracks"] if t["id"] == "V1")
+        check(v1.get("acao") == "",
+              "o trilho de vídeo não oferece um segundo botão para a mesma coisa")
+
+        # ---- uma cobertura que já existe no meio do caminho -------------
+        # os b-rolls têm que CONTORNAR, não recusar nem sobrepor
+        r = cliente.post(f"/api/projects/{projeto.id}/brolls",
+                         json={"paths": [str(brolls["azul"])], "at": 3.2,
+                               "duracao": 1.5})
+        check(r.status_code == 200 and len(r.json()["postos"]) == 1,
+              f"um b-roll sozinho entra no cursor ({r.status_code})")
+        ja = r.json()["postos"][0]
+
+        # ---- três de uma vez, a partir de 0,5 s -------------------------
+        r = cliente.post(f"/api/projects/{projeto.id}/brolls", json={
+            "paths": [str(brolls["vermelho"]), str(brolls["verde"]),
+                      str(foto), str(brolls["azul"])],
+            "at": 0.5, "duracao": 3})
+        corpo = r.json()
+        postos = corpo["postos"]
+        check(r.status_code == 200 and len(postos) == 3,
+              f"três vídeos de b-roll entram de uma vez ({len(postos)})")
+        check([Path(x["name"]).stem for x in postos]
+              == ["vermelho", "verde", "azul"],
+              "na ordem em que foram escolhidos")
+        check(abs(postos[0]["out_start"] - 0.5) < 0.01,
+              f"o primeiro entra no cursor ({postos[0]['out_start']:.2f} s)")
+        check(postos[0]["out_end"] - postos[0]["out_start"] <= 2.0 + 0.02,
+              f"um b-roll de 2 s cobre só 2 s — nunca mais do que a mídia tem "
+              f"({postos[0]['out_end'] - postos[0]['out_start']:.2f} s)")
+        todas = sorted([(c.out_start, c.out_end)
+                        for c in svc.load(projeto.id).plan.cutaways])
+        sobrepostas = [(a, b) for (a, b), (c, d) in zip(todas, todas[1:])
+                       if c < b - 0.02]
+        check(not sobrepostas,
+              f"nenhum b-roll em cima de outro — o do meio contornou a "
+              f"cobertura que já estava lá ({len(todas)} coberturas)")
+        check(all(b <= duracao + 0.01 for _a, b in todas),
+              "nenhum passa do fim do vídeo")
+        check(len(postos) == 3
+              and postos[1]["out_start"] >= postos[0]["out_end"] - 0.01
+              and postos[2]["out_start"] >= postos[1]["out_end"] - 0.01,
+              "cada um começa onde o anterior terminou (ou no vão seguinte)")
+        check(len(postos) == 3 and postos[1]["out_start"] >= ja["out_end"] - 0.01,
+              "o vão de 0,7 s antes da cobertura que já existia é pulado — "
+              "b-roll de meio segundo pisca, não ilustra")
+        check(any(Path(x["path"]).name == "foto.png"
+                  and "imagem" in x["motivo"] for x in corpo["recusados"]),
+              "a imagem é recusada COM O MOTIVO (b-roll é vídeo; imagem vai "
+              "como janela ou foto)")
+        check(all(c.audio != "mute"
+                  for c in svc.load(projeto.id).plan.active_clips),
+              "a fala não perde o som")
+
+        # ---- sem vão nenhum: recusa com nome, sem 500 --------------------
+        r = cliente.post(f"/api/projects/{projeto.id}/brolls",
+                         json={"paths": [str(brolls["azul"])],
+                               "at": duracao - 0.3})
+        check(r.status_code == 400 and "não coube" in r.json()["detail"],
+              f"no fim do vídeo não cabe, e a recusa diz por quê "
+              f"({r.status_code})")
+
+        # ---- o MCP também põe b-roll -------------------------------------
+        class _Cliente:
+            pedidos: list = []
+
+            def post(self, rota, corpo):
+                self.pedidos.append((rota, corpo))
+                return {"postos": [{"name": "x.mp4", "out_start": 1,
+                                    "out_end": 3}], "recusados": []}
+
+        falso = _Cliente()
+        ferramenta = next((f for f in F.FERRAMENTAS if f["name"] == "broll"), None)
+        texto = ferramenta["_fn"](falso, {"projeto": projeto.id,
+                                          "caminhos": ["C:/b/x.mp4"], "em": 1})\
+            if ferramenta else ""
+        check(ferramenta is not None
+              and falso.pedidos == [(f"/api/projects/{projeto.id}/brolls",
+                                     {"paths": ["C:/b/x.mp4"], "at": 1.0})]
+              and "b-roll x.mp4" in texto,
+              "o Claude na máquina dele também põe b-roll (ferramenta 'broll' "
+              "do MCP, mesma rota)")
+
+        # ---- no ARQUIVO -------------------------------------------------
+        q = svc.load(projeto.id)
+        check([w for w in svc.timeline_summary(q)["subtitles"]] == palavras_antes,
+              "as legendas (a fala) são as mesmas de antes do b-roll")
+        saida = Path(svc.export(q, Ctx(quiet=True),
+                                {"filename": "com-broll.mp4", "overwrite": True,
+                                 "output_dir": str(tmp)})["output"])
+
+        def cor_em(t: float) -> tuple[float, float, float]:
+            cru = subprocess.run(
+                [FFMPEG, "-v", "error", "-ss", f"{t:.3f}", "-i", str(saida),
+                 "-frames:v", "1", "-vf", "scale=32:18", "-f", "rawvideo",
+                 "-pix_fmt", "rgb24", "-"], capture_output=True,
+                check=True).stdout
+            px = np.frombuffer(cru, np.uint8).reshape(-1, 3).astype(float)
+            return tuple(round(float(v)) for v in px.mean(axis=0))
+
+        esperado = {"vermelho": 0, "verde": 1, "azul": 2}
+        for x in postos:
+            meio = (x["out_start"] + x["out_end"]) / 2
+            rgb = cor_em(meio)
+            canal = esperado[Path(x["name"]).stem]
+            outros = [v for i, v in enumerate(rgb) if i != canal]
+            check(rgb[canal] > 180 and max(outros) < 80,
+                  f"no arquivo, em {meio:.1f} s está o b-roll "
+                  f"{Path(x['name']).stem} (RGB médio {rgb})")
+        from editor.ffmpeg_utils import probe
+        d_arquivo = float(probe(saida).duration)
+        check(abs(d_arquivo - duracao) < 0.15,
+              f"e o vídeo tem a MESMA duração do editado — b-roll cobre a "
+              f"imagem, não empurra nada ({d_arquivo:.2f} s contra "
+              f"{duracao:.2f} s)")
+    finally:
+        svc.previa_da_edicao = previa_real
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- as telas usam o caminho novo -----------------------------------
+    frente = Path("frontend/src")
+    editor = (frente / "components/Editor.tsx").read_text(encoding="utf-8")
+    midia = (frente / "components/MediaPanel.tsx").read_text(encoding="utf-8")
+    timeline = (frente / "components/Timeline.tsx").read_text(encoding="utf-8")
+    check("'Escolher o b-roll (pode marcar vários)', true" in editor
+          and "porBrolls(paths" in editor,
+          "o '+ b-roll' do trilho abre a janela com seleção de VÁRIOS")
+    check("await porBrolls([caminho])" in editor,
+          "soltar um vídeo no trilho usa o mesmo caminho (acha o vão livre)")
+    check("+ b-roll</button>" in midia and "api.brolls(" in midia,
+          "e a aba Mídia tem o '+ b-roll' também")
+    check("t.acao ?? t.label.toLowerCase()" in timeline,
+          "o botão do trilho mostra a ação dele ('+ b-roll')")
+    check("t.acao !== ''" in timeline,
+          "e o trilho de vídeo não tem um '+ vídeo' que faria o mesmo que o "
+          "'+ b-roll' com outro nome")
+
+
+def testar_trocar_a_musica() -> None:
+    """A música de fundo se troca em qualquer ponto — antes só se tirava.
+
+    O relato: "coloquei e depois não consegui mais trocar". Na primeira
+    tela, com uma música escolhida, a lista de guardadas e o botão sumiam e
+    sobrava um "tirar" de 10 px no canto do rótulo. No editor, a aba Áudio
+    só tinha volume e "remover trilha". E se a música falhasse ao entrar, a
+    primeira tela engolia o erro — o vídeo saía sem trilha, calado.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.server import app
+    from tests.e2e import Ctx
+
+    frente = Path("frontend/src/components")
+    home = (frente / "Home.tsx").read_text(encoding="utf-8")
+    audio = (frente / "AudioPanel.tsx").read_text(encoding="utf-8")
+    editor = (frente / "Editor.tsx").read_text(encoding="utf-8")
+    check("{musica ? 'trocar MP3…' : 'escolher MP3…'}" in home,
+          "primeira tela: com música escolhida, o botão vira 'trocar MP3…' "
+          "e continua à vista")
+    check("'trocar por uma guardada…'" in home,
+          "e a lista de guardadas continua lá, para trocar por outra")
+    check("catch { /* sem trilha o vídeo sai igual */ }" not in home
+          and "'A música não entrou'" in home,
+          "se a música falhar ao entrar, ele é AVISADO (antes era engolido)")
+    check("{trilha ? 'trocar música…' : 'pôr música…'}" in audio
+          and 'data-secao-trilha="1"' in audio,
+          "aba Áudio: pôr, trocar e tirar a música no mesmo lugar")
+    check("<div key={trilha.media_id}>" in audio,
+          "os campos de volume remontam ao trocar (não mostram os números "
+          "da música anterior)")
+    check("antes.media_id ? 'Música trocada'" in editor,
+          "o '+ trilha' da linha do tempo troca e diz que trocou")
+
+    # a troca pelo servidor mantém o que ele ajustou, só o arquivo muda
+    tmp = Path(tempfile.mkdtemp(prefix="troca_"))
+    projeto = None
+    try:
+        import subprocess
+
+        from editor.config import FFMPEG
+        from tests.speech import build_track, make_video
+
+        install(["a musica troca"])
+        amostras, _m, dur = build_track([("a musica troca", 0.6)])
+        fonte = make_video(tmp / "v.mp4", amostras, dur, 320, 180, 30)
+        musicas = []
+        for i, f in enumerate((440, 660)):
+            musicas.append(tmp / f"m{i}.wav")
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                            f"sine=frequency={f}:duration=4", str(musicas[-1])],
+                           check=True)
+        projeto = svc.create(str(fonte), "troca", "VSL")
+        svc.analyze(svc.load(projeto.id), Ctx(quiet=True))
+        svc.auto_edit(svc.load(projeto.id), Ctx(quiet=True))
+        c = TestClient(app)
+        m1 = c.post(f"/api/projects/{projeto.id}/media",
+                    json={"path": str(musicas[0]), "kind": "audio"}).json()
+        c.post(f"/api/projects/{projeto.id}/music",
+               json={"media_id": m1["id"], "gain_db": -9, "ducking": False,
+                     "duck_amount": 12, "fade_in": 1, "fade_out": 2,
+                     "enabled": True, "out_start": 0.4})
+        antes = svc.load(projeto.id).plan.music
+        # o que a aba Áudio manda ao trocar: o objeto anterior + a mídia nova
+        m2 = c.post(f"/api/projects/{projeto.id}/media",
+                    json={"path": str(musicas[1]), "kind": "audio"}).json()
+        c.post(f"/api/projects/{projeto.id}/music",
+               json={**antes, "media_id": m2["id"], "enabled": True,
+                     "muted": False})
+        depois = svc.load(projeto.id).plan.music
+        check(depois["media_id"] == m2["id"],
+              "trocar põe a música NOVA no plano")
+        check(depois["gain_db"] == -9 and depois["ducking"] is False
+              and abs(depois["out_start"] - 0.4) < 1e-6,
+              "e mantém o volume, o ducking e onde ela começa")
+        c.post(f"/api/projects/{projeto.id}/music", json={})
+        check(not svc.load(projeto.id).plan.music,
+              "tirar a música tira de verdade")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
 if __name__ == "__main__":
     install(["frase %d" % i for i in range(20)])

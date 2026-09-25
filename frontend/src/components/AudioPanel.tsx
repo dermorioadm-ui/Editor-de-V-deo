@@ -13,6 +13,11 @@ export default function AudioPanel({ onChanged }: Props) {
   const [strength, setStrength] = useState(1.0)
   const [params, setParams] = useState<any>(project?.plan?.audio ?? {})
   const [deesser, setDeesser] = useState<any>(null)
+  // a biblioteca de músicas: as que já entraram em algum projeto
+  const [musicas, setMusicas] = useState<any[]>([])
+  // separado do `busy` da análise: medir o áudio leva segundos e não pode
+  // travar o botão de trocar a música
+  const [trocando, setTrocando] = useState(false)
 
   useEffect(() => { setParams(project?.plan?.audio ?? {}) }, [project?.plan?.audio])
   useEffect(() => {
@@ -24,7 +29,48 @@ export default function AudioPanel({ onChanged }: Props) {
       .finally(() => setBusy(false))
   }, [project?.id])
 
+  useEffect(() => {
+    api.musicas().then(setMusicas).catch(() => setMusicas([]))
+  }, [project?.plan?.music?.media_id])
+
   if (!project) return null
+
+  const trilha = project.plan?.music?.media_id ? project.plan.music : null
+  const nomeDaTrilha = trilha
+    ? ((project.media ?? []).find((m: any) => m.id === trilha.media_id)?.name ?? 'música')
+    : ''
+
+  /** Põe ou TROCA a música de fundo. Trocar mantém o que ele já ajustou
+   *  (volume, ducking, fades e onde ela toca): só o arquivo muda. */
+  const porTrilha = async (caminho: string) => {
+    setTrocando(true)
+    try {
+      const m = await api.addMedia(project.id, caminho, 'audio')
+      const antes = trilha ?? {}
+      await api.setMusic(project.id, {
+        gain_db: -18, ducking: true, duck_amount: 12, fade_in: 1, fade_out: 2,
+        out_start: 0,
+        ...antes,
+        media_id: m?.id ?? m?.media?.id, enabled: true, muted: false,
+      })
+      await onChanged()
+      toast('ok', trilha ? 'Música trocada' : 'Música no vídeo',
+        trilha ? 'O volume e o ducking que você ajustou continuam valendo.'
+          : 'Já entra abaixando na fala.')
+    } catch (e: any) {
+      toast('error', 'A música não entrou', String(e.message ?? e))
+    } finally { setTrocando(false) }
+  }
+  const escolherTrilha = async () => {
+    try {
+      const r = await api.escolher('audio', 'Escolher a música')
+      if (!r.cancelado) await porTrilha(r.path)
+    } catch (e: any) {
+      toast('warn', 'Esta máquina não abriu a janela do sistema',
+        'Use "+ música" na aba Mídia.')
+    }
+  }
+  const guardadas = musicas.filter((m) => m.existe !== false)
 
   const runPreview = async (withDenoise: boolean) => {
     setBusy(true)
@@ -256,43 +302,87 @@ export default function AudioPanel({ onChanged }: Props) {
         )}
       </section>
 
-      {project.plan?.music && (
-        <section className="card p-3">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
-            Trilha
+      {/* A TRILHA fica sempre aqui, com ou sem música: pôr, trocar e tirar
+          no mesmo lugar. Antes a seção só existia com uma música posta e
+          não tinha "trocar" — para mudar de música era preciso achar o
+          "usar como trilha" na aba Mídia. */}
+      <section className="card p-3" data-secao-trilha="1">
+        <div className="flex items-center gap-2 mb-2">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            Música de fundo
           </h3>
-          <div className="grid grid-cols-4 gap-2">
-            {([['gain_db', 'volume (dB)'], ['duck_amount', 'ducking (dB)'],
-               ['fade_in', 'fade in (s)'], ['fade_out', 'fade out (s)']] as const)
-              .map(([key, label]) => (
-                <label key={key} className="block">
-                  <span className="label">{label}</span>
-                  <input className="field" type="number" step={0.5}
-                         defaultValue={project.plan.music[key]}
-                         onBlur={async (e) => {
-                           await api.setMusic(project.id,
-                             { ...project.plan.music, [key]: +e.target.value })
-                           await onChanged()
-                         }} />
-                </label>
+          {trilha && (
+            <span className="text-xs text-slate-300 truncate flex-1" data-trilha-atual="1"
+                  title={nomeDaTrilha}>♪ {nomeDaTrilha}</span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <button className="btn btn-xs btn-primary" disabled={trocando}
+                  onClick={escolherTrilha}>
+            {trilha ? 'trocar música…' : 'pôr música…'}
+          </button>
+          {guardadas.length > 0 && (
+            <select className="field py-0.5 text-xs w-52" value="" disabled={trocando}
+                    data-guardadas="1"
+                    title="músicas que já entraram em outros vídeos — ficam guardadas"
+                    onChange={async (e) => {
+                      const m = guardadas.find((x) => x.id === e.target.value)
+                      if (m) await porTrilha(m.path)
+                    }}>
+              <option value="">
+                {trilha ? 'trocar por uma guardada…' : `guardadas (${guardadas.length})…`}
+              </option>
+              {guardadas.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
               ))}
+            </select>
+          )}
+          {trilha && (
+            <button className="btn btn-xs btn-danger ml-auto" disabled={trocando}
+                    onClick={async () => {
+                      await api.setMusic(project.id, {})
+                      await onChanged()
+                      toast('ok', 'Música tirada', 'O vídeo sai só com a sua voz.')
+                    }}>tirar música</button>
+          )}
+        </div>
+        {!trilha && (
+          <p className="hint">
+            Sem música. Ela entra abaixando sozinha quando você fala.
+          </p>
+        )}
+        {trilha && (
+          // a chave é a música: trocar de arquivo remonta os campos, que são
+          // não controlados e continuariam mostrando os números da anterior
+          <div key={trilha.media_id}>
+            <div className="grid grid-cols-4 gap-2">
+              {([['gain_db', 'volume (dB)'], ['duck_amount', 'ducking (dB)'],
+                 ['fade_in', 'fade in (s)'], ['fade_out', 'fade out (s)']] as const)
+                .map(([key, label]) => (
+                  <label key={key} className="block">
+                    <span className="label">{label}</span>
+                    <input className="field" type="number" step={0.5}
+                           defaultValue={trilha[key]}
+                           onBlur={async (e) => {
+                             await api.setMusic(project.id,
+                               { ...trilha, [key]: +e.target.value })
+                             await onChanged()
+                           }} />
+                  </label>
+                ))}
+            </div>
+            <label className="flex items-center gap-1.5 text-xs mt-2">
+              <input type="checkbox" defaultChecked={trilha.ducking}
+                     onChange={async (e) => {
+                       await api.setMusic(project.id,
+                         { ...trilha, ducking: e.target.checked })
+                       await onChanged()
+                     }} />
+              abaixar na fala (ducking por sidechain)
+            </label>
           </div>
-          <label className="flex items-center gap-1.5 text-xs mt-2">
-            <input type="checkbox" defaultChecked={project.plan.music.ducking}
-                   onChange={async (e) => {
-                     await api.setMusic(project.id,
-                       { ...project.plan.music, ducking: e.target.checked })
-                     await onChanged()
-                   }} />
-            ducking por sidechain
-          </label>
-          <button className="btn btn-xs btn-danger mt-2"
-                  onClick={async () => {
-                    await api.setMusic(project.id, {})
-                    await onChanged()
-                  }}>remover trilha</button>
-        </section>
-      )}
+        )}
+      </section>
     </div>
   )
 }

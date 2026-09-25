@@ -379,6 +379,42 @@ def anexar(c: Cliente, a: dict) -> str:
 
 
 @ferramenta(
+    "broll",
+    "Põe um ou mais VÍDEOS de b-roll por cima da fala, depois da edição. A "
+    "fala continua por baixo (só a imagem troca), nenhuma palavra sai do "
+    "lugar. Vários arquivos entram em sequência a partir do segundo 'em', "
+    "cada um no primeiro vão livre — nunca um em cima do outro. Recebe os "
+    "CAMINHOS dos arquivos na máquina dele.",
+    {
+        "properties": {
+            "projeto": {"type": "string"},
+            "caminhos": {"type": "array", "items": {"type": "string"},
+                         "description": "vídeos, na ordem em que devem entrar"},
+            "em": {"type": "number", "description": "segundo em que o primeiro entra"},
+            "dura": {"type": "number",
+                     "description": "quanto cada um cobre no máximo (padrão 5 s)"},
+        },
+        "required": ["projeto", "caminhos", "em"],
+    },
+)
+def broll(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    caminhos = a.get("caminhos") or []
+    if isinstance(caminhos, str):
+        caminhos = [caminhos]
+    corpo = {"paths": [str(x) for x in caminhos], "at": float(a.get("em") or 0.0)}
+    if a.get("dura"):
+        corpo["duracao"] = float(a["dura"])
+    r = c.post(f"/api/projects/{pid}/brolls", corpo)
+    linhas = [f"b-roll {p.get('name') or p.get('media_id')}: "
+              f"{_seg(p.get('out_start'))} a {_seg(p.get('out_end'))}"
+              for p in r.get("postos") or []]
+    for x in r.get("recusados") or []:
+        linhas.append(f"não entrou {x.get('path')}: {x.get('motivo')}")
+    return "\n".join(linhas) or "nada entrou"
+
+
+@ferramenta(
     "animar",
     "Faz uma sobreposição se mover, crescer, girar ou aparecer ao longo do "
     "tempo. Cada marco é um instante e o valor das propriedades naquele "

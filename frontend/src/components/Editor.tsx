@@ -431,6 +431,29 @@ export default function Editor() {
   if (!project) return null
   const view = timeline
 
+  /** B-ROLL depois da edição: um ou vários vídeos por cima da fala, em
+   *  sequência a partir do cursor. O servidor acha o vão livre de cada um. */
+  const porBrolls = async (paths: string[]) => {
+    snapshot()
+    try {
+      const r = await api.brolls(project.id, paths, getPlayhead())
+      await refresh()
+      const postos = r.postos ?? []
+      if (postos.length) {
+        const fim = postos[postos.length - 1].out_end
+        toast('ok', postos.length === 1 ? 'B-roll no vídeo'
+          : `${postos.length} b-rolls no vídeo, um depois do outro`,
+          `De ${timecode(postos[0].out_start)} a ${timecode(fim)}. A sua fala `
+          + 'continua por baixo; arraste as bordas no trilho B-roll para ajustar.')
+      }
+      for (const x of r.recusados ?? []) {
+        toast('warn', `Não entrou: ${x.path.split(/[\\/]/).pop()}`, x.motivo)
+      }
+    } catch (e: any) {
+      toast('warn', 'O b-roll não entrou', String(e.message ?? e))
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <header className="flex items-center gap-3 px-4 h-12 border-b border-line bg-ink-800">
@@ -921,6 +944,12 @@ export default function Editor() {
                       // o gesto normal — mas em silêncio não é.
                       const jaTem = trackId === 'A1'
                         && !!project.plan?.music?.media_id
+                      if (kind === 'video' && trackId !== 'A1') {
+                        // vídeo no trilho de B-roll: o mesmo caminho do botão,
+                        // que acha o vão livre em vez de recusar por colisão
+                        await porBrolls([caminho])
+                        return
+                      }
                       snapshot()
                       const m = await api.addMedia(project.id, caminho, kind)
                       const mid = m?.id ?? m?.media?.id
@@ -970,41 +999,39 @@ export default function Editor() {
                   }}
                   onAddToTrack={async (trackId) => {
                     // o "+" do trilho abre a JANELA DO SISTEMA já no tipo certo
-                    const kind = trackId === 'A1' ? 'audio' : 'video'
                     try {
-                      const r = await api.escolher(kind as 'video' | 'audio',
-                        trackId === 'A1' ? 'Escolher a música' : 'Escolher o vídeo')
+                      if (trackId !== 'A1') {
+                        // "+ b-roll": vários de uma vez, em sequência
+                        const r = await api.escolher('video',
+                          'Escolher o b-roll (pode marcar vários)', true)
+                        if (r.cancelado) return
+                        const paths = r.paths?.length ? r.paths : [r.path]
+                        await porBrolls(paths.filter(Boolean))
+                        return
+                      }
+                      const r = await api.escolher('audio', 'Escolher a música')
                       if (r.cancelado) return
                       snapshot()
-                      const m = await api.addMedia(project.id, r.path, kind)
-                      const mid = m?.id ?? m?.media?.id
-                      if (trackId === 'A1') {
-                        const antes = project.plan?.music ?? {}
-                        await api.setMusic(project.id, {
-                          media_id: mid,
-                          gain_db: antes.gain_db ?? -18,
-                          ducking: antes.ducking ?? true,
-                          duck_amount: antes.duck_amount ?? 12,
-                          fade_in: antes.fade_in ?? 1, fade_out: antes.fade_out ?? 2,
-                          muted: antes.muted ?? false, enabled: true,
-                          out_start: 0, out_end: timeline?.duration ?? 0,
-                        })
-                        toast('ok', 'Música no trilho',
-                          'Já entra abaixando na fala. O volume e o mudo ficam '
-                          + 'no painel da direita.')
-                      } else {
-                        await api.addCutaway(project.id, {
-                          media_id: mid, out_start: getPlayhead(),
-                          out_end: Math.min(timeline?.duration ?? 0,
-                                            getPlayhead() + 5),
-                          media_start: 0,
-                        })
-                        toast('ok', 'Vídeo por cima no ponto atual')
-                      }
+                      const m = await api.addMedia(project.id, r.path, 'audio')
+                      // "+ trilha" com música já posta TROCA a música e mantém
+                      // o que ele ajustou, inclusive onde ela toca
+                      const antes = project.plan?.music?.media_id ? project.plan.music : {}
+                      await api.setMusic(project.id, {
+                        gain_db: -18, ducking: true, duck_amount: 12,
+                        fade_in: 1, fade_out: 2, out_start: 0,
+                        out_end: timeline?.duration ?? 0,
+                        ...antes,
+                        media_id: m?.id ?? m?.media?.id, muted: false, enabled: true,
+                      })
                       await refresh()
+                      toast('ok', antes.media_id ? 'Música trocada' : 'Música no trilho',
+                        antes.media_id
+                          ? 'O volume e o ducking que você ajustou continuam valendo.'
+                          : 'Já entra abaixando na fala. O volume fica embaixo do '
+                            + 'player e na aba Áudio.')
                     } catch (e: any) {
                       toast('warn', 'Use a aba Mídia', String(e.message ?? e))
-                      setTab(trackId === 'A1' ? 'midia' : 'midia')
+                      setTab('midia')
                     }
                   }}
                   onResizeRemoved={async (a, b, na, nb) => {

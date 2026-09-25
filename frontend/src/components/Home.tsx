@@ -242,7 +242,12 @@ export default function Home() {
             // 0,1 s — ela simplesmente não existia no arquivo.
             muted: false, enabled: true, out_start: 0,
           })
-        } catch { /* sem trilha o vídeo sai igual */ }
+        } catch (e: any) {
+          // o vídeo sai igual sem trilha, mas EM SILÊNCIO não: ele escolheu
+          // uma música e ia descobrir só no arquivo pronto que ela não entrou
+          toast('warn', 'A música não entrou',
+            `${String(e.message ?? e)} — dá para pôr pela aba Áudio do editor.`)
+        }
       }
       await openProject(project.id, true)
     } catch (e: any) {
@@ -627,52 +632,58 @@ export default function Home() {
           </div>
 
           <div className="w-52">
-            <label className="label flex justify-between">
-              <span>Música de fundo</span>
-              {musica && (
-                <button className="text-[10px] text-slate-500 hover:text-slate-300"
-                        onClick={() => setMusica('')}>tirar</button>
-              )}
-            </label>
-            {musica ? (
+            <label className="label">Música de fundo</label>
+            {musica && (
               <>
-                <div className="field w-full py-1.5 text-xs truncate"
-                     title={musica}>{musica.split(/[\\/]/).pop()}</div>
+                <div className="field w-full py-1.5 text-xs truncate" data-musica="1"
+                     title={musica}>♪ {musica.split(/[\\/]/).pop()}</div>
                 <input type="range" min={-30} max={-6} step={1} className="w-full mt-1"
                        value={musicaVol}
                        onChange={(e) => setMusicaVol(+e.target.value)} />
-                <p className="text-[10px] text-slate-600 leading-tight">
+                <p className="text-[10px] text-slate-600 leading-tight mb-1">
                   volume {musicaVol} dB · abaixa sozinha na fala
                 </p>
               </>
-            ) : (
-              <>
-                {musicas.length > 0 && (
-                  <select className="field w-full py-1.5 text-xs mb-1" value=""
-                          title="músicas que já entraram em outros vídeos — ficam guardadas"
-                          onChange={(e) => { if (e.target.value) setMusica(e.target.value) }}>
-                    <option value="">guardadas ({musicas.length})…</option>
-                    {musicas.filter((m) => m.existe !== false).map((m) => (
-                      <option key={m.id} value={m.path}>{m.name}</option>
-                    ))}
-                  </select>
-                )}
-                <button className="btn w-full py-1.5 text-xs"
-                        onClick={async () => {
-                          try {
-                            const r = await api.escolher('audio', 'Escolher a música')
-                            if (!r.cancelado) setMusica(r.path)
-                          } catch {
-                            toast('warn', 'Use a aba Mídia depois de gerar',
-                              'Esta máquina não abriu a janela do sistema.')
-                          }
-                        }}>
-                  escolher MP3…
-                </button>
-                <p className="text-[10px] text-slate-600 leading-tight">
-                  opcional · fica guardada para os próximos
-                </p>
-              </>
+            )}
+            {/* TROCAR fica sempre à vista. Antes, com uma música escolhida,
+                a única saída era um "tirar" de 10 px no canto do rótulo: a
+                lista de guardadas e o botão sumiam, e quem queria outra
+                música achava que não dava mais para mudar. */}
+            {musicas.filter((m) => m.existe !== false && m.path !== musica).length > 0 && (
+              <select className="field w-full py-1.5 text-xs mb-1" value=""
+                      data-guardadas="1"
+                      title="músicas que já entraram em outros vídeos — ficam guardadas"
+                      onChange={(e) => { if (e.target.value) setMusica(e.target.value) }}>
+                <option value="">
+                  {musica ? 'trocar por uma guardada…' : `guardadas (${musicas.length})…`}
+                </option>
+                {musicas.filter((m) => m.existe !== false && m.path !== musica).map((m) => (
+                  <option key={m.id} value={m.path}>{m.name}</option>
+                ))}
+              </select>
+            )}
+            <div className="flex gap-1">
+              <button className="btn flex-1 py-1.5 text-xs"
+                      onClick={async () => {
+                        try {
+                          const r = await api.escolher('audio', 'Escolher a música')
+                          if (!r.cancelado) setMusica(r.path)
+                        } catch {
+                          toast('warn', 'Use a aba Áudio depois de gerar',
+                            'Esta máquina não abriu a janela do sistema.')
+                        }
+                      }}>
+                {musica ? 'trocar MP3…' : 'escolher MP3…'}
+              </button>
+              {musica && (
+                <button className="btn py-1.5 text-xs" title="gerar sem música"
+                        onClick={() => setMusica('')}>tirar</button>
+              )}
+            </div>
+            {!musica && (
+              <p className="text-[10px] text-slate-600 leading-tight">
+                opcional · fica guardada para os próximos
+              </p>
             )}
           </div>
 

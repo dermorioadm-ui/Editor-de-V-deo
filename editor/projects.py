@@ -1723,7 +1723,12 @@ def build_tracks(project: "Project", blocks: list[dict],
         })
 
     return [
-        {"id": "V1", "label": "Vídeo", "kind": "video", "accepts": ["video", "image"],
+        # acao "" = sem botão "+": o "+ vídeo" daqui fazia exatamente o mesmo
+        # que o "+ b-roll" (cobrir a imagem no cursor), e dois botões com
+        # nomes diferentes para a mesma coisa faziam parecer que eram coisas
+        # diferentes. Soltar arquivo aqui continua valendo.
+        {"id": "V1", "label": "Vídeo", "acao": "", "kind": "video",
+         "accepts": ["video", "image"],
          "items": [{"id": b["id"], "kind": b.get("kind", "speech"),
                     "label": b.get("label") or "",
                     "out_start": b.get("out_start", 0.0),
@@ -1735,9 +1740,15 @@ def build_tracks(project: "Project", blocks: list[dict],
          "locked": True,
          "hint": "o take principal, já cortado. Arraste as bordas vermelhas na "
                  "onda para ajustar o que saiu."},
-        {"id": "V2", "label": "Sobreposição", "kind": "overlay",
+        # B-ROLL é o nome que quem faz anúncio procura. O trilho já era isso
+        # (vídeo por cima da fala, áudio original por baixo), mas se chamava
+        # "Sobreposição" e o botão "+ sobreposição" não dizia "b-roll" a
+        # ninguém: parecia que o b-roll depois da edição não existia.
+        {"id": "V2", "label": "B-roll", "acao": "b-roll", "kind": "overlay",
          "accepts": ["video", "image"], "items": sobreposicoes,
-         "hint": "vídeo ou imagem por cima do principal, por tempo determinado."},
+         "hint": "b-roll: vídeo por cima da fala, com o seu áudio por baixo. "
+                 "Vários de uma vez entram em sequência a partir do cursor. "
+                 "Imagem ou vídeo em janela também moram aqui."},
         {"id": "FX", "label": "Desfoque", "kind": "blur", "accepts": [],
          "items": desfoques,
          "hint": "proteção de rosto e documento."},
@@ -2361,6 +2372,104 @@ def duracao_de_saida(project: Project) -> float:
     if d <= 0.01 and project.info:
         d = float(project.info.duration or 0.0)
     return d
+
+
+# B-ROLL DEPOIS DA EDIÇÃO: cada inserto cobre no máximo isto, a partir do
+# cursor. É o tamanho de um plano de cobertura em anúncio; quem quiser mais
+# ou menos estica a borda no trilho.
+DURACAO_DO_BROLL = 5.0
+# um vão menor que isto entre duas coberturas não vira b-roll: um plano de
+# meio segundo pisca, não ilustra nada
+MIN_BROLL = 1.0
+_EXT_IMAGEM = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+
+def _vaga_do_broll(ocupados: list[tuple[float, float]], cursor: float,
+                   quer: float, limite: float) -> tuple[float, float] | None:
+    """O primeiro trecho livre a partir do cursor, de até ``quer`` segundos.
+
+    Livre = sem outra cobertura e sem foto por baixo (o render descarta
+    cobertura em cima de foto: ela sumiria do arquivo sem aviso).
+    """
+    from .anexos import FOLGA
+
+    a = max(0.0, cursor)
+    for ca, cb in sorted(ocupados):
+        if cb <= a + FOLGA:
+            continue
+        if ca - a >= MIN_BROLL:
+            return a, min(a + quer, ca, limite)
+        a = max(a, cb)
+    if limite - a < MIN_BROLL:
+        return None
+    return a, min(a + quer, limite)
+
+
+def inserir_brolls(project: Project, caminhos: list[str], inicio: float,
+                   duracao: float = DURACAO_DO_BROLL) -> dict:
+    """Põe um ou mais vídeos de b-roll POR CIMA da fala, em sequência.
+
+    A fala continua por baixo (é cutaway: troca só a imagem), então nenhuma
+    palavra sai do lugar e o corte não muda. Cada arquivo entra no primeiro
+    vão livre a partir do cursor, um depois do outro — nunca um em cima do
+    outro, que era o que acontecia ao soltar vários no mesmo ponto: o
+    segundo era recusado ou truncado pelo render.
+
+    Devolve o que entrou e, com o motivo, o que não entrou.
+    """
+    from . import anexos
+    from .models import Cutaway
+
+    limite = duracao_de_saida(project)
+    fotos = [(float(b["out_start"]), float(b["out_end"]))
+             for b in timeline_summary(project).get("blocks", [])
+             if b.get("kind") == "photo"]
+    quer = max(MIN_BROLL, float(duracao or DURACAO_DO_BROLL))
+    cursor = max(0.0, float(inicio or 0.0))
+    postos: list[dict] = []
+    recusados: list[dict] = []
+    for caminho in caminhos:
+        caminho = str(caminho or "").strip()
+        if not caminho:
+            continue
+        if Path(caminho).suffix.lower() in _EXT_IMAGEM:
+            recusados.append({"path": caminho, "motivo":
+                              "é uma imagem: imagem entra como janela (aba "
+                              "Mídia, 'pôr como janela aqui') ou como foto "
+                              "inserida — b-roll é vídeo"})
+            continue
+        ocupados = fotos + [(c.out_start, c.out_end)
+                            for c in project.plan.cutaways if c.enabled]
+        vaga = _vaga_do_broll(ocupados, cursor, quer, limite)
+        if vaga is None:
+            recusados.append({"path": caminho, "motivo":
+                              f"não coube: o vídeo termina em {limite:.1f} s e "
+                              f"não sobrou vão livre depois de {cursor:.1f} s"})
+            continue
+        try:
+            midia = add_media(project.id, caminho, "video", papel="anexo")
+            midia = anexos.validar(list_media(project.id), midia["id"], "video")
+            janela = anexos.encaixar(midia, vaga[0], vaga[1], 0.0, 1.0,
+                                     limite=limite)
+            anexos.sem_sobreposicao(project.plan.cutaways,
+                                    janela.out_start, janela.out_end)
+        except (FileNotFoundError, anexos.AnexoInvalido) as exc:
+            recusados.append({"path": caminho, "motivo": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001 — ffprobe que não lê o arquivo
+            recusados.append({"path": caminho,
+                              "motivo": f"não consegui ler o arquivo: {exc}"})
+            continue
+        corte = Cutaway(media_id=midia["id"], out_start=janela.out_start,
+                        out_end=janela.out_end, media_start=janela.media_start,
+                        speed=janela.speed)
+        project.plan.cutaways.append(corte)
+        postos.append({**corte.to_dict(), "name": midia.get("name", ""),
+                       "ajustes": janela.ajustes})
+        cursor = janela.out_end
+    if postos:
+        project.save_plan()
+    return {"postos": postos, "recusados": recusados}
 
 
 def timeline_summary(project: Project) -> dict:

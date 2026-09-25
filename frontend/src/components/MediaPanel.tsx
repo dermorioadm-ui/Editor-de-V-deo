@@ -87,11 +87,36 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
             Mídia do projeto
           </h3>
           <div className="ml-auto flex gap-1.5">
+            <button className="btn btn-xs btn-primary" disabled={busy}
+                    title="um ou vários vídeos por cima da fala, em sequência a partir do cursor"
+                    onClick={async () => {
+                      try {
+                        const r = await api.escolher('video',
+                          'Escolher o b-roll (pode marcar vários)', true)
+                        if (r.cancelado) return
+                        const paths = (r.paths?.length ? r.paths : [r.path]).filter(Boolean)
+                        setBusy(true)
+                        snapshot()
+                        const res = await api.brolls(project.id, paths, getPlayhead())
+                        await onChanged()
+                        if (res.postos?.length) {
+                          toast('ok', res.postos.length === 1 ? 'B-roll no vídeo'
+                            : `${res.postos.length} b-rolls, um depois do outro`,
+                            'A sua fala continua por baixo.')
+                        }
+                        for (const x of res.recusados ?? []) {
+                          toast('warn', `Não entrou: ${x.path.split(/[\\/]/).pop()}`, x.motivo)
+                        }
+                      } catch (e: any) {
+                        toast('warn', 'O b-roll não entrou', String(e.message ?? e))
+                      } finally { setBusy(false) }
+                    }}>
+              + b-roll</button>
             <button className="btn btn-xs" onClick={() => abrirJanela('video')}>
               + vídeo</button>
             <button className="btn btn-xs" onClick={() => abrirJanela('image')}>
               + foto/PNG</button>
-            <button className="btn btn-xs btn-primary"
+            <button className="btn btn-xs"
                     onClick={() => abrirJanela('audio')}>+ música</button>
             {musicas.length > 0 && (
               <select className="field py-0.5 text-xs w-44" value=""
@@ -157,20 +182,26 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                   {m.kind === 'video' && (
                     <>
                       <button className="btn btn-xs" disabled={busy}
+                              title="o vídeo cobre a imagem a partir do cursor e a sua fala continua por baixo"
                               onClick={async () => {
                                 snapshot()
-                                await api.addCutaway(project.id, {
-                                  media_id: m.id,
-                                  out_start: getPlayhead(),
-                                  out_end: Math.min(view.duration,
-                                    getPlayhead() + Math.min(6, m.info?.duration ?? 5)),
-                                  media_start: 0,
-                                })
-                                await onChanged()
-                                toast('ok', 'Cutaway criado',
-                                  'O vídeo entra por cima e o áudio original continua por baixo.')
+                                try {
+                                  await api.addCutaway(project.id, {
+                                    media_id: m.id,
+                                    out_start: getPlayhead(),
+                                    out_end: Math.min(view.duration,
+                                      getPlayhead() + Math.min(6, m.info?.duration ?? 5)),
+                                    media_start: 0,
+                                  })
+                                  await onChanged()
+                                  toast('ok', 'B-roll no cursor',
+                                    'O vídeo entra por cima e o áudio original continua por baixo.')
+                                } catch (e: any) {
+                                  toast('warn', 'O b-roll não entrou aqui',
+                                    String(e.message ?? e))
+                                }
                               }}>
-                        substituir (cutaway) aqui
+                        b-roll aqui
                       </button>
                       <button className="btn btn-xs" disabled={busy}
                               onClick={async () => {
@@ -258,7 +289,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
       {/* ----------------------------------------------------- cutaways */}
       <section className="card p-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
-          Cutaways · {view.cutaways.length}
+          B-roll (cobre a imagem) · {view.cutaways.length}
         </h3>
         <p className="hint mb-2">
           O vídeo entra e o áudio original continua por baixo. Proporção diferente encaixa
