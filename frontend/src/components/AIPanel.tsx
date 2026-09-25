@@ -112,7 +112,7 @@ export default function AIPanel({ onChanged }: { onChanged: () => void }) {
           </div>
         ) : (
           <div className="flex gap-2">
-            <input className="input flex-1 font-mono" type="password"
+            <input className="field flex-1 font-mono" type="password"
                    placeholder="cole aqui a chave do Google AI Studio"
                    value={chave} onChange={(e) => setChave(e.target.value)} />
             <button className="btn" disabled={!chave.trim()}

@@ -1090,16 +1090,37 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               # grava quando o usuário só escolhe o MP3)
                               music.get("out_end") or None,
                               music.get("curva"))
+        # A MISTURA EM PONTO FLUTUANTE, NÃO EM 16 BITS. Voz quente mais trilha
+        # masterizada somam ACIMA do teto: medido, voz a -0,9 dBFS com trilha
+        # a -6 dB dava +2,9 dBFS, e em 16 bits isso virava 54.960 amostras
+        # CLIPADAS numa faixa de 6 s. O loudnorm abaixava tudo depois e a saída
+        # parecia boa (pico -2 dB) — mas a distorção já estava gravada dentro,
+        # só que mais baixa. Era o "som estourando" com trilha. Em 32 bits
+        # flutuantes a soma passa de 1,0 sem clipar, e quem traz de volta para
+        # baixo do teto é o loudnorm, sem distorcer.
         run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
              "-stream_loop", "-1", "-i", str(mpath),
              "-filter_complex", graph, "-map", "[aout]",
-             "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le",
+             "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le",
              "-t", f"{duration:.6f}", str(mix_path)])
         stage_src = mix_path
 
     pre = build_pre_chain(params)
     measured = measure_loudnorm(stage_src, pre, params)
-    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured)) if x)
+    # O TETO, POR ÚLTIMO. O loudnorm mira o pico, mas não o GARANTE: em modo
+    # linear, quando o ganho necessário passaria do teto, ele volta sozinho
+    # para o modo dinâmico, e o limitador interno dele pode passar um pouco.
+    # O alimiter é a parede: nada sai acima dele.
+    #   level=0   — o padrão é LIGADO, e ele reamplifica a saída até o teto:
+    #               desfaria o volume-alvo que o loudnorm acabou de acertar.
+    #   latency=1 — sem compensar, o áudio sai atrasado do tempo de ataque, e
+    #               como o comprimento é travado logo abaixo, o fim seria
+    #               cortado e a boca ficaria fora de sincronia.
+    teto = 10 ** (min(-0.5, float(params.true_peak)) / 20.0)
+    limitador = (f"alimiter=limit={teto:.4f}:level=0:latency=1:"
+                 f"attack=5:release=60")
+    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured),
+                                 limitador) if x)
     run([FFMPEG, "-y", "-v", "error", "-i", str(stage_src), "-af", chain,
          "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)])
 

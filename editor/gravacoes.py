@@ -98,7 +98,46 @@ def guardar(dados: bytes, nome: str = "", mime: str = "video/webm") -> dict:
         origem.unlink(missing_ok=True)
     except OSError:
         pass
-    return {**_medir(destino), "remuxado": True, "aviso": ""}
+    medida = _medir(destino)
+    aviso = ""
+    # 0,1% das amostras no teto já é estalo audível numa fala: é o limiar em
+    # que o ouvido começa a notar a onda achatada, não uma margem de conforto
+    if medida.get("tem_audio"):
+        fracao = estouro(destino)
+        medida["estouro"] = round(fracao, 5)
+        if fracao > 0.001:
+            aviso = (f"o som ESTOUROU em {fracao * 100:.1f}% da gravação — o "
+                     f"microfone está alto demais. Isso não tem conserto depois: "
+                     f"baixe o volume do microfone (Configurações do Windows → "
+                     f"Som → Entrada) e grave de novo")
+    return {**medida, "remuxado": True, "aviso": aviso}
+
+
+def estouro(arquivo: Path) -> float:
+    """Fração do áudio que BATEU NO TETO na hora de gravar (0 a 1).
+
+    Estouro na gravação não tem conserto depois. O limitador da exportação
+    impede que o editor ESTOURE o som; ele não desfaz um som que já nasceu
+    estourado — a onda achatada no teto é informação que se perdeu. O único
+    remédio é regravar com o microfone mais baixo, e o único momento em que
+    isso é barato é AGORA, com a pessoa ainda na frente da câmera.
+    """
+    import tempfile
+
+    from .ffmpeg_utils import extract_wav, read_wav_mono
+
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            extract_wav(arquivo, wav, 16000, 1)
+            amostras, _sr = read_wav_mono(wav)
+    except Exception:  # noqa: BLE001 — sem áudio para medir, não há o que avisar
+        return 0.0
+    if not len(amostras):
+        return 0.0
+    import numpy as np
+
+    return float(np.mean(np.abs(amostras) >= 0.985))
 
 
 def _medir(arquivo: Path) -> dict:

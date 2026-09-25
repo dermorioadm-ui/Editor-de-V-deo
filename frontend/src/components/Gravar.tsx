@@ -391,7 +391,7 @@ export default function Gravar({ onFechar, onUsar }: Props) {
             {!somenteAudio && (
               <label className="block">
                 <span className="text-slate-500">câmera</span>
-                <select className="w-full mt-1" value={camera}
+                <select className="field w-full mt-1" value={camera}
                         onChange={(e) => setCamera(e.target.value)}>
                   <option value="">a padrão</option>
                   {camaras.map((d) => (
@@ -404,7 +404,7 @@ export default function Gravar({ onFechar, onUsar }: Props) {
             )}
             <label className="block">
               <span className="text-slate-500">microfone</span>
-              <select className="w-full mt-1" value={microfone}
+              <select className="field w-full mt-1" value={microfone}
                       onChange={(e) => setMicrofone(e.target.value)}>
                 <option value="">o padrão</option>
                 {micros.map((d) => (
@@ -443,7 +443,11 @@ export default function Gravar({ onFechar, onUsar }: Props) {
                 {mostrarTexto ? 'esconder' : 'mostrar'}
               </button>
             </div>
-            <textarea className="w-full h-24" value={texto}
+            {/* A classe `field` é o que dá fundo escuro ao campo. Sem ela o
+                navegador pinta o fundo de BRANCO e o texto herda a cor clara
+                do app: branco no branco, e ele colava o roteiro sem ver o que
+                tinha colado. */}
+            <textarea className="field w-full h-24 font-sans" value={texto}
                       placeholder="cole aqui o que você vai falar"
                       onChange={(e) => setTexto(e.target.value)} />
             <div className="flex gap-2">
@@ -526,13 +530,13 @@ export default function Gravar({ onFechar, onUsar }: Props) {
               <label className="flex-1">
                 <span className="text-slate-500">tela (polegadas)</span>
                 <input type="number" min={10} max={80} value={diagonal}
-                       className="w-full mt-1"
+                       className="field w-full mt-1"
                        onChange={(e) => setDiagonal(Number(e.target.value) || 24)} />
               </label>
               <label className="flex-1">
                 <span className="text-slate-500">distância (cm)</span>
                 <input type="number" min={20} max={300} value={distancia}
-                       className="w-full mt-1"
+                       className="field w-full mt-1"
                        onChange={(e) => setDistancia(Number(e.target.value) || 60)} />
               </label>
             </div>

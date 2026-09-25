@@ -338,6 +338,8 @@ def main() -> int:
     testar_gravacao_e_teleprompter_na_tela()
     testar_olhar_na_lente()
     testar_tomadas_em_sequencia_nunca_por_cima()
+    testar_nenhum_campo_branco_no_branco()
+    testar_som_nao_estoura_com_trilha()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -5443,6 +5445,36 @@ def testar_gravar_dentro_do_app() -> None:
         check(lista[0]["criado_em"] >= lista[-1]["criado_em"],
               "da mais recente para a mais antiga")
 
+        # MICROFONE ALTO DEMAIS: a onda achatada no teto não tem conserto
+        # depois — o limitador da exportação impede o editor de estourar, não
+        # desfaz o que nasceu estourado. O aviso tem que vir NA HORA.
+        import numpy as np
+        from editor.ffmpeg_utils import write_wav
+        t_ = np.arange(48000 * 2) / 48000
+        alto = tmp / "alto.wav"
+        write_wav(alto, np.clip(2.5 * np.sin(2 * np.pi * 300 * t_), -1, 1)
+                  .astype(np.float32), 48000)
+        estourada = tmp / "estourada.webm"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=s=160x120:r=30:d=2",
+                        "-i", str(alto), "-c:v", "libvpx", "-b:v", "150k",
+                        "-c:a", "libopus", "-shortest", "-f", "webm",
+                        str(estourada)], check=True)
+        r5 = cliente.post("/api/gravacoes",
+                          files={"arquivo": ("estourada.webm",
+                                             estourada.read_bytes(), "video/webm")},
+                          data={"nome": "estourada.webm", "mime": "video/webm"})
+        g5 = r5.json()
+        guardadas.append(g5["nome"])
+        check("ESTOUROU" in (g5.get("aviso") or "")
+              and "microfone" in g5["aviso"],
+              f"gravação com o microfone alto demais volta AVISANDO, com o "
+              f"remédio — que só é barato agora, com a pessoa na frente da "
+              f"câmera ({(g5.get('aviso') or 'sem aviso')[:60]}…)")
+        check(not g.get("aviso"),
+              "e a gravação normal não gera aviso nenhum (alarme falso ensina "
+              "a ignorar o alarme)")
+
         # gravação vazia é recusada, não guardada
         r3 = cliente.post("/api/gravacoes",
                           files={"arquivo": ("nada.webm", b"", "video/webm")},
@@ -5897,6 +5929,129 @@ def testar_tomadas_em_sequencia_nunca_por_cima() -> None:
                 svc.delete_project(pid)
             except Exception:  # noqa: BLE001
                 pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_nenhum_campo_branco_no_branco() -> None:
+    """Todo campo de texto do app tem fundo escuro.
+
+    O app pinta a letra de claro. Um campo sem a classe `field` fica com o
+    fundo BRANCO padrão do navegador, e a letra clara some em cima dele. Foi o
+    que aconteceu no teleprompter: ele colava o roteiro e não via o que tinha
+    colado. A varredura achou um segundo, no campo da chave do Gemini, que
+    usava a classe `input` — que não existe no app.
+
+    Este teste varre TODOS os componentes, para o próximo campo não nascer
+    assim sem ninguém perceber até alguém tentar escrever nele.
+    """
+    import re
+    from pathlib import Path
+
+    css = Path("frontend/src/index.css").read_text(encoding="utf-8")
+    check(".field {" in css and "bg-ink-700" in css,
+          "a classe `field` existe e dá fundo escuro")
+    sem_estilo = []
+    for arquivo in sorted(Path("frontend/src/components").glob("*.tsx")):
+        texto = arquivo.read_text(encoding="utf-8")
+        for m in re.finditer(r"<(textarea|select|input)\b([^>]*?)/?>", texto, re.S):
+            tag, attrs = m.group(1), m.group(2)
+            tipo = re.search(r'type="([^"]+)"', attrs)
+            tipo = tipo.group(1) if tipo else ("text" if tag == "input" else tag)
+            if tipo in ("checkbox", "radio", "range", "file", "hidden", "color"):
+                continue
+            if "field" in attrs:
+                continue
+            linha = texto[:m.start()].count("\n") + 1
+            sem_estilo.append(f"{arquivo.name}:{linha} <{tag}>")
+    check(not sem_estilo,
+          f"nenhum campo de texto sem fundo escuro no app inteiro "
+          f"({sem_estilo or 'todos com `field`'})")
+
+
+def testar_som_nao_estoura_com_trilha() -> None:
+    """Voz quente mais trilha masterizada não pode sair distorcida.
+
+    A mistura de voz e trilha era gravada em 16 bits antes de o volume ser
+    ajustado. As duas somadas passam do teto — medido, voz a -0,9 dBFS com a
+    trilha a -6 dB dava +2,9 dBFS — e em 16 bits isso virava 54.960 amostras
+    CLIPADAS numa faixa de 6 s. O loudnorm abaixava tudo DEPOIS, e a saída
+    parecia boa (pico -2 dB): a distorção estava gravada dentro, só que mais
+    baixa. Olhar o pico da saída não pegava isso; por isso este teste reproduz
+    a etapa de mistura e conta amostra por amostra.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, AudioParams
+    from editor.ffmpeg_utils import read_wav_mono, write_wav
+    from editor.models import EditPlan
+    from editor.render import renderer as R
+
+    tmp = Path(tempfile.mkdtemp(prefix="som_"))
+    try:
+        sr = R.AUDIO_SR
+        dur = 6.0
+        t = np.arange(int(sr * dur)) / sr
+        voz = tmp / "voz.wav"
+        write_wav(voz, (0.9 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
+        trilha = tmp / "trilha.wav"
+        write_wav(trilha, (0.98 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sr)
+
+        # o que ACONTECIA: a mesma mistura, em 16 bits
+        from editor.render import filters as F
+        g = F.music_chain(-6.0, False, 12, 0, 0, dur, 0.0, None, None)
+        mix16 = tmp / "mix16.wav"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-i", str(voz),
+                        "-stream_loop", "-1", "-i", str(trilha),
+                        "-filter_complex", g, "-map", "[aout]", "-ac", "1",
+                        "-ar", str(sr), "-c:a", "pcm_s16le", "-t", f"{dur}",
+                        str(mix16)], check=True)
+        a16, _ = read_wav_mono(mix16)
+        clip16 = int(np.sum(np.abs(a16) >= 0.9999))
+        check(clip16 > 1000,
+              f"a mistura em 16 bits CLIPA ({clip16} amostras) — é o defeito "
+              f"que existia, reproduzido para o teste valer")
+
+        # o que ACONTECE agora, pela função de verdade
+        plano = EditPlan()
+        plano.music = {"media_id": "m", "enabled": True, "gain_db": -6.0,
+                       "ducking": False, "duck_amount": 12, "fade_in": 0,
+                       "fade_out": 0, "out_start": 0}
+        saida = tmp / "saida.wav"
+        R.process_audio(voz, saida, AudioParams(), plano,
+                        {"m": {"path": str(trilha)}}, dur)
+        a, _ = read_wav_mono(saida)
+        clip = int(np.sum(np.abs(a) >= 0.9999))
+        pico = 20 * np.log10(float(np.max(np.abs(a))) + 1e-12)
+        check(clip == 0, f"e agora a saída não tem amostra clipada ({clip})")
+        check(pico <= AudioParams().true_peak + 0.1,
+              f"com o pico abaixo do teto ({pico:.2f} dBFS, teto "
+              f"{AudioParams().true_peak} dBFS)")
+        check(abs(len(a) / sr - dur) < 0.002,
+              f"e a duração exata ({len(a) / sr:.4f} s) — o limitador compensa "
+              f"o próprio atraso, senão a boca sai fora de sincronia")
+
+        # o limitador não pode reamplificar: o volume-alvo tem que sobreviver
+        lufs = subprocess.run(
+            [FFMPEG, "-v", "info", "-nostdin", "-i", str(saida),
+             "-af", "ebur128=peak=true", "-f", "null", "-"],
+            capture_output=True, text=True).stderr
+        import re
+        m = re.findall(r"I:\s*(-?[\d.]+) LUFS", lufs)
+        integrado = float(m[-1]) if m else 0.0
+        check(abs(integrado - AudioParams().target_lufs) < 2.0,
+              f"e o volume-alvo sobrevive ao limitador ({integrado:.1f} LUFS, "
+              f"alvo {AudioParams().target_lufs}) — com o ganho automático "
+              f"dele ligado, que é o padrão, ele reamplificaria tudo")
+
+        codigo = Path("editor/render/renderer.py").read_text(encoding="utf-8")
+        check('"pcm_f32le"' in codigo and "level=0:latency=1" in codigo,
+              "a mistura é em ponto flutuante e o limitador tem ganho "
+              "automático desligado e atraso compensado")
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
