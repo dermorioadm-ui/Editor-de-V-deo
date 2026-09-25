@@ -21,6 +21,10 @@ class ErroDoEditor(Exception):
     """O editor respondeu, e respondeu que não."""
 
 
+# estados finais de um trabalho; os em inglês ficam por garantia
+FINAIS = ("ok", "erro", "cancelado", "done", "error", "cancelled")
+
+
 class Cliente:
     """Cliente HTTP do editor local.
 
@@ -108,7 +112,11 @@ class Cliente:
                     ultimo = j
                     break
             estado = ultimo.get("status")
-            if estado in ("done", "error", "cancelled"):
+            # os estados do editor são em PORTUGUÊS (ok, erro, cancelado —
+            # editor/jobs.py). Esperar por "done" fazia toda ferramenta que
+            # roda um trabalho (editar sozinho, exportar, acrescentar vídeo)
+            # esperar a hora inteira do limite com o trabalho já pronto.
+            if estado in FINAIS:
                 return ultimo
             # Job que some da lista terminou ANTES de a primeira sondagem
             # chegar, ou o editor reiniciou: a lista de /api/jobs vive em
@@ -116,6 +124,6 @@ class Cliente:
             if ultimo and estado is None:
                 return ultimo
             dormir(passo)
-        ultimo.setdefault("status", "running")
+        ultimo.setdefault("status", "rodando")
         ultimo["_estourou"] = True
         return ultimo
