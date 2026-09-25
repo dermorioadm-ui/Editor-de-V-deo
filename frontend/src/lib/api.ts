@@ -193,8 +193,12 @@ export const api = {
     put<any>(`/api/corrections/${id}`, { from, to, enabled }),
   deleteCorrection: (id: number) => del<any>(`/api/corrections/${id}`),
 
-  addMedia: (id: string, path: string, kind: string, descricao = '') =>
-    post<any>(`/api/projects/${id}/media`, { path, kind, descricao }),
+  /** `papel` separa o ANEXO (janela, cobertura, foto por cima) da FONTE
+   *  (outra gravação do pacote, que entra NA SEQUÊNCIA). Sem ele, a segunda
+   *  tomada era posta como janela por cima da primeira, muda. */
+  addMedia: (id: string, path: string, kind: string, descricao = '',
+             papel: 'anexo' | 'fonte' = 'anexo') =>
+    post<any>(`/api/projects/${id}/media`, { path, kind, descricao, papel }),
   addCutaway: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/cutaways`, payload),
   updateCutaway: (id: string, cid: string, payload: any) =>

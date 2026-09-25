@@ -113,7 +113,12 @@ def _migrar(conn: sqlite3.Connection) -> None:
     na primeira escrita.
     """
     novas = {
-        "media": [("descricao", "TEXT DEFAULT ''")],
+        # PAPEL da mídia: 'anexo' (janela, cobertura, foto por cima) ou
+        # 'fonte' (outra gravação do pacote, que entra NA SEQUÊNCIA). As duas
+        # eram só "vídeo" no banco, e o posicionador de anexos punha a segunda
+        # tomada como janela por cima da primeira, muda.
+        "media": [("descricao", "TEXT DEFAULT ''"),
+                  ("papel", "TEXT DEFAULT 'anexo'")],
         "musicas": [("sha1", "TEXT DEFAULT ''")],
     }
     for tabela, colunas in novas.items():

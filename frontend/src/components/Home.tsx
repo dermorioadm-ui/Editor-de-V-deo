@@ -209,7 +209,7 @@ export default function Home() {
       extrasIds.current = []
       for (const extra of maisFontes) {
         try {
-          const m = await api.addMedia(project.id, extra, 'video')
+          const m = await api.addMedia(project.id, extra, 'video', '', 'fonte')
           if (m?.id) extrasIds.current.push(m.id)
         } catch (e: any) {
           toast('warn', 'Uma das gravações ficou de fora',

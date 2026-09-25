@@ -337,13 +337,39 @@ def apply_preset_to_plan(plan: EditPlan, preset_name: str) -> None:
 def list_media(pid: str) -> list[dict]:
     return [{"id": r["id"], "path": r["path"], "kind": r["kind"],
              "name": r["name"], "info": db.jloads(r["info_json"], {}),
-             "descricao": (r["descricao"] if "descricao" in r.keys() else "") or ""}
+             "descricao": (r["descricao"] if "descricao" in r.keys() else "") or "",
+             "papel": (r["papel"] if "papel" in r.keys() else "") or "anexo"}
             for r in db.q("SELECT * FROM media WHERE project_id=? ORDER BY created_at",
                           (pid,))]
 
 
+def midias_anexas(project: "Project") -> list[dict]:
+    """As mídias que são ANEXO — janela, cobertura, foto — e não fonte.
+
+    Era aqui que as tomadas saíam uma por cima da outra. O posicionador de
+    anexos pegava TODA mídia de vídeo do projeto, e uma segunda gravação do
+    pacote também é mídia de vídeo: ela entrava na sequência (certo) e ALÉM
+    DISSO era posta como janela por cima da primeira — e janela entra sem
+    áudio, por regra. O usuário gravava três tomadas e via uma sobreposta à
+    outra, muda.
+
+    Três filtros, de propósito redundantes. O papel gravado na mídia é o
+    principal. Os outros dois cobrem o projeto criado antes de o papel
+    existir: uma mídia que já tem análise de fonte, ou que já é a fonte de
+    algum bloco da linha do tempo, é fonte — seja lá o que o banco diga.
+    """
+    fontes = set(project.fontes)
+    fontes |= {c.source for c in project.plan.clips
+               if c.source and c.source != "main"}
+    return [m for m in list_media(project.id)
+            if m.get("kind") in ("video", "image")
+            and not str(m.get("id", "")).startswith("k_")
+            and m.get("papel") != "fonte"
+            and m["id"] not in fontes]
+
+
 def add_media(pid: str, path: str, kind: str = "video",
-              name: str = "", descricao: str = "") -> dict:
+              name: str = "", descricao: str = "", papel: str = "anexo") -> dict:
     src = Path(path).expanduser()
     if not src.exists():
         raise FileNotFoundError(f"arquivo não encontrado: {src}")
@@ -356,10 +382,11 @@ def add_media(pid: str, path: str, kind: str = "video",
         except Exception:  # noqa: BLE001
             info = {}
     mid = uuid.uuid4().hex[:10]
+    papel = "fonte" if papel == "fonte" else "anexo"
     db.ex("INSERT INTO media(id, project_id, path, kind, name, info_json, "
-          "descricao, created_at) VALUES (?,?,?,?,?,?,?,?)",
+          "descricao, created_at, papel) VALUES (?,?,?,?,?,?,?,?,?)",
           (mid, pid, str(src.resolve()), kind, name or src.name,
-           db.jdumps(info), str(descricao or "")[:400], time.time()))
+           db.jdumps(info), str(descricao or "")[:400], time.time(), papel))
     if kind == "audio":
         # toda música que entra num projeto vai para a BIBLIOTECA e fica lá
         try:
@@ -368,7 +395,7 @@ def add_media(pid: str, path: str, kind: str = "video",
             pass
     return {"id": mid, "path": str(src.resolve()), "kind": kind,
             "name": name or src.name, "info": info,
-            "descricao": str(descricao or "")[:400]}
+            "descricao": str(descricao or "")[:400], "papel": papel}
 
 
 def sources_for(project: Project) -> dict:
@@ -476,6 +503,9 @@ def analisar_midia(project: Project, media_id: str, ctx) -> dict:
     }
     project.analysis = {**project.analysis, "fontes": fontes}
     project.save_analysis()
+    # quem é analisado como fonte é fonte, venha por que caminho vier — é a
+    # rede de segurança para o posicionador de anexos não pegá-la de novo
+    db.ex("UPDATE media SET papel='fonte' WHERE id=?", (media_id,))
     ctx.progress(1.0, f"{len(palavras)} palavras em "
                       f"{midia.get('name') or 'anexo'}")
     return {"media_id": media_id, "ordem": ordem, "base_i": base,
@@ -642,6 +672,12 @@ def analyze(project: Project, ctx) -> dict:
                      "audit_threshold": env.audit_threshold,
                      "duration": env.duration},
         "manual_removed_word_ids": previous.get("manual_removed_word_ids", []),
+        # AS OUTRAS GRAVAÇÕES SOBREVIVEM. Este dicionário é reconstruído do
+        # zero a cada análise do vídeo principal, e ele é quem guarda as
+        # análises das tomadas extras. Sem esta linha, refazer a análise do
+        # principal jogava fora as palavras e o envelope das outras — e elas
+        # sumiam da montagem na edição seguinte, caladas.
+        "fontes": previous.get("fontes", {}),
         "comandos": [c.to_dict() for c in comandos],
         "command_word_ids": sorted(ids_de_comando(comandos)),
         "analyzed_at": time.time(),
@@ -874,6 +910,17 @@ def auto_edit(project: Project, ctx) -> dict:
 
     plan.clips = result["clips"]
 
+    # A JANELA-FANTASMA. Projetos montados antes do papel existir saíram com
+    # a segunda tomada posta TAMBÉM como janela por cima da primeira, muda.
+    # Uma sobreposição ou cobertura que aponta para uma gravação-fonte não é
+    # edição de ninguém — é o defeito — e sai aqui, em qualquer reedição.
+    _fontes_do_pacote = set(project.fontes_com_fala()[1:])
+    if _fontes_do_pacote:
+        plan.overlays = [o for o in plan.overlays
+                         if o.media_id not in _fontes_do_pacote]
+        plan.cutaways = [c for c in plan.cutaways
+                         if c.media_id not in _fontes_do_pacote]
+
     # AS OUTRAS GRAVAÇÕES, cada uma contra o PRÓPRIO áudio.
     #
     # build_auto_plan é função pura de (palavras, envelope, parâmetros): não
@@ -1068,9 +1115,7 @@ def enriquecer(project: Project, ctx) -> dict:
     from . import db
     from .ai import gemini
 
-    midias = [m for m in list_media(project.id)
-              if m.get("kind") in ("video", "image")
-              and not str(m.get("id", "")).startswith("k_")]
+    midias = midias_anexas(project)
     # Cartão NÃO nasce aqui: a IA inventava painéis por conta própria e o
     # usuário não quer elemento que não pediu. Cartão só existe por pedido
     # escrito na edição (cartoes_por_pedido). Sem mídia anexada, nada a fazer.
@@ -1757,10 +1802,7 @@ def plano_da_ia(project: Project, ctx, com_anexos: bool = True) -> dict:
     midias, quadros = [], []
     if com_anexos:
         ctx.stage("anexos", "olhando as mídias que você anexou")
-        midias = [m for m in list_media(project.id)
-                  if m.get("kind") in ("video", "image")
-                  and not str(m.get("id", "")).startswith("k_")]
-        midias = midias[:roteiro.MAX_QUADROS]
+        midias = midias_anexas(project)[:roteiro.MAX_QUADROS]
         for m in midias:
             try:
                 dur = float((m.get("info") or {}).get("duration") or 0.0)
@@ -1808,9 +1850,7 @@ def aplicar_plano_da_ia(project: Project, plano: dict,
     # o cartão (k_) é elemento DO PROGRAMA, não mídia que o usuário anexou:
     # sem este filtro o plano seguinte o tratava como anexo e o reinseria
     # encolhido no canto, como janela
-    midias = [m for m in list_media(project.id)
-              if m.get("kind") in ("video", "image")
-              and not str(m.get("id", "")).startswith("k_")]
+    midias = midias_anexas(project)
     if so_anexos:
         plano = {k: v for k, v in plano.items() if k != "blocos"}
     palavras = project.analysis.get("words") or []

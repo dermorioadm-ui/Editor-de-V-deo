@@ -355,7 +355,8 @@ def api_adicionar_video(pid: str, payload: dict = Body(...)) -> dict:
     try:
         midia = svc.add_media(pid, caminho, "video",
                               name=str(payload.get("name") or ""),
-                              descricao=str(payload.get("descricao") or ""))
+                              descricao=str(payload.get("descricao") or ""),
+                              papel="fonte")
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -1380,7 +1381,8 @@ def api_add_media(pid: str, payload: dict = Body(...)) -> dict:
     try:
         return svc.add_media(pid, payload["path"], payload.get("kind", "video"),
                              payload.get("name", ""),
-                             payload.get("descricao", ""))
+                             payload.get("descricao", ""),
+                             papel=str(payload.get("papel") or "anexo"))
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -2002,7 +2004,7 @@ def api_pacote(payload: dict = Body(...)) -> dict:
     recusados: list[dict] = []
     for caminho in caminhos[1:]:
         try:
-            midia = svc.add_media(project.id, caminho, "video")
+            midia = svc.add_media(project.id, caminho, "video", papel="fonte")
             extras.append(midia["id"])
         except FileNotFoundError as exc:
             recusados.append({"path": caminho, "motivo": str(exc)})

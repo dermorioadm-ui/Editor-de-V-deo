@@ -337,6 +337,7 @@ def main() -> int:
     testar_pacote_numa_esteira_so()
     testar_gravacao_e_teleprompter_na_tela()
     testar_olhar_na_lente()
+    testar_tomadas_em_sequencia_nunca_por_cima()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -5550,6 +5551,19 @@ def testar_pacote_numa_esteira_so() -> None:
         check(p.plan.active_clips and all(c.src_duration > 0.01
                                           for c in p.plan.active_clips),
               "e todo bloco tem conteúdo")
+        # O DEFEITO QUE ESTE TESTE DEIXOU PASSAR. Ele conferia que as duas
+        # fontes estavam na linha do tempo e nunca conferia que NÃO havia nada
+        # por cima: a segunda tomada entrava na sequência E era posta como
+        # janela sobre a primeira, muda. O usuário viu "um vídeo por cima do
+        # outro, sem áudio" e o teste estava verde.
+        fontes_ids = {c.source for c in p.plan.active_clips if c.source != "main"}
+        por_cima = [o for o in p.plan.overlays if o.media_id in fontes_ids]
+        check(not por_cima,
+              f"NENHUMA gravação do pacote é posta como janela por cima de "
+              f"outra ({len(por_cima)} janela(s) apontando para uma fonte)")
+        cobrindo = [c for c in p.plan.cutaways if c.media_id in fontes_ids]
+        check(not cobrindo,
+              f"nem como cobertura ({len(cobrindo)})")
         # o silêncio saiu: a soma dos blocos é menor que os dois arquivos juntos
         somado = sum(c.src_duration for c in p.plan.active_clips)
         check(somado < (a_d + b_d) - 0.4,
@@ -5778,6 +5792,112 @@ def testar_olhar_na_lente() -> None:
               "ali é olhar para baixo, o desvio mais visível que existe")
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_tomadas_em_sequencia_nunca_por_cima() -> None:
+    """Três tomadas saem EM SEQUÊNCIA, com som — nunca uma por cima da outra.
+
+    O relato foi: "gravei três e mandei, e o vídeo saiu um por cima do outro,
+    sem áudio". A causa: o posicionador de anexos (enriquecer) pegava TODA
+    mídia de vídeo do projeto, e uma segunda gravação do pacote também é mídia
+    de vídeo. Ela entrava na sequência (certo) e ALÉM DISSO era posta como
+    janela por cima — e janela entra sem áudio, por regra.
+
+    Agora a mídia tem PAPEL: 'fonte' (continuação da montagem) ou 'anexo'
+    (janela, cobertura, foto por cima). Este teste percorre o caminho que a
+    TELA faz — cria com a primeira, sobe as outras como mídia, dispara o clique
+    único com as extras — e o caminho do projeto ANTIGO, criado antes de o
+    papel existir, que já está no disco dele com a janela-fantasma.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.models import Overlay
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="sequencia_"))
+    pids: list[str] = []
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    try:
+        frases = ["primeira tomada aqui", "segunda tomada agora",
+                  "terceira e ultima"]
+        tomadas = []
+        for i, frase in enumerate(frases):
+            amostras, _m, dur = build_track([(frase, 0.7)])
+            tomadas.append(make_video(tmp / f"t{i}.mp4", amostras, dur,
+                                      320, 180, 30))
+        install(frases)
+
+        # ---- o caminho da TELA ----------------------------------------
+        p = svc.create(str(tomadas[0]), "sequencia", "VSL")
+        pids.append(p.id)
+        extras = [svc.add_media(p.id, str(t), "video", papel="fonte")["id"]
+                  for t in tomadas[1:]]
+        # uma mídia que É anexo de verdade, para provar que o filtro não
+        # derrubou o anexo junto com o defeito
+        selo = svc.add_media(p.id, str(tomadas[2]), "video", "selo de verdade",
+                             papel="anexo")
+        svc.one_click(svc.load(p.id), Ctx(quiet=True), fontes_extras=extras)
+        q = svc.load(p.id)
+        ordem = []
+        for c in q.plan.active_clips:
+            if not ordem or ordem[-1] != c.source:
+                ordem.append(c.source)
+        check(ordem == ["main", *extras],
+              f"as três tomadas saem EM SEQUÊNCIA, na ordem do pacote "
+              f"({len(ordem)} trechos de gravação)")
+        por_cima = [o for o in q.plan.overlays if o.media_id in extras]
+        check(not por_cima,
+              f"nenhuma tomada é posta como janela por cima de outra "
+              f"({len(por_cima)})")
+        check(all(c.audio != "mute" for c in q.plan.active_clips),
+              "e todas com o som delas")
+        anexas = {m["id"] for m in svc.midias_anexas(q)}
+        check(selo["id"] in anexas and not (anexas & set(extras)),
+              "o filtro separa o anexo DE VERDADE das fontes — o selo "
+              "continua sendo anexo, as tomadas não")
+
+        # ---- o projeto ANTIGO, que já está no disco com o defeito ------
+        # criado antes do papel existir: as tomadas extras ficaram com
+        # papel 'anexo' e uma delas virou janela por cima
+        velho = svc.create(str(tomadas[0]), "antigo", "VSL")
+        pids.append(velho.id)
+        extras_velhas = [svc.add_media(velho.id, str(t), "video")["id"]
+                         for t in tomadas[1:]]
+        for mid in extras_velhas:
+            svc.analisar_midia(svc.load(velho.id), mid, Ctx(quiet=True))
+        from editor import db
+        db.ex("UPDATE media SET papel='anexo' WHERE project_id=?", (velho.id,))
+        v = svc.load(velho.id)
+        v.plan.overlays = [Overlay(media_id=extras_velhas[0], out_start=1.0,
+                                   out_end=4.0)]
+        v.save_plan()
+        check(not ({m["id"] for m in svc.midias_anexas(svc.load(velho.id))}
+                   & set(extras_velhas)),
+              "no projeto antigo, uma mídia com análise de fonte é fonte — "
+              "seja lá o que o banco diga")
+        svc.analyze(svc.load(velho.id), Ctx(quiet=True))
+        # o defeito que este teste achou no caminho: analyze() reconstruía a
+        # análise do zero e jogava fora a das outras gravações
+        check(set(svc.load(velho.id).fontes) == set(extras_velhas),
+              "refazer a análise do vídeo principal NÃO apaga a análise das "
+              "outras tomadas (antes apagava, e elas sumiam da montagem)")
+        svc.auto_edit(svc.load(velho.id), Ctx(quiet=True))
+        v2 = svc.load(velho.id)
+        check(not [o for o in v2.plan.overlays if o.media_id in extras_velhas],
+              "e refazer a edição LIMPA a janela-fantasma que ele já tem no "
+              "disco — não é edição de ninguém, é o defeito")
+    finally:
+        svc.previa_da_edicao = previa_real
+        for pid in pids:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def testar_previa_mostra_o_que_baixa() -> None:
