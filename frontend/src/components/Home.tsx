@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import FileBrowser from './FileBrowser'
+import Gravar from './Gravar'
 import { api } from '../lib/api'
 import { bytes, timecode } from '../lib/format'
 import { setState, toast, useStore } from '../state/store'
@@ -12,6 +13,10 @@ export default function Home() {
   const [projects, setProjects] = useState<any[]>([])
   const [preset, setPreset] = useState('VSL')
   const [path, setPath] = useState('')
+  // AS OUTRAS GRAVAÇÕES DO PACOTE. A ordem desta lista é a ordem da montagem —
+  // é a única coisa que ele precisa decidir, e ele já decide ao escolher.
+  const [maisFontes, setMaisFontes] = useState<string[]>([])
+  const [gravando, setGravando] = useState(false)
   const [browsing, setBrowsing] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -138,6 +143,9 @@ export default function Home() {
     refresh()
   }, [])
 
+  // os ids das mídias que viraram FONTE (não anexo) deste pacote
+  const extrasIds = useRef<string[]>([])
+
   async function openProject(id: string, andEdit = false) {
     setBusy(true)
     try {
@@ -154,7 +162,7 @@ export default function Home() {
         history: [], future: [], selection: null, selectedClip: null,
       })
       if (andEdit) {
-        const job = await api.oneclick(id, preset, receita())
+        const job = await api.oneclick(id, preset, receita(), extrasIds.current)
         setState({ activeJob: job })
       }
     } catch (e: any) {
@@ -194,6 +202,19 @@ export default function Home() {
       // ninguém ficava sabendo.
       if (iaCortes !== (ia?.cortes !== false)) {
         await api.setAiConfig({ cortes: iaCortes }).catch(() => {})
+      }
+      // AS OUTRAS GRAVAÇÕES DO PACOTE sobem como fonte, não como anexo: elas
+      // não são janela por cima do quadro, são continuação da montagem. Cada
+      // uma vai ser transcrita e cortada no ÁUDIO DELA.
+      extrasIds.current = []
+      for (const extra of maisFontes) {
+        try {
+          const m = await api.addMedia(project.id, extra, 'video')
+          if (m?.id) extrasIds.current.push(m.id)
+        } catch (e: any) {
+          toast('warn', 'Uma das gravações ficou de fora',
+            `${extra}: ${String(e.message ?? e)}`)
+        }
       }
       // o material auxiliar sobe ANTES do clique único: é lá dentro que a IA
       // decide em que trecho cada um entra
@@ -269,13 +290,25 @@ export default function Home() {
     } finally { setSalvandoChave(false) }
   }
 
+  /** Acrescenta arquivos ao pacote, sem repetir e mantendo a ordem. */
+  function juntar(novos: string[]) {
+    const limpos = novos.map((c) => c.trim()).filter(Boolean)
+    if (!limpos.length) return
+    const atuais = path ? [path, ...maisFontes] : maisFontes
+    const todos: string[] = []
+    for (const c of [...atuais, ...limpos]) if (!todos.includes(c)) todos.push(c)
+    setPath(todos[0] || '')
+    setMaisFontes(todos.slice(1))
+  }
+
   async function escolherNoDisco() {
     try {
-      const r = await api.escolher('video', 'Escolher o vídeo para editar')
+      const r = await api.escolher('video', 'Escolher os vídeos para editar',
+                                   true)
       if (r.cancelado) return
       // SÓ carrega o caminho. Quem dispara é o botão GERAR, depois de você
       // ver a receita. Disparar aqui era o furo que anulava a tela inteira.
-      setPath(r.path)
+      juntar(r.paths?.length ? r.paths : [r.path])
     } catch (e: any) {
       // 501 = esta máquina não tem como abrir a janela do sistema
       setBrowsing(true)
@@ -289,23 +322,29 @@ export default function Home() {
   async function onDrop(ev: React.DragEvent) {
     ev.preventDefault()
     setDragging(false)
-    const file = ev.dataTransfer.files?.[0]
-    if (!file) return
-    setLocating(`procurando ${file.name} no seu disco…`)
-    try {
-      const res = await api.locate(file.name, file.size)
-      setLocating('')
-      if (res.path) {
-        setPath(res.path)
-      } else {
-        toast('info', `Não achei "${file.name}" nas pastas de sempre`,
-          `Abrindo a janela do Windows para você apontar. Nada é copiado — ` +
-          `eu só preciso do caminho.`)
-        await escolherNoDisco()
+    // TODOS os arquivos soltos, na ordem em que vieram. Pegar só o primeiro
+    // fazia soltar três tomadas juntas parecer que funcionou e editar uma.
+    const arquivos = Array.from(ev.dataTransfer.files ?? [])
+    if (!arquivos.length) return
+    const achados: string[] = []
+    const perdidos: string[] = []
+    for (const file of arquivos) {
+      setLocating(`procurando ${file.name} no seu disco…`)
+      try {
+        const res = await api.locate(file.name, file.size)
+        if (res.path) achados.push(res.path)
+        else perdidos.push(file.name)
+      } catch (e: any) {
+        perdidos.push(file.name)
       }
-    } catch (e: any) {
-      setLocating('')
-      toast('error', 'Falha ao localizar o arquivo', String(e.message ?? e))
+    }
+    setLocating('')
+    if (achados.length) juntar(achados)
+    if (perdidos.length) {
+      toast('info', `Não achei ${perdidos.length} arquivo(s) nas pastas de sempre`,
+        `${perdidos.join(', ')} — abrindo a janela do Windows para você ` +
+        `apontar. Nada é copiado: eu só preciso do caminho.`)
+      await escolherNoDisco()
     }
   }
 
@@ -450,10 +489,15 @@ export default function Home() {
             ) : (
               <>
                 <div className="text-4xl mb-3 opacity-40">⬇</div>
-                <p className="text-base font-medium">Arraste o vídeo para cá</p>
+                <p className="text-base font-medium">
+                  Arraste o vídeo — ou vários — para cá
+                </p>
                 <p className="hint mt-1 max-w-lg mx-auto">
-                  Ou clique em <b>Escolher no computador</b> e use a janela de
-                  sempre. Nos dois casos o arquivo <b>não é copiado nem
+                  Vários arquivos saem num <b>vídeo só</b>: cada um cortado no
+                  silêncio dele, montados na ordem que você escolher, com uma
+                  legenda contínua. Ou clique em <b>Escolher no computador</b>
+                  {' '}e marque quantos quiser, ou em <b>Gravar agora</b> para
+                  gravar aqui dentro. Em nenhum caso o arquivo é <b>copiado ou
                   enviado</b>: o editor lê ele direto de onde já está.
                 </p>
               </>
@@ -467,7 +511,58 @@ export default function Home() {
               <button className="btn btn-primary" onClick={escolherNoDisco}>
                 Escolher no computador…
               </button>
+              <button className="btn" onClick={() => setGravando(true)}
+                      title="grava pela câmera e pelo microfone desta máquina, com teleprompter">
+                Gravar agora…
+              </button>
             </div>
+
+            {/* O PACOTE. Mais de um arquivo: todos passam pela MESMA esteira e
+                saem num vídeo só — cada um cortado no silêncio dele, montados
+                na ordem desta lista, com uma legenda contínua. */}
+            {maisFontes.length > 0 && (
+              <div className="mt-4 mx-auto max-w-xl text-left">
+                <div className="flex items-center gap-2 mb-1">
+                  <strong className="text-xs">
+                    pacote de {1 + maisFontes.length} gravações
+                  </strong>
+                  <span className="text-[11px] text-slate-500">
+                    saem num vídeo só, nesta ordem
+                  </span>
+                  <button className="btn btn-xs ml-auto"
+                          onClick={() => { setMaisFontes([]) }}>
+                    tirar as extras
+                  </button>
+                </div>
+                <div className="space-y-1">
+                  {[path, ...maisFontes].map((c, i) => (
+                    <div key={c}
+                         className="flex items-center gap-2 text-[11px] px-2 py-1
+                                    rounded border border-line">
+                      <span className="chip w-6 justify-center">{i + 1}</span>
+                      <span className="flex-1 min-w-0 truncate font-mono">{c}</span>
+                      {i > 0 && (
+                        <button className="btn btn-xs"
+                                title="sobe na montagem"
+                                onClick={() => {
+                                  const todos = [path, ...maisFontes]
+                                  const t = todos[i - 1]
+                                  todos[i - 1] = todos[i]; todos[i] = t
+                                  setPath(todos[0]); setMaisFontes(todos.slice(1))
+                                }}>↑</button>
+                      )}
+                      <button className="btn btn-xs border-red-900 text-red-300"
+                              onClick={() => {
+                                const todos = [path, ...maisFontes]
+                                  .filter((x) => x !== c)
+                                setPath(todos[0] || '')
+                                setMaisFontes(todos.slice(1))
+                              }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -870,6 +965,19 @@ export default function Home() {
         <FileBrowser extensions={VIDEO_EXT} title="Escolher o vídeo"
                      onClose={() => setBrowsing(false)}
                      onPick={(p) => { setBrowsing(false); setPath(p); start(p) }} />
+      )}
+
+      {/* O AMBIENTE DE GRAVAÇÃO. As tomadas escolhidas voltam como caminhos e
+          entram no pacote — daí para a frente é a mesma esteira de sempre, com
+          a receita que ele já escolheu aqui embaixo. */}
+      {gravando && (
+        <Gravar onFechar={() => setGravando(false)}
+                onUsar={(paths) => {
+                  setGravando(false)
+                  juntar(paths)
+                  toast('ok', `${paths.length} tomada(s) na esteira`,
+                    'confira a receita aqui embaixo e aperte GERAR VÍDEO PRONTO')
+                }} />
       )}
     </div>
   )

@@ -133,6 +133,24 @@ def main() -> int:
         check(junta and "janela" in junta["description"],
               "e a descrição dela distingue de anexar uma janela por cima")
 
+        pacote = next((f for f in ferramentas if f["name"] == "juntar_videos"),
+                      None)
+        check(pacote is not None
+              and "array" == (pacote["inputSchema"]["properties"]
+                              .get("caminhos", {}).get("type")),
+              "juntar_videos recebe a LISTA de caminhos, na ordem da montagem")
+        check(pacote and "ORDEM DA MONTAGEM" in
+              pacote["inputSchema"]["properties"]["caminhos"]["description"].upper(),
+              "e a descrição diz que a ordem importa — é a única coisa que ele "
+              "precisa decidir")
+        check(any(f["name"] == "gravacoes" for f in ferramentas),
+              "e dá para listar as tomadas gravadas no app, para ele poder "
+              "dizer 'a que acabei de gravar' em vez de um caminho")
+        texto = F.chamar(cliente, "juntar_videos", {"caminhos": ["/x.mp4"]})
+        check("abrir_video" in texto,
+              f"com um arquivo só, ela manda usar a ferramenta certa em vez de "
+              f"criar um pacote de um ({texto[:70]}…)")
+
         # ---- 2) cada ferramenta MUDA alguma coisa ----------------------
         texto = F.chamar(cliente, "estado_do_editor", {})
         check("ffmpeg" in texto and "editor no ar" in texto,

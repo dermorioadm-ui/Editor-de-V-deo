@@ -333,6 +333,9 @@ def main() -> int:
     testar_varios_videos_no_mesmo_projeto()
     testar_previa_e_render_fazem_a_mesma_conta()
     testar_ripple_fecha_o_buraco()
+    testar_gravar_dentro_do_app()
+    testar_pacote_numa_esteira_so()
+    testar_gravacao_e_teleprompter_na_tela()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -5358,6 +5361,278 @@ def testar_ripple_fecha_o_buraco() -> None:
             except Exception:  # noqa: BLE001
                 pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_gravar_dentro_do_app() -> None:
+    """A tomada gravada no app chega ao disco com duração — e some quando ele apaga.
+
+    O MediaRecorder do navegador escreve um FLUXO, não um arquivo pronto: o
+    cabeçalho WebM sai sem duração e sem índice de busca, porque no momento em
+    que ele começa ninguém sabe quando vai terminar. Guardar como veio dá o
+    sintoma conhecido: duração desconhecida, agulha que não anda, e o corte de
+    silêncio recebendo duração zero e devolvendo vídeo vazio.
+
+    O conserto é REMUX — os mesmos quadros comprimidos copiados para um
+    recipiente novo (``-c copy``), que aí sai com duração. A regra 2 fica de
+    pé: a gravação chega ao corte na primeira e única geração de compressão
+    que ela tem.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import gravacoes
+    from editor.config import FFMPEG
+    from editor.server import app
+
+    tmp = Path(tempfile.mkdtemp(prefix="gravar_"))
+    guardadas: list[str] = []
+    try:
+        # o que o Chrome manda: VP8 + Opus num WebM de fluxo
+        bruto = tmp / "fluxo.webm"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                        "-c:v", "libvpx", "-b:v", "300k", "-c:a", "libopus",
+                        "-f", "webm", str(bruto)], check=True)
+        dados = bruto.read_bytes()
+        check(len(dados) > 1000, f"o 'navegador' produziu {len(dados)} bytes")
+
+        cliente = TestClient(app)
+        r = cliente.post("/api/gravacoes",
+                         files={"arquivo": ("tomada 1.webm", dados, "video/webm")},
+                         data={"nome": "tomada 1.webm", "mime": "video/webm"})
+        check(r.status_code == 200, f"a rota aceita a gravação ({r.status_code})")
+        g = r.json()
+        guardadas.append(g["nome"])
+        check(g.get("remuxado") is True,
+              f"e a reempacota ({g.get('aviso') or 'sem ressalva'})")
+        check(abs(g["duracao"] - 3.0) < 0.3,
+              f"a duração aparece no arquivo guardado ({g['duracao']} s)")
+        check(g["largura"] == 320 and g["altura"] == 240,
+              f"com o tamanho certo ({g['largura']}x{g['altura']})")
+        check(g["tem_audio"] is True, "e com o áudio dentro")
+        check(Path(g["path"]).exists() and Path(g["path"]).stat().st_size > 0,
+              "o arquivo está no disco")
+        check(not list(gravacoes.pasta().glob("*(cru)*")),
+              "e o arquivo cru foi apagado — guardar os dois dobra o disco por "
+              "tomada, e o cru só servia para o remux")
+
+        # sem áudio a tomada continua entrando, mas dizendo que não tem
+        muda = tmp / "muda.webm"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=s=160x120:r=30:d=1",
+                        "-c:v", "libvpx", "-b:v", "150k", "-f", "webm",
+                        str(muda)], check=True)
+        r2 = cliente.post("/api/gravacoes",
+                          files={"arquivo": ("muda.webm", muda.read_bytes(),
+                                             "video/webm")},
+                          data={"nome": "muda.webm", "mime": "video/webm"})
+        g2 = r2.json()
+        guardadas.append(g2["nome"])
+        check(g2["tem_audio"] is False,
+              "uma tomada sem áudio entra, e a lista diz que não tem — sem "
+              "áudio não há fala para transcrever nem silêncio para cortar")
+
+        lista = cliente.get("/api/gravacoes").json()
+        nomes = [x["nome"] for x in lista]
+        check(all(n in nomes for n in guardadas),
+              f"as duas aparecem na lista ({nomes})")
+        check(lista[0]["criado_em"] >= lista[-1]["criado_em"],
+              "da mais recente para a mais antiga")
+
+        # gravação vazia é recusada, não guardada
+        r3 = cliente.post("/api/gravacoes",
+                          files={"arquivo": ("nada.webm", b"", "video/webm")},
+                          data={"nome": "nada.webm", "mime": "video/webm"})
+        check(r3.status_code == 400,
+              f"gravação vazia é recusada ({r3.status_code})")
+
+        # APAGAR SÓ DE DENTRO DA PASTA. O nome vem da tela, e tela é entrada de
+        # fora: um ".." no meio dele apagaria arquivo do usuário em qualquer
+        # lugar do disco.
+        check(not gravacoes.apagar("../../etc/passwd")
+              and not gravacoes.apagar("..\\qualquer")
+              and not gravacoes.apagar("sub/arquivo"),
+              "travessia de caminho no nome não apaga nada fora da pasta")
+        antes = len(cliente.get("/api/gravacoes").json())
+        r4 = cliente.delete(f"/api/gravacoes/{guardadas[0]}")
+        check(r4.status_code == 200, f"apagar a que não prestou funciona ({r4.status_code})")
+        check(len(cliente.get("/api/gravacoes").json()) == antes - 1,
+              "e ela sai da lista")
+        check(cliente.delete("/api/gravacoes/nao-existe.mp4").status_code == 404,
+              "apagar o que não existe dá 404, não erro cabeludo")
+    finally:
+        for n in guardadas:
+            try:
+                gravacoes.apagar(n)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_pacote_numa_esteira_so() -> None:
+    """Vários arquivos, UMA esteira, um vídeo — pela rota que a tela usa.
+
+    Isto é o pedido inteiro: soltar três tomadas na primeira tela, escolher a
+    receita uma vez e receber um vídeo só, com cada uma cortada no silêncio
+    DELA e todas montadas na ordem escolhida.
+
+    O único passo trocado por um substituto é o RENDER DA PRÉVIA, que é o mais
+    caro do clique único (um passe de encode sobre a edição inteira) e já tem
+    teste próprio. Tudo o mais roda de verdade: as duas análises, os dois
+    cortes, a montagem e a legenda. Trocar o passo caro é o que mantém a suíte
+    em um minuto; trocar o passo que está sendo testado seria trapaça.
+    """
+    import subprocess
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.server import app
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="pacote_"))
+    pid = None
+    previa_real = svc.previa_da_edicao
+    try:
+        a_s, _a_m, a_d = build_track([("primeira tomada aqui", 0.7)])
+        b_s, _b_m, b_d = build_track([("segunda tomada agora", 0.7)])
+        v1 = make_video(tmp / "t1.mp4", a_s, a_d, 320, 180, 30)
+        v2 = make_video(tmp / "t2.mp4", b_s, b_d, 320, 180, 30)
+        install(["primeira tomada aqui", "segunda tomada agora"])
+
+        svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+        cliente = TestClient(app)
+        r = cliente.post("/api/projects/pacote", json={
+            "paths": [str(v1), str(v2), str(tmp / "nao_existe.mp4")],
+            "preset": "VSL",
+            "receita": {"export": {"scale": "240", "burn_subtitles": False,
+                                   "preset": "ultrafast", "crf": 30}}})
+        check(r.status_code == 200, f"a rota do pacote aceita a lista ({r.status_code})")
+        d = r.json()
+        pid = d["project"]["id"]
+        check(d["fontes"] == 2,
+              f"duas gravações entraram ({d['fontes']})")
+        check(len(d["recusados"]) == 1
+              and "nao_existe" in d["recusados"][0]["path"],
+              f"e a que não existe é RECUSADA COM NOME, não engolida "
+              f"({d['recusados']})")
+
+        # espera a esteira
+        limite = time.monotonic() + 240
+        estado = {}
+        while time.monotonic() < limite:
+            js = [j for j in cliente.get("/api/jobs",
+                                         params={"project_id": pid}).json()
+                  if j["id"] == d["job"]["id"]]
+            if js:
+                estado = js[0]
+                if estado["status"] in ("ok", "erro", "cancelado"):
+                    break
+            time.sleep(0.4)
+        check(estado.get("status") == "ok",
+              f"a esteira terminou bem ({estado.get('status')}: "
+              f"{(estado.get('error') or '')[:160]})")
+
+        p = svc.load(pid)
+        fontes = {c.source for c in p.plan.active_clips}
+        check(len(fontes) == 2,
+              f"a linha do tempo tem blocos das DUAS gravações ({len(fontes)})")
+        ordem = [c.source for c in p.plan.active_clips]
+        check(ordem[0] == "main",
+              f"o primeiro arquivo da lista abre o vídeo ({ordem})")
+        check(len(p.plan.subtitles) >= 2,
+              f"a legenda cobre o pacote ({len(p.plan.subtitles)} legendas)")
+        check(p.plan.active_clips and all(c.src_duration > 0.01
+                                          for c in p.plan.active_clips),
+              "e todo bloco tem conteúdo")
+        # o silêncio saiu: a soma dos blocos é menor que os dois arquivos juntos
+        somado = sum(c.src_duration for c in p.plan.active_clips)
+        check(somado < (a_d + b_d) - 0.4,
+              f"o silêncio das duas saiu ({somado:.1f} s de "
+              f"{a_d + b_d:.1f} s de gravação)")
+    finally:
+        svc.previa_da_edicao = previa_real
+        if pid:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_gravacao_e_teleprompter_na_tela() -> None:
+    """A tela de gravação e o teleprompter existem e estão ligados.
+
+    Estas são as coisas que só o navegador faz — câmera, microfone, texto
+    rolando — e a suíte não tem navegador. O que dá para afirmar daqui é o que
+    quebra na prática quando falta: o pedido de câmera, o formato que o
+    MediaRecorder aceita, o desligamento da câmera ao sair (senão a luz ao lado
+    da lente fica acesa e a pessoa acha que está sendo gravada), o laço que rola
+    o texto, e o caminho de volta das tomadas para a esteira.
+    """
+    from pathlib import Path
+
+    frente = Path("frontend/src")
+    g = (frente / "components/Gravar.tsx").read_text(encoding="utf-8")
+    home = (frente / "components/Home.tsx").read_text(encoding="utf-8")
+    apis = (frente / "lib/api.ts").read_text(encoding="utf-8")
+
+    # ---- gravar ---------------------------------------------------
+    check("navigator.mediaDevices.getUserMedia" in g,
+          "a tela pede câmera e microfone pelo navegador")
+    check("MediaRecorder.isTypeSupported" in g
+          and "video/mp4;codecs=avc1" in g and "video/webm" in g,
+          "e escolhe o formato que ESTE navegador aceita, com mp4 primeiro e "
+          "webm como recuo — não um formato chutado")
+    check("stream.current?.getTracks().forEach((t) => t.stop())" in g
+          and "return () => {" in g.replace("useEffect(() => () => {", "return () => {"),
+          "a câmera é DESLIGADA ao sair da tela (senão a luz da lente fica "
+          "acesa e a pessoa acha que continua sendo gravada)")
+    check("r.start(1000)" in g,
+          "grava em pedaços de um segundo: se a aba cair no meio, o que já "
+          "passou está na mão em vez de se perder inteiro")
+    check("setContagem(3)" in g,
+          "tem contagem antes de começar — gravar no instante do clique põe o "
+          "clique no vídeo")
+    check("somenteAudio" in g and "video: somenteAudio ? false" in g,
+          "dá para gravar só o áudio, com a câmera desligada")
+    check("api.gravar(blob" in g and "apagarGravacao" in g,
+          "a tomada vai para o disco e a que não prestou se apaga")
+    check("window.isSecureContext" in g,
+          "e o endereço de rede, onde o navegador NÃO libera câmera, é "
+          "explicado em vez de virar um erro cru que parece permissão negada")
+
+    # ---- teleprompter ---------------------------------------------
+    check("requestAnimationFrame(passo)" in g and "el.scrollTop += velocidade * dt" in g,
+          "o texto rola por tempo (px/s), não por quadro — em máquina lenta "
+          "rolar por quadro muda a velocidade da leitura")
+    check("setRolando(false)" in g and "el.scrollHeight - 2" in g,
+          "e para sozinho no fim, em vez de ficar raspando o fundo")
+    check("espelhado" in g and "scaleX(-1)" in g,
+          "tem espelhamento, para vidro de teleprompter")
+    check("if (texto.trim()) setRolando(true)" in g,
+          "o texto começa a rolar quando a gravação começa")
+    check("velocidade" in g and "corpo" in g,
+          "com velocidade e tamanho de letra na mão")
+
+    # ---- o caminho de volta ---------------------------------------
+    check("onUsar={(paths)" in home and "juntar(paths)" in home,
+          "as tomadas escolhidas voltam para a esteira da primeira tela")
+    check("api.escolher('video', 'Escolher os vídeos para editar',\n" in home
+          or "'Escolher os vídeos para editar'," in home,
+          "a janela do sistema abre aceitando VÁRIOS arquivos")
+    check("Array.from(ev.dataTransfer.files ?? [])" in home,
+          "e soltar três arquivos pega os três (pegar só o primeiro fazia "
+          "parecer que funcionou e editar um)")
+    check("pacote de {1 + maisFontes.length} gravações" in home,
+          "a tela mostra o pacote montado, com a ordem")
+    check("fontes_extras: fontesExtras" in apis,
+          "e o clique único recebe as outras gravações como FONTE, não como "
+          "anexo — elas são continuação da montagem, não janela por cima")
 
 
 def testar_previa_mostra_o_que_baixa() -> None:

@@ -33,6 +33,8 @@ da pasta onde ele já está.
 11. [Ajustes por variável de ambiente](#ajustes-por-variável-de-ambiente)
 12. [A aba IA](#12-a-aba-ia)
 13. [Mandar o Claude editar por você](#13-mandar-o-claude-editar-por-você)
+14. [Gravar aqui dentro, com teleprompter](#14-gravar-aqui-dentro-com-teleprompter)
+15. [Vários arquivos numa esteira só](#15-vários-arquivos-numa-esteira-só)
 
 ---
 
@@ -1380,3 +1382,65 @@ a máquina é sua: esses botões são seus, na tela.
   configuração. Ele precisa ser o caminho completo.
 - **nada aparece e nenhum erro** — o `mcp.bat` não pode imprimir nada na saída
   padrão: a conversa é por ali. Se você acrescentou um `echo` nele, tire.
+
+---
+
+## 14. Gravar aqui dentro, com teleprompter
+
+Na primeira tela, o botão **Gravar agora…**. Abre a câmera e o microfone desta
+máquina, com o texto rolando por cima da imagem.
+
+**A gravação vai para o disco daqui.** O navegador não tem permissão para
+escrever no disco sozinho — ele manda o arquivo para o editor, que está no
+mesmo computador, em `127.0.0.1`. Não existe outro caminho e nada sai da
+máquina.
+
+**Como funciona:**
+
+- Escolha a câmera e o microfone (ou marque **gravar só o áudio**).
+- Cole o texto no **teleprompter**. Ele começa a rolar sozinho quando a
+  gravação começa e para no fim. Velocidade, tamanho da letra e espelhamento
+  (para vidro de teleprompter) ficam na mão. O texto **não entra no vídeo** —
+  só aparece na sua tela.
+- Aperte **gravar**. Uma contagem de 3 segundos dá tempo de tirar a mão do
+  mouse e olhar para a lente.
+- A tomada cai na lista embaixo. A que não prestou, **apagar**. As que
+  prestaram, clique no **+** de cada uma — o número que aparece é a ordem da
+  montagem — e depois em **usar na edição**.
+
+Elas voltam para a primeira tela como um pacote. Daí em diante é a esteira de
+sempre: confira a receita e aperte **GERAR VÍDEO PRONTO**.
+
+### Se a câmera não abrir
+
+- **"Este navegador não libera a câmera neste endereço"** — você está pelo
+  endereço de rede (o `iniciar-rede.bat`, que existe para revisar do celular).
+  Navegador só entrega câmera em `https` ou em `127.0.0.1`. Abra o editor pelo
+  `iniciar.bat` e grave por ali. A regra é do navegador, não do editor.
+- **Permissão negada** — libere no cadeado ao lado do endereço e clique em
+  *tentar de novo / trocar aparelho*.
+
+---
+
+## 15. Vários arquivos numa esteira só
+
+Três tomadas, uma abertura gravada à parte, um depoimento: **solte todos de uma
+vez** na primeira tela, ou marque vários na janela do Windows, ou grave várias
+tomadas no botão de gravar.
+
+Sai **um vídeo só**:
+
+- cada gravação é transcrita e tem o silêncio cortado **no áudio dela** — não
+  no do primeiro arquivo;
+- todas são montadas na ordem que você escolher (a lista mostra o número de
+  cada uma, e a seta sobe);
+- a legenda é contínua, atravessando as gravações;
+- a aceleração por trecho, o resumo para caber numa duração e os formatos
+  extras valem para o conjunto.
+
+A receita é escolhida **uma vez**, como sempre foi.
+
+> Uma gravação acrescentada não recebe palma, assobio, take descartado nem
+> âncora de rosto: esses quatro nascem de uma leitura feita para o arquivo
+> principal, e aplicá-los a material que entra no meio da montagem marcaria
+> coisa nenhuma.

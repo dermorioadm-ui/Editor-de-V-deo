@@ -622,6 +622,83 @@ def adicionar_video(c: Cliente, a: dict) -> str:
             f"ela foi cortada no áudio dela, não no do primeiro vídeo.")
 
 
+@ferramenta(
+    "juntar_videos",
+    "Cria um projeto de VÁRIOS arquivos de uma vez e roda a esteira inteira: "
+    "cada um é transcrito e cortado no silêncio DELE, todos são montados na "
+    "ordem da lista, e sai um vídeo só com legenda contínua. Use quando ele "
+    "der mais de um arquivo — três tomadas, uma abertura e um depoimento.",
+    {
+        "properties": {
+            "caminhos": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "os caminhos na máquina, NA ORDEM DA MONTAGEM",
+            },
+            "formato": {"type": "string",
+                        "description": "9:16, 1:1, 16:9 ou fonte (opcional)"},
+            "resumir_para": {"type": "number",
+                             "description": "segundos que o vídeo tem que caber (opcional)"},
+            "preset": {"type": "string", "description": "VSL, Reels... (opcional)"},
+        },
+        "required": ["caminhos"],
+    },
+)
+def juntar_videos(c: Cliente, a: dict) -> str:
+    caminhos = [str(x) for x in (a.get("caminhos") or []) if str(x).strip()]
+    if not caminhos:
+        return "faltou a lista de caminhos."
+    if len(caminhos) == 1:
+        return ("para um arquivo só, use abrir_video e depois editar_sozinho — "
+                "juntar_videos é para dois ou mais.")
+    receita: dict = {}
+    if a.get("formato"):
+        receita["export"] = {"aspect": str(a["formato"])}
+    if a.get("resumir_para"):
+        receita["alvo_duracao"] = float(a["resumir_para"])
+    r = c.post("/api/projects/pacote",
+               {"paths": caminhos, "preset": a.get("preset") or "VSL",
+                "receita": receita})
+    pid = (r.get("project") or {}).get("id", "")
+    recusados = r.get("recusados") or []
+    job = (r.get("job") or {}).get("id", "")
+    fim = c.esperar_job(pid, job)
+    ruim = _falhou(fim)
+    if ruim:
+        return f"projeto {pid} criado, mas a montagem {ruim}"
+    tl = _projeto(c, pid).get("timeline") or {}
+    linhas = [
+        f"projeto {pid}: {r.get('fontes')} gravações numa esteira só",
+        f"{_seg(tl.get('duration'))} em {len(tl.get('blocks') or [])} blocos, "
+        f"{len(tl.get('subtitles') or [])} legendas, "
+        f"{len(tl.get('removed') or [])} trechos cortados",
+    ]
+    if recusados:
+        linhas.append("ficaram de fora: "
+                      + "; ".join(f"{x['path']} ({x['motivo']})" for x in recusados))
+    linhas.append("use exportar para saber onde o arquivo ficou.")
+    return "\n".join(linhas)
+
+
+@ferramenta(
+    "gravacoes",
+    "As tomadas que ele gravou dentro do app, da mais recente para a mais "
+    "antiga, com duração e caminho. Use quando ele falar de 'a tomada que "
+    "acabei de gravar' em vez de dar um caminho.",
+    {"properties": {}},
+)
+def gravacoes(c: Cliente, _a: dict) -> str:
+    gs = c.get("/api/gravacoes")
+    if not gs:
+        return ("nenhuma gravação ainda. Ele grava pelo botão 'Gravar agora' "
+                "da primeira tela.")
+    return "\n".join(
+        f"{g['nome']}  {_seg(g['duracao'])}  "
+        f"{g['largura']}x{g['altura']}{'' if g['tem_audio'] else '  SEM ÁUDIO'}\n"
+        f"   {g['path']}"
+        for g in gs[:20])
+
+
 def chamar(c: Cliente, nome: str, argumentos: dict) -> str:
     """Executa uma ferramenta e SEMPRE devolve texto.
 

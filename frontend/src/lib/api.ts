@@ -53,8 +53,10 @@ export const api = {
   autoedit: (id: string) => post<Job>(`/api/projects/${id}/autoedit`),
   // a receita vai JUNTO: aplicada depois do preset, no servidor, para não
   // ser apagada por ele (era o que acontecia com velocidade e zoom)
-  oneclick: (id: string, preset?: string, receita?: any) =>
-    post<Job>(`/api/projects/${id}/oneclick`, { preset, receita }),
+  oneclick: (id: string, preset?: string, receita?: any,
+             fontesExtras?: string[]) =>
+    post<Job>(`/api/projects/${id}/oneclick`,
+              { preset, receita, fontes_extras: fontesExtras ?? [] }),
   exportProject: (id: string, options: any) =>
     post<Job>(`/api/projects/${id}/export`, options),
   preview: (id: string, opts: { scale?: string; crf?: number } = {}) =>
@@ -124,6 +126,25 @@ export const api = {
               { kind, id: item, action: 'delete', ripple }),
   lockZoom: (id: string, clip_id: string, locked: boolean) =>
     post<any>(`/api/projects/${id}/ops/zoom`, { clip_id, locked }),
+
+  // ------------------------------------------------------------ gravações
+  gravacoes: () => req<any[]>('/api/gravacoes'),
+  /** Manda para o disco o que a câmera acabou de gravar.
+   *  O destino é 127.0.0.1 — a mesma máquina. Nada sai daqui. */
+  gravar: async (blob: Blob, nome: string, mime: string) => {
+    const form = new FormData()
+    form.append('arquivo', blob, nome)
+    form.append('nome', nome)
+    form.append('mime', mime)
+    const r = await fetch('/api/gravacoes', { method: 'POST', body: form })
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200) || `HTTP ${r.status}`)
+    return r.json()
+  },
+  apagarGravacao: (nome: string) =>
+    del<any>(`/api/gravacoes/${encodeURIComponent(nome)}`),
+  /** Vários arquivos, uma esteira só. A ordem da lista é a da montagem. */
+  pacote: (paths: string[], preset: string, receita: any, name = '') =>
+    post<any>('/api/projects/pacote', { paths, preset, receita, name }),
 
   outputDir: () => req<{ path: string; default: string }>('/api/output-dir'),
   setOutputDir: (path: string) => post<any>('/api/output-dir', { path }),

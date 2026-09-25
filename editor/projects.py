@@ -1200,15 +1200,34 @@ def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
     return saida
 
 
-def one_click(project: Project, ctx) -> dict:
+def one_click(project: Project, ctx, fontes_extras: list[str] | None = None) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
     O usuário solta o arquivo e recebe o vídeo PRONTO: cortado (pela IA, com
     os comandos falados e os marcadores), legendado, com o jogo de câmeras
     decidido e a prévia leve gerada. Editar é retoque, não trabalho.
+
+    ``fontes_extras`` são os ids das OUTRAS gravações do mesmo pacote. Elas são
+    analisadas entre a análise do principal e a montagem, porque é a montagem
+    que junta os blocos de todas as fontes numa linha do tempo só — e cada uma
+    precisa chegar lá com o próprio envelope e as próprias palavras.
     """
+    extras = [m for m in (fontes_extras or []) if m]
     ctx.progress(0.0, "iniciando")
-    a = _scoped(ctx, 0.0, 0.52, lambda c: analyze(project, c))
+    # o orçamento de progresso da análise é dividido entre as gravações: com
+    # quatro arquivos, a barra andava até 52% no primeiro e ficava parada no
+    # resto, que é o mesmo que não ter barra
+    fatia = 0.52 / (1 + len(extras))
+    a = _scoped(ctx, 0.0, fatia, lambda c: analyze(project, c))
+    for i, mid in enumerate(extras):
+        ini, fim = fatia * (i + 1), fatia * (i + 2)
+        try:
+            _scoped(ctx, ini, fim,
+                    lambda c, _m=mid: analisar_midia(load(project.id), _m, c))
+        except Exception as exc:  # noqa: BLE001 — uma tomada ruim não derruba o pacote
+            ctx.progress(fim, f"não consegui usar uma das gravações ({exc})")
+    if extras:
+        project.analysis = load(project.id).analysis
     b = _scoped(ctx, 0.52, 0.60, lambda c: auto_edit(project, c))
     # RESUMO PARA CABER NO ALVO. Depois do corte (só aqui existe a duração de
     # verdade) e antes dos anexos (que se ancoram na linha do tempo final).

@@ -11,7 +11,8 @@ import platform
 import sys
 from pathlib import Path
 
-from fastapi import (Body, FastAPI, HTTPException, Query, Request, WebSocket,
+from fastapi import (Body, FastAPI, File, Form, HTTPException, Query, Request,
+                     UploadFile, WebSocket,
                      WebSocketDisconnect)
 from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
                                Response, StreamingResponse)
@@ -409,8 +410,15 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     if mudou or receita:
         project.save_plan()
 
+    # AS OUTRAS GRAVAÇÕES DO MESMO PACOTE. Elas já foram acrescentadas como
+    # mídia pela tela (é lá que a ordem da montagem é escolhida); o que chega
+    # aqui é a lista de ids, para o clique único analisar cada uma antes de
+    # montar. Passa por aqui, e não pela rota /pacote, porque este é o caminho
+    # que também sobe os anexos e a trilha antes de disparar.
+    fontes_extras = [str(m) for m in (payload.get("fontes_extras") or []) if m]
+
     def pipeline(ctx) -> dict:
-        res = svc.one_click(svc.load(pid), ctx)
+        res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras)
         # e o MP4 final continua sendo gerado — por baixo, sem segurar a tela.
         # O botão de baixar no editor acende sozinho quando este job termina.
         try:
@@ -1926,6 +1934,89 @@ def api_janela() -> dict:
     from . import nativo
 
     return {"disponivel": nativo.disponivel()}
+
+
+# ------------------------------------------------------------- gravações
+@app.get("/api/gravacoes")
+def api_gravacoes() -> list[dict]:
+    """As tomadas gravadas dentro do app, da mais recente para a mais antiga."""
+    from . import gravacoes
+
+    return gravacoes.listar()
+
+
+@app.post("/api/gravacoes")
+async def api_gravar(arquivo: UploadFile = File(...),
+                     nome: str = Form(""),
+                     mime: str = Form("video/webm")) -> dict:
+    """Recebe a gravação que o navegador acabou de fazer.
+
+    ISTO NÃO FERE A REGRA UM. O navegador é o desta máquina, o servidor é o
+    desta máquina e o endereço é 127.0.0.1: o arquivo atravessa a memória do
+    mesmo computador e pousa no disco dele. Não existe outro caminho — o
+    navegador não tem permissão para escrever no disco sozinho.
+    """
+    from . import gravacoes
+
+    dados = await arquivo.read()
+    try:
+        return {"ok": True, **gravacoes.guardar(dados, nome or arquivo.filename or "",
+                                                mime)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/gravacoes/{nome}")
+def api_gravacao_apagar(nome: str) -> dict:
+    """Apaga UMA tomada — a que não prestou."""
+    from . import gravacoes
+
+    if not gravacoes.apagar(nome):
+        raise HTTPException(404, "gravação não encontrada")
+    return {"ok": True}
+
+
+@app.post("/api/projects/pacote")
+def api_pacote(payload: dict = Body(...)) -> dict:
+    """Vários arquivos, UMA esteira, um vídeo no fim.
+
+    É a primeira tela aceitando o pacote inteiro: o primeiro arquivo vira o
+    projeto e os outros entram como gravações do mesmo projeto. Daí para a
+    frente é o clique único de sempre — cada um cortado no silêncio DELE,
+    todos montados na mesma linha do tempo, uma legenda contínua e um arquivo
+    final.
+
+    A ordem da lista é a ordem da montagem. É a única coisa que o usuário
+    precisa decidir, e ele já decidiu ao escolher os arquivos.
+    """
+    caminhos = [str(c).strip() for c in (payload.get("paths") or []) if str(c).strip()]
+    if not caminhos:
+        raise HTTPException(400, "informe pelo menos um arquivo")
+    try:
+        project = svc.create(caminhos[0], payload.get("name", ""),
+                             payload.get("preset", "VSL"))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    extras: list[str] = []
+    recusados: list[dict] = []
+    for caminho in caminhos[1:]:
+        try:
+            midia = svc.add_media(project.id, caminho, "video")
+            extras.append(midia["id"])
+        except FileNotFoundError as exc:
+            recusados.append({"path": caminho, "motivo": str(exc)})
+
+    receita = payload.get("receita") or {}
+    if receita:
+        aplicar_receita(project, receita)
+        project.save_plan()
+
+    pid = project.id
+    job = _run("edicao", pid,
+               lambda ctx: svc.one_click(svc.load(pid), ctx, fontes_extras=extras))
+    return {"ok": True, "project": project.to_dict(full=True),
+            "job": job, "fontes": 1 + len(extras), "recusados": recusados}
 
 
 @app.post("/api/escolher")
