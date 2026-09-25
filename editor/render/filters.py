@@ -326,7 +326,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         cy = f"(({ey})*main_h-overlay_h/2)"
         # TREMOR é deslocamento, não filtro: somado aqui ele custa zero, porque
         # o overlay já avalia esta expressão por quadro.
-        dx, dy = A.tremor_da_sobreposicao(getattr(o, "effects", None))
+        dx, dy = A.tremor_da_sobreposicao(getattr(o, "effects", None), start)
         if dx:
             cx = f"({cx}+{dx})"
             cy = f"({cy}+{dy})"

@@ -3,6 +3,8 @@ import type { Clip, Quadro, SubtitleCue } from '../types'
 import { PROPORCOES, QUADRO_PADRAO, estiloDoFormato, estiloParaFonte,
          filtroDoLook, quebrar, recorte, rotuloFormato,
          tamanhoDerivado } from '../lib/formato'
+import { estiloDaMascara, filtroDosEfeitos, temAnimacao, temChroma,
+         tremorEm, valorEm } from '../lib/animacao'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
 import { api } from '../lib/api'
@@ -48,7 +50,10 @@ interface Props {
   overlays?: any[]
   cutaways?: any[]
   media?: { id: string; name: string; kind?: string; info: any }[]
-  onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
+  onOverlayChange?: (id: string, patch: { x?: number; y?: number; scale?: number
+                                          rotation?: number; track?: number
+                                          keyframes?: any[]; mask?: any
+                                          effects?: any[] }) => void
   onOverlayDelete?: (id: string) => void
   onCutawayDelete?: (id: string) => void
   // O FORMATO QUE A PRÉVIA MOSTRA. 'fonte' é a gravação; um derivado
@@ -137,7 +142,17 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   const cutAtivo = (cutaways ?? []).find((c: any) => c.enabled !== false
     && playhead >= c.out_start && playhead <= c.out_end)
   const geo = (o: any) => {
-    const p = pend && pend.id === o.id ? pend : o
+    // O VALOR NO INSTANTE. Enquanto o mouse arrasta, quem manda é `pend` — o
+    // usuário está movendo a janela agora. Fora do arrasto, quem manda são os
+    // marcos: a mesma função `valorEm` que um teste compara, número a número,
+    // com a expressão que o ffmpeg avalia. Sem isso a janela ficava parada na
+    // prévia e andava no arquivo, que é a prévia mentindo.
+    const kfs = o.keyframes
+    const p = pend && pend.id === o.id ? pend : {
+      x: valorEm(kfs, 'x', playhead, o.x),
+      y: valorEm(kfs, 'y', playhead, o.y),
+      scale: valorEm(kfs, 'scale', playhead, o.scale),
+    }
     const m = (media ?? []).find((x) => x.id === o.media_id)
     // display_*: um vídeo gravado em pé tem width/height trocados pela rotação
     const mw = Number(m?.info?.display_width || m?.info?.width) || 400
@@ -148,13 +163,20 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     const fator = Math.sqrt((box.height / fonteH) * (box.width / fonteW))
     const wpx = Math.max(8, mw * p.scale * fator)
     const hpx = Math.max(8, mh * p.scale * fator)
+    // o TREMOR conta do primeiro quadro da janela, igual ao render
+    const tr = tremorEm(o.effects, Math.max(0, playhead - o.out_start),
+                        box.width, box.height)
     return {
-      left: box.left + p.x * box.width - wpx / 2,
-      top: box.top + p.y * box.height - hpx / 2,
+      left: box.left + p.x * box.width - wpx / 2 + tr.dx,
+      top: box.top + p.y * box.height - hpx / 2 + tr.dy,
       width: wpx,
       height: hpx,
       nome: m?.name ?? 'sobreposição', x: p.x, y: p.y, scale: p.scale,
       video: m?.kind === 'video',
+      opacidade: valorEm(kfs, 'opacity', playhead, o.opacity ?? 1),
+      giro: valorEm(kfs, 'rotation', playhead, o.rotation ?? 0),
+      animada: ['x', 'y', 'scale', 'opacity', 'rotation']
+        .some((k) => temAnimacao(kfs, k)),
     }
   }
   useEffect(() => {
@@ -240,7 +262,34 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       if (Math.abs(p.x - d.x0) > 1e-4 || Math.abs(p.y - d.y0) > 1e-4
           || Math.abs(p.scale - d.s0) > 1e-4) {
         setPend(p)                       // o React assume onde o mouse deixou
-        onOverlayChange?.(d.id, { x: p.x, y: p.y, scale: p.scale })
+        // ARRASTAR UMA JANELA ANIMADA MOVE A ANIMAÇÃO INTEIRA. Se ela tem
+        // marcos de posição, o render ignora o x/y de repouso — gravar só o
+        // x/y faria o arrasto não ter efeito nenhum no arquivo, e o usuário
+        // veria a janela pular de volta para a trajetória de antes. Então o
+        // gesto desloca TODOS os marcos pelo mesmo tanto (e multiplica a
+        // escala pela mesma razão), que é o que "mover isto daqui para ali"
+        // quer dizer quando a coisa se move sozinha.
+        const kfs: any[] = Array.isArray(o.keyframes) ? o.keyframes : []
+        const mexeuPos = temAnimacao(kfs, 'x') || temAnimacao(kfs, 'y')
+        const mexeuEsc = temAnimacao(kfs, 'scale')
+        if (kfs.length && (mexeuPos || mexeuEsc)) {
+          const dx = p.x - d.x0
+          const dy = p.y - d.y0
+          const razao = d.s0 > 1e-9 ? p.scale / d.s0 : 1
+          onOverlayChange?.(d.id, {
+            keyframes: kfs.map((k) => {
+              const n: any = { ...k }
+              if (mexeuPos && typeof k.x === 'number') n.x = Number((k.x + dx).toFixed(4))
+              if (mexeuPos && typeof k.y === 'number') n.y = Number((k.y + dy).toFixed(4))
+              if (mexeuEsc && typeof k.scale === 'number') {
+                n.scale = Number((k.scale * razao).toFixed(4))
+              }
+              return n
+            }),
+          })
+        } else {
+          onOverlayChange?.(d.id, { x: p.x, y: p.y, scale: p.scale })
+        }
       } else {
         pendRef.current = null
         setPend(null)
@@ -987,6 +1036,10 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                    ? 'border-2 border-accent'
                    : 'border border-dashed border-white/40 hover:border-white/80'}`}
                  style={{ left: g.left, top: g.top, width: g.width, height: g.height,
+                          // FAIXA: número maior fica na frente, igual ao render.
+                          // O desempate é a ordem da lista, que é a ordem em
+                          // que o navegador já desenha.
+                          zIndex: 10 + (Number(o.track) || 0),
                           cursor: ovDrag.current?.modo === 'move' ? 'grabbing' : 'grab' }}
                  title="arraste para mover · o canto redimensiona · Delete apaga"
                  onMouseDown={(e) => iniciarArrasto(e, o, 'move')}>
@@ -994,26 +1047,96 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                   tocando em janela. Quando a prévia RENDERIZADA está no ar o
                   elemento já vem queimado nela e só a caixa é desenhada;
                   enquanto se arrasta, o elemento acompanha a mão. */}
-              {(!linear || pend?.id === o.id) && (
-                g.video
-                  ? <PipVideo src={api.mediaFileUrl(projectId, o.media_id)}
-                              t={(Number(o.media_start) || 0) + Math.max(0, playhead - o.out_start)}
-                              playing={playing}
-                              fallback={api.frameUrl(projectId,
-                                (Number(o.media_start) || 0)
-                                  + Math.floor(Math.max(0, playhead - o.out_start) * 2) / 2,
-                                o.media_id, 540)}
-                              opacity={o.opacity ?? 1} />
+              {(!linear || pend?.id === o.id) && (() => {
+                // O QUE O RENDER FAZ COM A IMAGEM, na mesma ordem: máscara
+                // antes do giro (mascarar depois de girar recortaria a caixa
+                // diagonal, e o usuário desenhou a máscara na imagem em pé),
+                // e os efeitos por cima. O desfoque vem em pixels da FONTE, e
+                // a régua para a tela é a mesma da geometria.
+                const regua = Math.sqrt((box.height / fonteH) * (box.width / fonteW))
+                const interno: any = {
+                  opacity: g.opacidade,
+                  ...estiloDaMascara(o.mask),
+                  filter: filtroDosEfeitos(o.effects, regua),
+                  transform: Math.abs(g.giro) > 1e-3
+                    ? `rotate(${g.giro}deg)` : undefined,
+                }
+                return g.video
+                  ? <div className="w-full h-full" style={interno}>
+                      <PipVideo src={api.mediaFileUrl(projectId, o.media_id)}
+                                t={(Number(o.media_start) || 0) + Math.max(0, playhead - o.out_start)}
+                                playing={playing}
+                                fallback={api.frameUrl(projectId,
+                                  (Number(o.media_start) || 0)
+                                    + Math.floor(Math.max(0, playhead - o.out_start) * 2) / 2,
+                                  o.media_id, 540)}
+                                opacity={1} />
+                    </div>
                   : <img src={api.mediaFileUrl(projectId, o.media_id)} alt=""
                          draggable={false}
                          className="w-full h-full object-fill pointer-events-none select-none"
-                         style={{ opacity: o.opacity ?? 1 }} />
+                         style={interno} />
+              })()}
+              {/* O CSS NÃO FURA COR. Quem tem chroma key aparece com o fundo
+                  inteiro aqui e furado no arquivo — e é melhor dizer isso na
+                  tela que deixar o usuário descobrir na exportação. */}
+              {temChroma(o.effects) && !linear && (
+                <span className="absolute -bottom-5 left-0 chip border-emerald-800/70
+                                 text-emerald-300 bg-ink-900/90 text-[10px] whitespace-nowrap">
+                  chroma key: o fundo sai só no arquivo
+                </span>
               )}
               {sel && (
                 <>
                   <span className="absolute -top-5 left-0 chip border-accent/60 text-accent
                                    bg-ink-900/90 text-[10px] whitespace-nowrap">
                     {g.nome} · {Math.round(g.scale * 100)}%
+                    {g.animada && ' · animada'}
+                  </span>
+                  {/* MARCAR AQUI: é o gesto que faz a animação existir sem
+                      digitar número nenhum. Ele para a agulha onde quer, põe a
+                      janela no lugar, clica; anda com a agulha, põe a janela no
+                      outro lugar, clica de novo. Dois marcos e a janela passou
+                      a se mover — que é como isso funciona no CapCut e é o
+                      único jeito de a capacidade sair do plano e chegar na mão.
+                      Sem este botão, marco só existia por comando. */}
+                  <span className="absolute -bottom-5 right-0 flex gap-1">
+                    <button className="chip border-accent/60 text-accent
+                                       bg-ink-900/90 text-[10px] whitespace-nowrap"
+                            title="grava a posição, o tamanho e a opacidade de
+agora neste instante. Dois marcos em instantes diferentes e a janela se move."
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const t = Number(playhead.toFixed(3))
+                              const antigos: any[] = Array.isArray(o.keyframes)
+                                ? o.keyframes : []
+                              const marco = { t, x: g.x, y: g.y, scale: g.scale,
+                                              opacity: g.opacidade,
+                                              rotation: g.giro }
+                              // marcar duas vezes no MESMO instante substitui,
+                              // não empilha: dois marcos no mesmo t deixariam
+                              // a interpolação com um salto de duração zero
+                              const juntos = [...antigos.filter(
+                                (k) => Math.abs(Number(k.t) - t) > 0.02), marco]
+                              juntos.sort((a, b) => Number(a.t) - Number(b.t))
+                              onOverlayChange?.(o.id, { keyframes: juntos })
+                            }}>
+                      marcar aqui{Array.isArray(o.keyframes) && o.keyframes.length
+                        ? ` (${o.keyframes.length})` : ''}
+                    </button>
+                    {g.animada && (
+                      <button className="chip border-red-800/70 text-red-300
+                                         bg-ink-900/90 text-[10px]"
+                              title="tira todos os marcos: a janela volta a ficar parada"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onOverlayChange?.(o.id, { keyframes: [] })
+                              }}>
+                        limpar marcos
+                      </button>
+                    )}
                   </span>
                   <button className="absolute -top-5 right-0 chip border-red-800/70
                                      text-red-300 bg-ink-900/90 text-[10px]"

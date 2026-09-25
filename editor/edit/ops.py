@@ -311,6 +311,54 @@ def _word_after(words: list[dict], t: float) -> dict | None:
     return None
 
 
+def ripple_itens(itens: list, depois_de: float, delta: float,
+                 exceto: str = "", faixa: int | None = None) -> list[dict]:
+    """Empurra (ou puxa) os itens que vêm DEPOIS de um instante.
+
+    É o que falta para o ripple ser um gesto. A metade difícil já existia e não
+    se chamava ripple: toda edição que muda a duração do vídeo passa por
+    ``remap_output_items``, que reancora cutaway, sobreposição, desfoque e
+    trilha pela FONTE. Só que aquilo é involuntário — conserta o que o corte
+    deslocou. Isto aqui é a intenção: "abre espaço aqui" e "fecha o buraco".
+
+    ``faixa``, quando vem, restringe aos itens da MESMA faixa. É o que separa
+    ripple de "empurra tudo": numa linha do tempo com um cartão numa faixa e
+    uma janela em outra, mover o cartão não tem por que arrastar a janela.
+
+    Os MARCOS de animação andam junto, porque o ``t`` deles é absoluto na linha
+    de saída — sem isso a janela mudaria de lugar e o movimento dela ficaria
+    onde estava.
+    """
+    if abs(delta) < 1e-6:
+        return []
+    movidos: list[dict] = []
+    for item in itens:
+        if getattr(item, "id", "") == exceto:
+            continue
+        if faixa is not None and int(getattr(item, "track", 0) or 0) != faixa:
+            continue
+        a = float(getattr(item, "out_start", 0.0) or 0.0)
+        if a < depois_de - 1e-6:
+            continue
+        b = float(getattr(item, "out_end", 0.0) or 0.0)
+        novo_a = max(0.0, a + delta)
+        novo_b = max(novo_a + 0.05, b + delta)
+        movidos.append({"id": item.id,
+                        "de": [round(a, 3), round(b, 3)],
+                        "para": [round(novo_a, 3), round(novo_b, 3)]})
+        item.out_start = round(novo_a, 4)
+        item.out_end = round(novo_b, 4)
+        marcos = getattr(item, "keyframes", None)
+        if isinstance(marcos, list):
+            for kf in marcos:
+                if isinstance(kf, dict):
+                    try:
+                        kf["t"] = round(max(0.0, float(kf.get("t", 0.0)) + delta), 4)
+                    except (TypeError, ValueError):
+                        continue
+    return movidos
+
+
 def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
     """Reancoragem de cutaways, sobreposições e desfoques depois de uma edição.
 

@@ -331,6 +331,8 @@ def main() -> int:
     testar_efeitos_mexem_no_pixel()
     testar_dividir_bloco_nao_compartilha_interior()
     testar_varios_videos_no_mesmo_projeto()
+    testar_previa_e_render_fazem_a_mesma_conta()
+    testar_ripple_fecha_o_buraco()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -5054,6 +5056,301 @@ def testar_varios_videos_no_mesmo_projeto() -> None:
         check(depois_a == antes_a,
               f"cortar dentro da segunda gravação não mexe na primeira "
               f"({antes_a} → {depois_a} blocos)")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_previa_e_render_fazem_a_mesma_conta() -> None:
+    """A prévia interpola em TypeScript e o render em expressão de ffmpeg.
+
+    São DUAS implementações da mesma conta, e duas implementações divergem
+    sozinhas com o tempo. Um teste que só confere se a linha de código existe
+    (``check("valorEm" in player)``) não pega divergência nenhuma: ele prova que
+    alguém escreveu a chamada, não que ela dá o número certo.
+
+    Este teste gera uma tabela (t, valor) pelos DOIS lados e compara número a
+    número, nas quatro curvas. Numa sobreposição animada, errar a curva não
+    desalinha um pixel: põe a janela num lugar no vídeo e noutro na tela — e a
+    promessa do produto é que a prévia seja ao pixel o que vai baixar.
+
+    Pula com aviso se não houver Node: o README promete que o dono não precisa
+    instalar Node para usar o editor, então a suíte não pode exigir.
+    """
+    import json
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor.render import animacao as A
+
+    node = _shutil.which("node")
+    esbuild = Path("frontend/node_modules/.bin/esbuild")
+    if not node or not esbuild.exists():
+        print("  --    prévia x render: sem Node/esbuild aqui, pulado "
+              "(o editor não precisa deles)")
+        return
+
+    casos = [
+        # (nome, marcos, propriedade, repouso)
+        ("linear", [{"t": 1.0, "x": 0.2}, {"t": 3.0, "x": 0.8}], "x", 0.5),
+        ("suave", [{"t": 0.0, "scale": 0.5},
+                   {"t": 2.0, "scale": 1.5, "easing": "suave"}], "scale", 1.0),
+        ("entra", [{"t": 0.5, "opacity": 0.0},
+                   {"t": 2.5, "opacity": 1.0, "easing": "entra"}], "opacity", 1.0),
+        ("sai", [{"t": 0.0, "rotation": 0.0},
+                 {"t": 4.0, "rotation": 90.0, "easing": "sai"}], "rotation", 0.0),
+        ("tres marcos", [{"t": 0.0, "y": 0.1},
+                         {"t": 1.0, "y": 0.9, "easing": "suave"},
+                         {"t": 2.0, "y": 0.3, "easing": "sai"}], "y", 0.25),
+        # marco que fala de OUTRA propriedade não pode mexer nesta
+        ("marco de outra prop", [{"t": 0.0, "x": 0.2, "scale": 1.0},
+                                 {"t": 2.0, "scale": 2.0}], "x", 0.5),
+        ("sem marco", [], "x", 0.37),
+    ]
+    instantes = [round(-0.5 + i * 0.25, 4) for i in range(24)]
+
+    tmp = Path(tempfile.mkdtemp(prefix="paridade_"))
+    try:
+        pacote = tmp / "an.mjs"
+        # caminho ABSOLUTO: com cwd="frontend" o executável é resolvido
+        # depois do chdir, e o relativo deixa de existir
+        r = subprocess.run([str(esbuild.resolve()), "src/lib/animacao.ts", "--bundle",
+                            "--format=esm", f"--outfile={pacote}",
+                            "--log-level=error"],
+                           cwd="frontend", capture_output=True, text=True)
+        check(r.returncode == 0,
+              f"o módulo de animação da prévia compila ({r.stderr.strip()[:120]})")
+        if r.returncode != 0:
+            return
+
+        pedido = [{"marcos": m, "chave": c, "repouso": rep, "instantes": instantes}
+                  for _n, m, c, rep in casos]
+        roteiro = tmp / "roda.mjs"
+        roteiro.write_text(
+            "import * as A from " + json.dumps(str(pacote)) + ";\n"
+            "const casos = " + json.dumps(pedido) + ";\n"
+            "const fora = casos.map((c) => c.instantes.map("
+            "(t) => A.valorEm(c.marcos, c.chave, t, c.repouso)));\n"
+            "console.log(JSON.stringify(fora));\n",
+            encoding="utf-8")
+        saida = subprocess.run([node, str(roteiro)], capture_output=True, text=True)
+        check(saida.returncode == 0,
+              f"e roda no Node ({saida.stderr.strip()[:140]})")
+        if saida.returncode != 0:
+            return
+        do_ts = json.loads(saida.stdout.strip().split("\n")[-1])
+
+        piores = []
+        for (nome, marcos, chave, repouso), linha_ts in zip(casos, do_ts):
+            pior = 0.0
+            onde = 0.0
+            for t, v_ts in zip(instantes, linha_ts):
+                v_py = A.valor_em(marcos, chave, t, repouso=repouso)
+                d = abs(float(v_ts) - float(v_py))
+                if d > pior:
+                    pior, onde = d, t
+            piores.append((nome, pior, onde))
+        ruins = [(n, d, t) for n, d, t in piores if d > 1e-9]
+        check(not ruins,
+              f"a prévia e o render dão O MESMO número nas quatro curvas "
+              f"({len(instantes)} instantes x {len(casos)} casos; "
+              f"pior diferença {max(d for _n, d, _t in piores):.2e})"
+              if not ruins else
+              f"a prévia e o render DIVERGEM: {ruins}")
+
+        # e o "segura fora dos extremos" vale nos dois
+        primeiro = do_ts[0][0]
+        check(abs(primeiro - 0.2) < 1e-12,
+              f"antes do primeiro marco os dois seguram o valor ({primeiro})")
+
+        # TER A CONTA NÃO É USAR A CONTA. O teste acima prova que a função da
+        # prévia dá o número certo; estes provam que a prévia CHAMA ela para
+        # desenhar — e que o que o render aplica na imagem (máscara, efeito,
+        # giro, faixa) a prévia aplica também.
+        player = Path("frontend/src/components/Player.tsx").read_text(encoding="utf-8")
+        check("valorEm(kfs, 'x', playhead, o.x)" in player
+              and "valorEm(kfs, 'scale', playhead, o.scale)" in player,
+              "a geometria da prévia sai do valor ANIMADO no instante, não do "
+              "valor de repouso")
+        check("valorEm(kfs, 'opacity'" in player
+              and "valorEm(kfs, 'rotation'" in player,
+              "opacidade e giro também")
+        check("estiloDaMascara(o.mask)" in player
+              and "filtroDosEfeitos(o.effects" in player,
+              "a máscara e os efeitos são desenhados, não só gravados")
+        check("tremorEm(o.effects" in player
+              and "playhead - o.out_start" in player,
+              "o tremor da prévia conta do primeiro quadro da janela, como o "
+              "render passou a contar")
+        check("zIndex: 10 + (Number(o.track) || 0)" in player,
+              "a faixa decide o empilhamento na prévia como no render")
+        check("temChroma(o.effects)" in player,
+              "e o chroma key, que o CSS não sabe fazer, é AVISADO na tela em "
+              "vez de virar surpresa na exportação")
+        # arrastar uma janela animada move a animação inteira
+        check("mexeuPos = temAnimacao(kfs, 'x')" in player
+              and "keyframes: kfs.map(" in player,
+              "arrastar uma janela animada desloca os MARCOS dela; gravar só o "
+              "x/y faria o arrasto não ter efeito no arquivo")
+        # o gesto que faz a animação existir sem digitar número nenhum
+        check("marcar aqui" in player,
+              "existe o botão 'marcar aqui': posiciona, clica, anda, posiciona, "
+              "clica — sem ele marco só existia por comando")
+        check("Math.abs(Number(k.t) - t) > 0.02" in player,
+              "e marcar duas vezes no mesmo instante SUBSTITUI em vez de "
+              "empilhar (dois marcos no mesmo t dariam um salto de duração zero)")
+        check("limpar marcos" in player,
+              "e dá para tirar todos os marcos de volta")
+
+        trilha = Path("frontend/src/components/Timeline.tsx").read_text(encoding="utf-8")
+        check("const [ripple, setRipple] = useState(false)" in trilha,
+              "o modo 'empurrar junto' começa DESLIGADO")
+        check("empurrar junto" in trilha
+              and "props.onMoveItem(seg.kind, seg.id, seg.side, alvoOut - bordaOut, ripple)"
+              in trilha,
+              "e tem botão próprio, passando o modo nos dois gestos")
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_ripple_fecha_o_buraco() -> None:
+    """"Empurrar junto": mover empurra os seguintes, apagar fecha o buraco.
+
+    A metade difícil disto já existia e não se chamava ripple: toda edição que
+    muda a duração passa por ``remap_output_items``, que reancora cutaway,
+    sobreposição, desfoque e trilha pela FONTE. Só que aquilo é involuntário —
+    conserta o que o corte deslocou. O que faltava era a INTENÇÃO: abrir espaço
+    e fechar buraco por gesto.
+
+    Três coisas que este teste garante e que são o que separa ripple de
+    "empurra tudo":
+    - desligado (o padrão) NADA além do item pego se move;
+    - só os itens DEPOIS do que foi mexido andam, nunca os de antes;
+    - só a MESMA faixa anda — mover um cartão não arrasta uma janela de outra
+      faixa.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.server import app
+
+    tmp = Path(tempfile.mkdtemp(prefix="ripple_"))
+    projeto = None
+    try:
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "color=c=0x303030:s=320x240:r=30:d=30",
+                        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                        "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-pix_fmt", "yuv420p", "-c:a", "aac", str(fonte)], check=True)
+        selo = tmp / "selo.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "color=c=yellow:s=40x40:d=1", "-frames:v", "1",
+                        str(selo)], check=True)
+        projeto = svc.create(str(fonte), "ripple", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=30.0)]
+        projeto.save_plan()
+        midia = svc.add_media(projeto.id, str(selo), "image", "selo")
+        cliente = TestClient(app)
+
+        def por_janelas(janelas: list[tuple[float, float, int]]) -> list[str]:
+            """Recria as sobreposições e devolve os ids, em ordem."""
+            p = svc.load(projeto.id)
+            p.plan.overlays = []
+            p.save_plan()
+            ids = []
+            for a, b, faixa in janelas:
+                r = cliente.post(f"/api/projects/{projeto.id}/overlays",
+                                 json={"media_id": midia["id"], "out_start": a,
+                                       "out_end": b, "track": faixa})
+                ids.append(r.json()["overlay"]["id"])
+            return ids
+
+        def janelas() -> list[tuple]:
+            plano = cliente.get(f"/api/projects/{projeto.id}").json()["plan"]
+            return [(round(o["out_start"], 2), round(o["out_end"], 2),
+                     o.get("track", 0))
+                    for o in plano["overlays"]]
+
+        # ---- apagar com ripple fecha o buraco -------------------------
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0), (9.0, 11.0, 0)])
+        cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                     json={"kind": "overlay", "id": ids[1], "action": "delete"})
+        check(janelas() == [(1.0, 3.0, 0), (9.0, 11.0, 0)],
+              f"sem ripple, apagar o do meio deixa o buraco ({janelas()})")
+
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0), (9.0, 11.0, 0)])
+        r = cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                         json={"kind": "overlay", "id": ids[1],
+                               "action": "delete", "ripple": True}).json()
+        check(janelas() == [(1.0, 3.0, 0), (7.0, 9.0, 0)],
+              f"COM ripple, o terceiro vem 2 s para trás e fecha o buraco "
+              f"({janelas()})")
+        check("fechando o buraco" in (r.get("aviso") or ""),
+              f"e a tela é avisada do que andou ({r.get('aviso')})")
+
+        # o de ANTES nunca se move
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0), (9.0, 11.0, 0)])
+        cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                     json={"kind": "overlay", "id": ids[2],
+                           "action": "delete", "ripple": True})
+        check(janelas() == [(1.0, 3.0, 0), (5.0, 7.0, 0)],
+              f"apagar o último não mexe em quem vem antes ({janelas()})")
+
+        # ---- mover com ripple empurra os seguintes --------------------
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0), (9.0, 11.0, 0)])
+        r = cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                         json={"kind": "overlay", "id": ids[0],
+                               "action": "move", "delta": 2.0,
+                               "ripple": True}).json()
+        check(janelas() == [(3.0, 5.0, 0), (7.0, 9.0, 0), (11.0, 13.0, 0)],
+              f"mover o primeiro 2 s empurra os dois seguintes ({janelas()})")
+        check("andaram" in (r.get("aviso") or ""),
+              f"e diz quantos andaram ({r.get('aviso')})")
+
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0)])
+        cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                     json={"kind": "overlay", "id": ids[0],
+                           "action": "move", "delta": 2.0})
+        check(janelas() == [(3.0, 5.0, 0), (5.0, 7.0, 0)],
+              f"sem ripple, só o item pego anda ({janelas()})")
+
+        # ---- a faixa importa -----------------------------------------
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 1), (9.0, 11.0, 0)])
+        cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                     json={"kind": "overlay", "id": ids[0],
+                           "action": "move", "delta": 2.0, "ripple": True})
+        depois = janelas()
+        na_outra = [j for j in depois if j[2] == 1]
+        check(na_outra == [(5.0, 7.0, 1)],
+              f"o item da OUTRA faixa não é arrastado ({na_outra})")
+        check((11.0, 13.0, 0) in depois,
+              f"e o da mesma faixa é ({depois})")
+
+        # ---- os marcos andam com a janela ----------------------------
+        ids = por_janelas([(1.0, 3.0, 0), (5.0, 7.0, 0)])
+        cliente.put(f"/api/projects/{projeto.id}/overlays/{ids[1]}",
+                    json={"keyframes": [{"t": 5.0, "x": 0.2},
+                                        {"t": 7.0, "x": 0.8}]})
+        cliente.post(f"/api/projects/{projeto.id}/ops/item",
+                     json={"kind": "overlay", "id": ids[0],
+                           "action": "move", "delta": 2.0, "ripple": True})
+        plano = cliente.get(f"/api/projects/{projeto.id}").json()["plan"]
+        empurrada = next(o for o in plano["overlays"] if o["id"] == ids[1])
+        ts = [round(float(k["t"]), 2) for k in empurrada["keyframes"]]
+        check(ts == [7.0, 9.0],
+              f"os MARCOS da janela empurrada andam junto ({ts}) — sem isso a "
+              f"janela muda de lugar e o movimento dela fica onde estava")
     finally:
         if projeto is not None:
             try:

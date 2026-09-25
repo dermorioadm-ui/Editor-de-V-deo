@@ -1029,12 +1029,31 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
         else:
             setattr(obj, campo, round(valor, 4))
 
+    # RIPPLE: o gesto de "fecha o buraco" e "abre espaço". Pedido item por
+    # item, nunca ligado por padrão — arrastar uma janela sem querer arrastar as
+    # outras é o caso comum, e um modo global surpreende.
+    ripple = bool(payload.get("ripple"))
+    faixa_alvo = (int(getattr(alvo, "track", 0) or 0)
+                  if kind == "overlay" else None)
+
     if acao == "delete":
         if kind == "music":
             plan.music = None
         else:
+            buraco = (float(getattr(alvo, "out_end", 0.0) or 0.0)
+                      - float(getattr(alvo, "out_start", 0.0) or 0.0))
+            fim_do_buraco = float(getattr(alvo, "out_end", 0.0) or 0.0)
             colecoes[kind][:] = [i for i in colecoes[kind] if i.id != iid]
             svc.esquecer_cartao_orfao(project, getattr(alvo, "media_id", ""))
+            if ripple and buraco > 0.01:
+                puxados = ops.ripple_itens(colecoes[kind], fim_do_buraco,
+                                           -buraco, faixa=faixa_alvo)
+                project.save_plan()
+                return {"ok": True, "ripple": puxados,
+                        "aviso": (f"{len(puxados)} item(ns) vieram "
+                                  f"{buraco:.2f} s para trás, fechando o buraco")
+                                 if puxados else "",
+                        "timeline": svc.timeline_summary(project)}
         project.save_plan()
         return {"ok": True, "timeline": svc.timeline_summary(project)}
 
@@ -1053,6 +1072,15 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
         novo_a = max(0.0, min(max(0.0, limite - 0.2), a + delta))
         gravar(alvo, "out_start", novo_a)
         gravar(alvo, "out_end", novo_a + dur)
+        if ripple and kind != "music":
+            # o deslocamento REAL, não o pedido: o item pode ter batido no
+            # limite, e empurrar os outros pelo pedido abriria um vão
+            andou = novo_a - a
+            arrastados = ops.ripple_itens(colecoes[kind], a + dur - 1e-3, andou,
+                                          exceto=iid, faixa=faixa_alvo)
+            if arrastados:
+                aviso = (f"{len(arrastados)} item(ns) depois dele andaram "
+                         f"{andou:+.2f} s junto")
     else:                                    # resize
         side = str(payload.get("side", "end"))
         t = max(0.0, min(limite, float(payload.get("time", b))))

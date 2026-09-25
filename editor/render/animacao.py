@@ -460,12 +460,20 @@ def filtros_da_sobreposicao(efeitos: list | None) -> list[str]:
     return saida
 
 
-def tremor_da_sobreposicao(efeitos: list | None) -> tuple[str, str]:
+def tremor_da_sobreposicao(efeitos: list | None,
+                           inicio: float = 0.0) -> tuple[str, str]:
     """Deslocamento ("dx", "dy") em pixels do quadro, ou ("", "").
 
     Duas frequências levemente diferentes nos dois eixos de propósito: com a
     mesma frequência o movimento vira uma diagonal que parece defeito de
     monitor, não câmera na mão.
+
+    ``inicio`` é onde a janela começa DENTRO do trecho, e existe para o tremor
+    contar do primeiro quadro dela. Sem isso a fase dependia de onde o trecho
+    começa — um número que a prévia não tem como saber, porque ela desenha
+    sobre a linha do tempo inteira e não sobre trechos. O efeito era o tremor
+    concordar em força e frequência e discordar em fase: tremendo para um lado
+    na tela e para o outro no arquivo.
     """
     for e in efeitos or []:
         if e.get("kind") != "tremor":
@@ -474,8 +482,9 @@ def tremor_da_sobreposicao(efeitos: list | None) -> tuple[str, str]:
         f = float(e.get("frequency", 6.0))
         if a <= 1e-6:
             continue
-        w = f"({a:.5f}*main_w*sin({2 * 3.14159265358979 * f:.4f}*t))"
-        h = f"({a:.5f}*main_h*cos({2 * 3.14159265358979 * f * 0.83:.4f}*t))"
+        rel = f"(t-{inicio:.4f})"
+        w = f"({a:.5f}*main_w*sin({2 * 3.14159265358979 * f:.4f}*{rel}))"
+        h = f"({a:.5f}*main_h*cos({2 * 3.14159265358979 * f * 0.83:.4f}*{rel}))"
         return w, h
     return "", ""
 

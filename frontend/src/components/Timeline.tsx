@@ -18,8 +18,8 @@ interface Props {
   onSubtitleEdge: (cueId: string, side: 'start' | 'end', outTime: number) => void
   onResizeRemoved: (start: number, end: number, ns: number, ne: number) => void
   onMoveItem: (kind: string, id: string, side: 'move' | 'start' | 'end',
-               delta: number) => void
-  onDeleteItem: (kind: string, id: string) => void
+               delta: number, ripple?: boolean) => void
+  onDeleteItem: (kind: string, id: string, ripple?: boolean) => void
   onAddToTrack: (trackId: string) => void
   // arrastar um arquivo do disco em cima de um trilho
   onDropFile: (trackId: string, file: File) => void
@@ -82,6 +82,10 @@ export default function Timeline(props: Props) {
     { id: string; kind: string; delta: number
       side: 'move' | 'start' | 'end' } | null>(null)
   const [dropAlvo, setDropAlvo] = useState<string | null>(null)
+  // RIPPLE. Ligado por pedido, nunca por padrão: mover uma janela sem querer
+  // mover as outras é o caso comum, e um modo global que empurra tudo
+  // surpreende justamente quem não sabe que ele existe.
+  const [ripple, setRipple] = useState(false)
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
 
@@ -653,7 +657,7 @@ export default function Timeline(props: Props) {
     if (alvo && !e.altKey) {
       if (e.shiftKey) {
         props.onDeleteItem(alvo.track.kind === 'audio' ? 'music' : alvo.item.kind,
-                           alvo.item.id)
+                           alvo.item.id, ripple)
         return
       }
       drag.current = { mode: 'item', t0: t, x0: x, s0: start }
@@ -796,7 +800,7 @@ export default function Timeline(props: Props) {
     const alvoSrc = Math.max(0, toT(toX(bordaSrc) + seg.delta))
     const alvoOut = sourceToOutputNearest(alvoSrc, view.blocks)
     if (alvoOut == null) return
-    props.onMoveItem(seg.kind, seg.id, seg.side, alvoOut - bordaOut)
+    props.onMoveItem(seg.kind, seg.id, seg.side, alvoOut - bordaOut, ripple)
   }
 
   const onMouseUp = (e: React.MouseEvent) => {
@@ -881,6 +885,12 @@ export default function Timeline(props: Props) {
         <span className="font-mono w-20">{span < 60 ? `${span.toFixed(1)} s` : timecode(span)}</span>
         <button className="btn btn-xs" onClick={() => { setSpan(total); setStart(0) }}>
           vídeo inteiro
+        </button>
+        <button className={`btn btn-xs ${ripple ? 'btn-primary' : ''}`}
+                onClick={() => setRipple((v) => !v)}
+                title="com isto ligado, mover um item empurra os seguintes da
+mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
+          empurrar junto{ripple ? ': ligado' : ''}
         </button>
         <span className="text-slate-600">
           {cuts} blocos{fast ? ` · ${fast} acima de 1,25x` : ''}

@@ -834,11 +834,16 @@ export default function Editor() {
                   onDeleteClip={deleteClip}
                   playing={playing}
                   onTogglePlay={() => setState((s) => ({ playRequest: s.playRequest + 1 }))}
-                  onMoveItem={async (kind, id, side, delta) => {
+                  onMoveItem={async (kind, id, side, delta, ripple) => {
                     snapshot()
                     try {
                       if (side === 'move') {
-                        await api.moveItem(project.id, kind, id, delta)
+                        const r = await api.moveItem(project.id, kind, id, delta,
+                                                     ripple)
+                        // "empurrar junto" mexeu em itens que o usuário não
+                        // pegou: dizer quantos e quanto, senão ele descobre
+                        // depois, na exportação
+                        if (r?.aviso) toast('info', 'Empurrei junto', r.aviso)
                       } else {
                         const it = (timeline?.tracks ?? [])
                           .flatMap((t) => t.items).find((x) => x.id === id)
@@ -853,11 +858,11 @@ export default function Editor() {
                       toast('warn', 'Não deu para mover', String(e.message ?? e))
                     }
                   }}
-                  onDeleteItem={async (kind, id) => {
+                  onDeleteItem={async (kind, id, ripple) => {
                     snapshot()
-                    await api.deleteItem(project.id, kind, id)
+                    const r = await api.deleteItem(project.id, kind, id, ripple)
                     await refresh()
-                    toast('ok', 'Item removido do trilho')
+                    toast('ok', 'Item removido do trilho', r?.aviso || undefined)
                   }}
                   onDropFile={async (trackId, file) => {
                     // O navegador entrega só nome e tamanho — nunca o caminho.
