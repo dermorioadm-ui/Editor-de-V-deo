@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { palavrasDaMontagem } from '../lib/eixo'
 import { api } from '../lib/api'
 import { setState, useStore } from '../state/store'
@@ -23,6 +23,9 @@ const PASSOS: { rotulo: string; stages: string[] }[] = [
   { rotulo: 'Jogo de câmeras e legendas', stages: ['zoom', 'legendas'] },
   { rotulo: 'Montando o vídeo pronto', stages: ['previa'] },
 ]
+// com o Claude editando, um passo a mais antes de montar: o dele
+const PASSO_CLAUDE = { rotulo: 'O Claude editando (cortes, ritmo, legenda, pós)',
+                       stages: ['claude'] }
 
 export default function ProcessingView() {
   const project = useStore((s) => s.project)
@@ -57,7 +60,22 @@ export default function ProcessingView() {
   const abrindo = meu?.status === 'ok'
   const falhou = meu?.status === 'erro'
   const stage = meu?.stage ?? ''
-  const atual = Math.max(0, PASSOS.findIndex((p) => p.stages.includes(stage)))
+  // o passo do Claude aparece quando ele é o editor deste vídeo (o plano diz)
+  // ou assim que a etapa dele começa — e não some mais
+  const viuClaude = useRef(false)
+  if (stage === 'claude') viuClaude.current = true
+  const comClaude = viuClaude.current || (project as any)?.plan?.editor === 'claude'
+  const passos = comClaude ? [...PASSOS.slice(0, -1), PASSO_CLAUDE, PASSOS[PASSOS.length - 1]]
+    : PASSOS
+  const atual = Math.max(0, passos.findIndex((p) => p.stages.includes(stage)))
+  // o que o Claude já fez, para ele não parecer uma barra parada
+  const [passosClaude, setPassosClaude] = useState<string[]>([])
+  useEffect(() => {
+    const m = meu?.message ?? ''
+    if (m.startsWith('Claude: ')) {
+      setPassosClaude((xs) => (xs[xs.length - 1] === m ? xs : [...xs.slice(-5), m]))
+    }
+  }, [meu?.message])
 
   // REDE DE SEGURANÇA contra o giro eterno: a fila de jobs vive em memória e
   // o WebSocket não manda o estado ao reconectar — se o evento final se
@@ -68,8 +86,12 @@ export default function ProcessingView() {
     const t = window.setInterval(async () => {
       try {
         const jobs = await api.jobs(project.id)
+        // só o pipeline de ENTRADA segura esta tela. Com o Claude editando,
+        // ele dispara trabalhos próprios (refazer o corte, baixar b-roll) — se
+        // um deles virasse o "vivo", o editor abria no meio da edição dele
         const vivo = jobs.find((j: any) =>
-          ['fila', 'rodando'].includes(j.status))
+          ['fila', 'rodando'].includes(j.status)
+          && ['clique-unico', 'analise'].includes(j.kind))
         if (vivo) { setState({ activeJob: vivo }); return }
         const p = await api.project(project.id)
         if (p.analysis?.words?.length) {
@@ -104,7 +126,7 @@ export default function ProcessingView() {
         </div>
 
         <ol className="space-y-3">
-          {PASSOS.map((p, i) => {
+          {passos.map((p, i) => {
             const feito = rodando && i < atual
             const agora = rodando && i === atual
             return (
@@ -145,6 +167,13 @@ export default function ProcessingView() {
           <p className="text-[11px] text-slate-500 mt-2 truncate">
             {meu.message}
           </p>
+        )}
+        {stage === 'claude' && passosClaude.length > 1 && (
+          <ul className="mt-2 space-y-0.5" data-passos-claude="1">
+            {passosClaude.slice(0, -1).map((m, i) => (
+              <li key={i} className="text-[10px] text-slate-600 truncate">✓ {m.slice(8)}</li>
+            ))}
+          </ul>
         )}
 
         {falhou && (

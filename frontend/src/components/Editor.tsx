@@ -36,6 +36,66 @@ const TABS = [
   { id: 'exportar', label: 'Exportar', grupo: 'decidido' },
 ] as const
 
+/** A faixa do Claude no topo do editor: o que ele fez e um campo para pedir
+ *  mais — "agora aumenta a legenda", "tira o título do começo". */
+function FaixaDoClaude({ projectId, edicao, onVerPos }: {
+  projectId: string; edicao: any; onVerPos: () => void
+}) {
+  const [aberto, setAberto] = useState(false)
+  const [pedido, setPedido] = useState('')
+  const activeJob = useStore((s) => s.activeJob)
+  const rodando = activeJob?.kind === 'claude' && activeJob.project_id === projectId
+    && ['fila', 'rodando'].includes(activeJob.status)
+  const pedir = async (texto: string) => {
+    try {
+      const job = await api.claudePedir(projectId, texto)
+      setState({ activeJob: job })
+      setPedido('')
+    } catch (e: any) {
+      toast('warn', 'Não deu para chamar o Claude', String(e.message ?? e))
+    }
+  }
+  const falhou = edicao && !edicao.ok
+  return (
+    <div className="px-4 py-2 text-xs border-b border-amber-900/50 bg-amber-950/20 space-y-1.5"
+         data-editor-claude="1">
+      <div className="flex items-center gap-3">
+        <span className="text-amber-200 font-medium">
+          {rodando ? 'O Claude está editando…'
+            : falhou ? 'O Claude não editou este vídeo' : 'O Claude editou este vídeo'}
+        </span>
+        <span className="text-slate-400 truncate">
+          {rodando ? (activeJob?.message ?? '')
+            : falhou ? `${edicao.erro} — o vídeo saiu pela regra do programa.`
+            : edicao ? `${edicao.ferramentas} passos em ${Math.round(edicao.segundos)} s · o Gemini ficou fora`
+            : 'o Gemini não decide nada aqui'}
+        </span>
+        {edicao?.relatorio && !rodando && (
+          <button className="btn btn-xs" onClick={() => setAberto(!aberto)}>
+            {aberto ? 'fechar' : 'o que ele fez'}</button>
+        )}
+        {falhou && !rodando && (
+          <button className="btn btn-xs" onClick={() => pedir('')}>tentar de novo com o Claude</button>
+        )}
+        <button className="btn btn-xs ml-auto" onClick={onVerPos}>ver a pós</button>
+      </div>
+      {aberto && edicao?.relatorio && (
+        <pre className="whitespace-pre-wrap text-[11px] text-slate-300 font-sans max-h-48 overflow-auto"
+             data-relatorio-claude="1">{edicao.relatorio}</pre>
+      )}
+      <div className="flex items-center gap-2">
+        <input className="field flex-1 text-xs py-1" value={pedido} disabled={rodando}
+               data-campo="pedir-claude"
+               placeholder="pedir ao Claude: “aumenta a legenda”, “tira o título do começo”, “põe uma tela de tópico em 0:40”…"
+               onChange={(e) => setPedido(e.target.value)}
+               onKeyDown={(e) => { if (e.key === 'Enter' && pedido.trim()) pedir(pedido) }} />
+        <button className="btn btn-primary btn-xs" disabled={rodando || !pedido.trim()}
+                onClick={() => pedir(pedido)}>pedir</button>
+      </div>
+    </div>
+  )
+}
+
 export default function Editor() {
   const project = useStore((s) => s.project)
   const timeline = useStore((s) => s.timeline)
@@ -207,7 +267,7 @@ export default function Editor() {
   // recarrega quando um job termina
   useEffect(() => {
     if (activeJob && activeJob.status === 'ok' &&
-        ['clique-unico', 'analise', 'edicao'].includes(activeJob.kind)) {
+        ['clique-unico', 'analise', 'edicao', 'claude'].includes(activeJob.kind)) {
       refresh().then(() => {
         toast('ok', `${activeJob.kind} concluída`, activeJob.message)
         setState({ activeJob: null })
@@ -555,17 +615,9 @@ export default function Editor() {
         const ia = project.analysis?.ai_cortes
         if (view?.editor === 'claude' || ia?.erro === 'claude') {
           // o Gemini saiu da frente DE PROPÓSITO: não é falha, é o combinado
-          return (
-            <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
-                            border-amber-900/50 bg-amber-950/20" data-editor-claude="1">
-              <span className="text-amber-200 font-medium">O Claude é o editor deste vídeo</span>
-              <span className="text-slate-400">
-                o Gemini não decide nada aqui: o corte base é a regra do programa, e o
-                Claude revisa e faz a pós-edição pelo MCP.
-              </span>
-              <button className="btn btn-xs ml-auto" onClick={() => setTab('pos')}>ver a pós</button>
-            </div>
-          )
+          return <FaixaDoClaude projectId={project.id}
+                                edicao={project.analysis?.claude_edicao}
+                                onVerPos={() => setTab('pos')} />
         }
         if (!ia || !ia.rodou) {
           const motivo = ia?.erro === 'sem chave'

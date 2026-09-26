@@ -102,13 +102,26 @@ class JobQueue:
 
     # ------------------------------------------------------------- interface
     def submit(self, kind: str, project_id: str,
-               fn: Callable[["JobContext"], dict]) -> Job:
+               fn: Callable[["JobContext"], dict], paralelo: bool = False) -> Job:
+        """Enfileira um trabalho. ``paralelo`` roda numa linha própria.
+
+        A fila tem UM trabalhador por padrão, e isso é de propósito: dois
+        encodes ao mesmo tempo disputam a máquina inteira. Mas um trabalho que
+        ESPERA por outros não pode ocupar a fila: o clique único com o Claude
+        editando fica esperando o Claude, e o Claude dispara trabalhos (refazer
+        o corte, baixar b-roll) — na mesma fila, eles esperariam o clique único
+        terminar, e o clique único esperaria por eles para sempre.
+        """
         job = Job(id=uuid.uuid4().hex[:12], project_id=project_id, kind=kind)
         with self._lock:
             self._jobs[job.id] = job
         self._persist(job)
         self._emit(job)
-        self._q.put((job, fn))
+        if paralelo:
+            threading.Thread(target=self._executar, args=(job, fn), daemon=True,
+                             name=f"job-{kind}-{job.id}").start()
+        else:
+            self._q.put((job, fn))
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -142,32 +155,36 @@ class JobQueue:
     def _worker(self) -> None:
         while True:
             job, fn = self._q.get()
-            if self.is_cancelled(job.id):
-                job.status = "cancelado"
-                self._finish(job)
-                self._q.task_done()
-                continue
-            job.status = "rodando"
-            job.updated_at = time.time()
-            self._emit(job)
-            ctx = JobContext(job, self)
             try:
-                result = fn(ctx) or {}
-                job.result = result
-                job.status = "ok"
-                job.progress = 1.0
-                job.message = job.message or "concluído"
-            except KeyboardInterrupt:
-                job.status = "cancelado"
-                job.message = "cancelado"
-            except Exception as exc:  # noqa: BLE001
-                job.status = "erro"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.message = str(exc)[:400]
-                traceback.print_exc()
+                self._executar(job, fn)
             finally:
-                self._finish(job)
                 self._q.task_done()
+
+    def _executar(self, job: Job, fn) -> None:
+        if self.is_cancelled(job.id):
+            job.status = "cancelado"
+            self._finish(job)
+            return
+        job.status = "rodando"
+        job.updated_at = time.time()
+        self._emit(job)
+        ctx = JobContext(job, self)
+        try:
+            result = fn(ctx) or {}
+            job.result = result
+            job.status = "ok"
+            job.progress = 1.0
+            job.message = job.message or "concluído"
+        except KeyboardInterrupt:
+            job.status = "cancelado"
+            job.message = "cancelado"
+        except Exception as exc:  # noqa: BLE001
+            job.status = "erro"
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.message = str(exc)[:400]
+            traceback.print_exc()
+        finally:
+            self._finish(job)
 
     def _finish(self, job: Job) -> None:
         job.updated_at = time.time()

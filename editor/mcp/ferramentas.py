@@ -433,11 +433,14 @@ def broll(c: Cliente, a: dict) -> str:
             "projeto": {"type": "string"},
             "em": {"type": "number",
                    "description": "segundo do vídeo, para sugerir pela fala"},
+            "ver": {"type": "boolean",
+                    "description": "true = devolve também a MINIATURA de cada "
+                                   "resultado (até 6), para escolher olhando"},
         },
         "required": [],
     },
 )
-def buscar_broll(c: Cliente, a: dict) -> str:
+def buscar_broll(c: Cliente, a: dict):
     pid = str(a.get("projeto") or "")
     termo = str(a.get("termo") or "").strip()
     linhas: list[str] = []
@@ -464,7 +467,16 @@ def buscar_broll(c: Cliente, a: dict) -> str:
     for aviso in r.get("avisos") or []:
         linhas.append(f"aviso: {aviso}")
     linhas.append("próximo passo: broll_do_banco com os ids escolhidos")
-    return "\n".join(linhas)
+    if not a.get("ver") or not itens:
+        return "\n".join(linhas)
+    m = c.post("/api/banco/miniaturas", {"q": termo, "orientacao": orientacao,
+                                         "ids": [it["id"] for it in itens[:6]]})
+    conteudo = [{"type": "text", "text": "\n".join(linhas)}]
+    for mini in m.get("miniaturas") or []:
+        conteudo.append({"type": "text", "text": f"miniatura de {mini['id']}:"})
+        conteudo.append({"type": "image", "data": mini["dados"],
+                         "mimeType": mini["mime"]})
+    return {"content": conteudo, "isError": False}
 
 
 @ferramenta(
@@ -871,6 +883,180 @@ def gravacoes(c: Cliente, _a: dict) -> str:
         for g in gs[:20])
 
 
+# ------------------------------------------- o que a IA do Gemini decidia
+# Ritmo e câmera por bloco, legenda, devolver o que o corte levou, o fôlego
+# do corte de silêncio. Com estas, quem edita pelo MCP decide TUDO o que a IA
+# do Gemini decidia — e o Gemini pode ficar fora da edição.
+
+ETAPAS = ("gancho", "dor", "mecanismo", "explicacao", "revelacao", "prova",
+          "monetizacao", "oferta", "garantia", "cta")
+
+
+@ferramenta(
+    "ritmo",
+    "RITMO E CÂMERA, bloco a bloco (o que a IA decidia): a VELOCIDADE de cada "
+    "bloco (1.0 a 1.3 — acima de 1.25 a fala soa artificial), o ZOOM (1.0 = "
+    "aberto; 1.06–1.15 = mais fechado, para ênfase) e a ETAPA do roteiro "
+    "(gancho, dor, mecanismo, explicacao, revelacao, prova, monetizacao, "
+    "oferta, garantia, cta — a etapa escolhe o enquadramento dos blocos sem "
+    "zoom travado). Os clip_id estão em pos_contexto. 'global' multiplica a "
+    "velocidade do vídeo inteiro.",
+    {"properties": {
+        "projeto": {"type": "string"},
+        "blocos": {"type": "array", "items": {"type": "object", "properties": {
+            "bloco": {"type": "string", "description": "clip_id"},
+            "velocidade": {"type": "number"},
+            "zoom": {"type": "number"},
+            "etapa": {"type": "string", "enum": list(ETAPAS)}},
+            "required": ["bloco"]}},
+        "global": {"type": "number", "description": "multiplicador do vídeo inteiro (opcional)"}},
+     "required": ["projeto"]},
+)
+def ritmo(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    antes = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    feitos, recusados, avisos = 0, [], []
+    if a.get("global") is not None:
+        c.post(f"/api/projects/{pid}/ops/speed", {"global": float(a["global"])})
+        feitos += 1
+    for b in a.get("blocos") or []:
+        cid = str(b.get("bloco") or "")
+        try:
+            if b.get("etapa"):
+                c.post(f"/api/projects/{pid}/ops/section",
+                       {"clip_id": cid, "section": str(b["etapa"])})
+            if b.get("velocidade") is not None:
+                r = c.post(f"/api/projects/{pid}/ops/speed",
+                           {"clip_id": cid, "speed": float(b["velocidade"])})
+                if r.get("warn"):
+                    avisos.append(f"{cid}: {r.get('warn_message')}")
+            if b.get("zoom") is not None:
+                c.post(f"/api/projects/{pid}/ops/zoom",
+                       {"clip_id": cid, "zoom": float(b["zoom"])})
+            feitos += 1
+        except Exception as exc:  # noqa: BLE001 — um bloco ruim não derruba os outros
+            recusados.append(f"{cid}: {exc}")
+    depois = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    linhas = [f"{feitos} ajuste(s) de ritmo/câmera: {_seg(antes)} → {_seg(depois)}"]
+    linhas += [f"atenção: {x}" for x in avisos]
+    linhas += [f"recusado: {x}" for x in recusados]
+    return "\n".join(linhas)
+
+
+@ferramenta(
+    "legendas",
+    "A LEGENDA, de ponta a ponta. acao='ver': as legendas com id e tempo; "
+    "'corrigir': troca uma palavra ou expressão mal transcrita EM TODO o vídeo "
+    "(e nos próximos — vai para o dicionário de correções), ex.: errado='air "
+    "bnb', certo='Airbnb'; 'editar': reescreve uma legenda pelo id; 'estilo': "
+    "tamanho (0.6–1.6), posicao (baixo/meio/alto), maiusculas, cor (#RRGGBB) "
+    "e ligada (false = vídeo sem legenda).",
+    {"properties": {
+        "projeto": {"type": "string"},
+        "acao": {"type": "string", "enum": ["ver", "corrigir", "editar", "estilo"]},
+        "de": {"type": "number", "description": "ver: segundo inicial"},
+        "ate": {"type": "number", "description": "ver: segundo final"},
+        "errado": {"type": "string"}, "certo": {"type": "string"},
+        "id": {"type": "string"}, "texto": {"type": "string"},
+        "tamanho": {"type": "number"},
+        "posicao": {"type": "string", "enum": ["baixo", "meio", "alto"]},
+        "maiusculas": {"type": "boolean"},
+        "cor": {"type": "string"},
+        "ligada": {"type": "boolean"}},
+     "required": ["projeto", "acao"]},
+)
+def legendas(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    acao = str(a.get("acao") or "ver")
+    if acao == "corrigir":
+        errado, certo = str(a.get("errado") or "").strip(), str(a.get("certo") or "").strip()
+        if not errado or not certo:
+            return "diga 'errado' e 'certo'."
+        c.post("/api/corrections", {"from": errado, "to": certo})
+        r = c.post(f"/api/projects/{pid}/subtitles/rebuild")
+        return (f"'{errado}' → '{certo}' em todo o vídeo (e guardado no dicionário "
+                f"para os próximos). {len(r.get('subtitles') or [])} legendas refeitas.")
+    if acao == "editar":
+        if not a.get("id"):
+            return "diga o id da legenda (veja com acao='ver')."
+        r = c.put(f"/api/projects/{pid}/subtitles/{a['id']}", {"text": str(a.get("texto") or "")})
+        return f"legenda {a['id']}: \"{r['subtitle']['text']}\""
+    if acao == "estilo":
+        p = _projeto(c, pid)
+        altura = float(((p.get("info") or {}).get("display_size") or [0, 1920])[1]
+                       or (p.get("info") or {}).get("height") or 1920)
+        estilo: dict = {}
+        if a.get("tamanho") is not None:
+            estilo["fontsize_scale"] = max(0.6, min(1.6, float(a["tamanho"])))
+        if a.get("posicao"):
+            estilo.update({"baixo": {"align": 2, "margin_v": int(altura * 0.12)},
+                           "meio": {"align": 5, "margin_v": 0},
+                           "alto": {"align": 8, "margin_v": int(altura * 0.1)}}
+                          [str(a["posicao"])])
+        if a.get("maiusculas") is not None:
+            estilo["uppercase"] = bool(a["maiusculas"])
+        if a.get("cor"):
+            estilo["primary"] = str(a["cor"])
+        corpo: dict = {"style": estilo, "rebuild_subtitles": True}
+        if a.get("ligada") is not None:
+            corpo["export"] = {"burn_subtitles": bool(a["ligada"])}
+        c.post(f"/api/projects/{pid}/params", corpo)
+        return "estilo da legenda aplicado: " + ", ".join(
+            f"{k}={v}" for k, v in {**estilo, **corpo.get("export", {})}.items())
+    subs = ((_projeto(c, pid).get("timeline") or {}).get("subtitles")) or []
+    de = float(a.get("de") or 0.0)
+    ate = float(a.get("ate") if a.get("ate") is not None else 1e9)
+    vis = [s for s in subs if s["end"] >= de and s["start"] <= ate]
+    if not vis:
+        return "nenhuma legenda nesse intervalo."
+    return "\n".join(f"{s['id']}  {s['start']:.2f}–{s['end']:.2f}  "
+                     f"{s['text'].replace(chr(10), ' / ')}" for s in vis[:200])
+
+
+@ferramenta(
+    "devolver",
+    "Devolve ao vídeo palavras que o corte (automático ou seu) tirou — pelos "
+    "números da transcrição (os marcados com ~). Use quando o corte comeu uma "
+    "palavra ou quando um take descartado era o bom.",
+    {"properties": {"projeto": {"type": "string"},
+                    "palavras": {"type": "array", "items": {"type": "integer"}}},
+     "required": ["projeto", "palavras"]},
+)
+def devolver(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    ids = [int(i) for i in a.get("palavras") or []]
+    if not ids:
+        return "diga os números das palavras."
+    antes = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    c.post(f"/api/projects/{pid}/ops/restore-words", {"word_ids": ids})
+    depois = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    return f"{len(ids)} palavra(s) de volta: {_seg(antes)} → {_seg(depois)}"
+
+
+@ferramenta(
+    "respiro",
+    "O FÔLEGO DO CORTE DE SILÊNCIO do vídeo inteiro: 0 = corte seco, falas "
+    "coladas (ritmo de anúncio); 1 = deixa respiro entre as frases. Refaz o "
+    "corte automático mantendo o que foi cortado ou devolvido à mão. Use ANTES "
+    "da pós-edição (gráficos e camadas vivem no tempo do vídeo final).",
+    {"properties": {"projeto": {"type": "string"},
+                    "corte": {"type": "number", "description": "0 a 1"}},
+     "required": ["projeto", "corte"]},
+)
+def respiro(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    valor = max(0.0, min(1.0, float(a["corte"])))
+    antes = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    c.post(f"/api/projects/{pid}/params", {"cut": {"aggressiveness": valor}})
+    job = c.post(f"/api/projects/{pid}/autoedit")
+    fim = c.esperar_job(pid, job.get("id", ""), limite=900)
+    ruim = _falhou(fim)
+    if ruim:
+        return f"refazer o corte {ruim}"
+    depois = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    return f"corte refeito com fôlego {valor:.2f}: {_seg(antes)} → {_seg(depois)}"
+
+
 # ------------------------------------------------------------- pós-edição
 # O Claude como editor: lê o roteiro com os tempos do vídeo FINAL, olha os
 # quadros de verdade, sabe onde a pessoa está, e põe por cima o que o corte
@@ -926,13 +1112,17 @@ def pos_contexto(c: Cliente, a: dict) -> str:
                                   else "falta o onnxruntime — camadas não saem")),
         f"editor: {'Claude (Gemini fora)' if d.get('editor') == 'claude' else 'padrão'}",
         "",
-        "BLOCOS (clip_id — a transição entra na emenda de ENTRADA do bloco):",
+        "BLOCOS (clip_id · tempo no vídeo final · velocidade · zoom · etapa — "
+        "a transição entra na emenda de ENTRADA do bloco):",
     ]
     for b in d.get("blocos") or []:
         if b["fim"] < de or b["inicio"] > ate:
             continue
         linhas.append(f"  {b['clip_id']}  {b['inicio']:.2f}–{b['fim']:.2f}  "
-                      f"{b['gravacao']}{'' if b['tipo'] == 'video' else ' (' + b['tipo'] + ')'}")
+                      f"{b.get('velocidade', 1)}x zoom {b.get('zoom', 1)} "
+                      f"{b.get('etapa') or '-'}  {b['gravacao']}"
+                      f"{'' if b['tipo'] in ('video', 'speech') else ' (' + b['tipo'] + ')'}"
+                      + (f"\n      \"{b['texto'][:160]}\"" if b.get("texto") else ""))
     if d.get("brolls"):
         linhas.append("B-ROLLS (a pessoa não aparece nestes intervalos):")
         linhas += [f"  {x['inicio']:.2f}–{x['fim']:.2f} {x.get('termo') or ''}"

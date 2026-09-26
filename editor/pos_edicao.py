@@ -97,12 +97,20 @@ def contexto(project) -> dict:
     tl = Timeline(plan.active_clips, fps)
     palavras = palavras_na_saida(project, tl)
     nomes = {m["id"]: m.get("name") or m["id"] for m in list_media(project.id)}
-    blocos = [{"clip_id": b["id"], "inicio": round(float(b["out_start"]), 2),
-               "fim": round(float(b["out_end"]), 2),
-               "gravacao": ("principal" if b.get("source", "main") == "main"
-                            else nomes.get(b.get("source"), b.get("source"))),
-               "tipo": b.get("kind", "video")}
-              for b in resumo.get("blocks", [])]
+    blocos = []
+    for b in resumo.get("blocks", []):
+        ini, fim = float(b["out_start"]), float(b["out_end"])
+        blocos.append({
+            "clip_id": b["id"], "inicio": round(ini, 2), "fim": round(fim, 2),
+            "gravacao": ("principal" if b.get("source", "main") == "main"
+                         else nomes.get(b.get("source"), b.get("source"))),
+            "tipo": b.get("kind", "video"),
+            "velocidade": round(float(b.get("speed") or 1.0), 2),
+            "zoom": round(float(b.get("zoom") or 1.0), 2),
+            "etapa": b.get("section") or "",
+            "texto": " ".join(str(w.get("text", "")).strip() for w in palavras
+                              if ini - 1e-3 <= float(w.get("start", 0.0)) < fim)[:400],
+        })
     main = project.info
     W, H = (R.target_size(main, replace(plan.export, scale="source"))
             if main else (1080, 1920))

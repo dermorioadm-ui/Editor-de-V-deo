@@ -66,6 +66,12 @@ export default function Home() {
   // no Facebook, Instagram e YouTube.
   const [fpsSaida, setFpsSaida] = useState(30)
   const [iaCortes, setIaCortes] = useState(true)
+  // QUEM EDITA: o Claude Code desta máquina, o Gemini (chave) ou só a regra
+  const [editor, setEditor] = useState<'claude' | 'gemini' | 'regra' | ''>('')
+  const [claude, setClaude] = useState<any>(null)
+  const [pedidoClaude, setPedidoClaude] = useState('')
+  const [claudeCaminho, setClaudeCaminho] = useState('')
+  const [testandoClaude, setTestandoClaude] = useState(false)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
   const [extras, setExtras] = useState<string[]>([])
@@ -153,6 +159,7 @@ export default function Home() {
   useEffect(() => {
     api.health().then(setHealth).catch(() => {})
     lerIa().catch(() => {})
+    api.claudeEstado().then(setClaude).catch(() => setClaude(null))
     api.looks().then(setLooks).catch(() => {})
     api.outputDir().then(setSaida).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
@@ -195,8 +202,34 @@ export default function Home() {
    *  velocidade, zoom, legenda e exportação do zero. Os sliders existiam e
    *  não mudavam nada no arquivo. Mandando junto, o servidor aplica a receita
    *  DEPOIS do preset e a ordem para de depender de quem gravou primeiro. */
+  // o editor da vez: o que ele escolheu da última vez; sem escolha, o Claude
+  // quando ele está instalado, senão o Gemini com chave, senão a regra
+  const editorDaVez: 'claude' | 'gemini' | 'regra' = editor
+    || (claude?.editor_padrao as any)
+    || (claude?.instalado ? 'claude' : ia?.tem_chave ? 'gemini' : 'regra')
+
+  async function escolherEditor(e: 'claude' | 'gemini' | 'regra') {
+    setEditor(e)
+    try { setClaude(await api.claudeConfig({ editor_padrao: e })) } catch { /* só lembrança */ }
+  }
+
+  async function testarClaude() {
+    setTestandoClaude(true)
+    try {
+      if (claudeCaminho.trim()) setClaude(await api.claudeConfig({ caminho: claudeCaminho.trim() }))
+      const r = await api.claudeTestar()
+      if (r.ok) toast('ok', 'O Claude Code respondeu', `${r.versao} — pronto para editar`)
+      else toast('warn', 'O Claude Code não respondeu', r.motivo)
+      setClaude(await api.claudeEstado(true))
+    } catch (e: any) {
+      toast('warn', 'Não deu para testar', String(e.message ?? e))
+    } finally { setTestandoClaude(false) }
+  }
+
   function receita() {
     return {
+      editor: editorDaVez === 'claude' ? 'claude' : '',
+      pedido_claude: editorDaVez === 'claude' ? pedidoClaude.trim() : '',
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       alvo_duracao: alvo,
       speed: { global_multiplier: velocidade },
@@ -224,8 +257,11 @@ export default function Home() {
       // guardada ou quando o seletor mudou. Gravar na hora de gerar era o
       // furo — se a gravação falhasse, o vídeo saía com outro modelo e
       // ninguém ficava sabendo.
-      if (iaCortes !== (ia?.cortes !== false)) {
-        await api.setAiConfig({ cortes: iaCortes }).catch(() => {})
+      // com o Claude editando, o interruptor do Gemini não importa (o Gemini
+      // fica fora); na "só a regra", ele é desligado de verdade
+      const cortesGemini = editorDaVez === 'regra' ? false : iaCortes
+      if (editorDaVez !== 'claude' && cortesGemini !== (ia?.cortes !== false)) {
+        await api.setAiConfig({ cortes: cortesGemini }).catch(() => {})
       }
       // AS OUTRAS GRAVAÇÕES DO PACOTE sobem como fonte, não como anexo: elas
       // não são janela por cima do quadro, são continuação da montagem. Cada
@@ -425,10 +461,75 @@ export default function Home() {
           </div>
         )}
 
+        {/* QUEM EDITA ESTE VÍDEO. O Claude Code desta máquina (a assinatura
+            dele, sem chave paga) edita de ponta a ponta; o Gemini decide com a
+            chave; ou só a regra. A escolha fica lembrada. */}
+        <div className="card p-3 mb-3 space-y-2" data-quem-edita={editorDaVez}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-slate-200 mr-1">Quem edita este vídeo</span>
+            {([['claude', 'Claude (no seu computador)'], ['gemini', 'Gemini'],
+               ['regra', 'Só a regra']] as const).map(([v, rot]) => (
+              <button key={v} data-editor={v}
+                      className={`btn btn-xs ${editorDaVez === v ? 'btn-primary' : ''}`}
+                      onClick={() => escolherEditor(v)}>{rot}</button>
+            ))}
+          </div>
+          {editorDaVez === 'claude' && (
+            <div className="space-y-2">
+              {claude?.instalado ? (
+                <p className="text-[11px] text-emerald-300">
+                  ✓ Claude Code {claude.versao} nesta máquina — ele corta, acerta o ritmo, a
+                  câmera e a legenda, escolhe o b-roll e faz a pós-edição. O Gemini fica fora.
+                </p>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] text-amber-300 flex-1">
+                    Não achei o Claude Code aqui. Instale e faça login uma vez (abra um
+                    terminal e rode <code className="font-mono">claude</code>). Se ele está
+                    num lugar diferente, cole o caminho do executável:
+                  </p>
+                  <input className="field w-64 text-xs font-mono" placeholder="C:\Users\...\claude.exe"
+                         value={claudeCaminho} onChange={(e) => setClaudeCaminho(e.target.value)} />
+                </div>
+              )}
+              <label className="block">
+                <span className="label">o que você quer do Claude nesta edição (opcional)</span>
+                <textarea className="field w-full text-xs" rows={2} value={pedidoClaude}
+                          data-campo="pedido-claude"
+                          placeholder="ex.: corte bem seco, legenda amarela em maiúsculas, título no gancho, telas de tópico quando mudo de assunto, texto atrás de mim no começo"
+                          onChange={(e) => setPedidoClaude(e.target.value)} />
+              </label>
+              <div className="flex items-center gap-2">
+                <select className="field text-xs py-1" value={claude?.modelo ?? ''}
+                        title="o modelo do Claude que edita (o padrão é o do seu Claude Code)"
+                        onChange={async (e) => setClaude(await api.claudeConfig({ modelo: e.target.value }))}>
+                  <option value="">modelo padrão do Claude Code</option>
+                  <option value="opus">Opus</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="fable">Fable</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+                <button className="btn btn-xs" disabled={testandoClaude} onClick={testarClaude}>
+                  {testandoClaude ? 'testando…' : 'testar o Claude'}
+                </button>
+                <span className="text-[10px] text-slate-500">
+                  o arquivo não sai da máquina; o Claude lê a transcrição e alguns quadros
+                </span>
+              </div>
+            </div>
+          )}
+          {editorDaVez === 'regra' && (
+            <p className="text-[11px] text-slate-400">
+              O corte sai só pela regra do programa (silêncio, palma, assobio, comando
+              falado), sem IA nenhuma.
+            </p>
+          )}
+        </div>
+
         {/* A IA decide os cortes. Sem a chave, o editor cai na regra
             determinística — e o usuário TEM que saber disso antes de soltar
             o arquivo, não depois. */}
-        <div className={`card p-3 mb-3 flex items-center gap-3
+        {editorDaVez === 'gemini' && <div className={`card p-3 mb-3 flex items-center gap-3
           ${iaLiga ? 'border-emerald-900/50 bg-emerald-950/15'
             : 'border-amber-900/50 bg-amber-950/15'}`}>
           <span className={`text-lg leading-none
@@ -490,7 +591,7 @@ export default function Home() {
               </button>
             </>
           )}
-        </div>
+        </div>}
 
         <div
           ref={dropRef}

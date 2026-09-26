@@ -1495,14 +1495,62 @@ Em português, do jeito que você falaria:
 - *"põe essa música de fundo em -20 dB"*
 - *"exporta e me diz onde ficou"*
 
-São trinta ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+São trinta e quatro ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
 transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
 **b-roll** (vários vídeos por cima da fala, em sequência), **buscar b-roll no
 banco grátis** e **pôr b-roll do banco** (ele lê o que você fala no ponto,
 procura e põe), **b-roll automático**, animar, recortar em
 forma, efeitos, trilha, formatos (inclusive o 4:5 do feed), exportar,
 acrescentar vídeo, juntar vídeos, gravações, listar projetos, estado do
-editor — e as sete da **pós-edição** (abaixo).
+editor; as quatro que cobrem o que o Gemini decidia — **ritmo** (velocidade,
+zoom e etapa de cada bloco), **legendas** (ver, corrigir palavra no vídeo
+inteiro, reescrever, estilo), **devolver** (o que o corte comeu) e
+**respiro** (o fôlego do corte de silêncio) —; e as sete da **pós-edição**
+(abaixo).
+
+### Pela primeira tela: o Claude edita de ponta a ponta, num clique
+
+Na primeira tela, em **Quem edita este vídeo**, escolha **Claude (no seu
+computador)**. Se quiser, escreva o que você quer ("corte bem seco, legenda
+amarela, título no gancho, telas de tópico quando mudo de assunto") e aperte
+**GERAR VÍDEO PRONTO** como sempre.
+
+O que acontece:
+
+1. o Sharkcut faz o mecânico: transcreve, corta o silêncio pela regra, legenda;
+2. chama o **Claude Code desta máquina** sem janela, com o login da SUA
+   assinatura — nenhuma chave paga. O Claude recebe o projeto e as ferramentas
+   do Sharkcut e decide tudo o que o Gemini decidia: o que sai do corte
+   (repetição, frase errada, gaguejo), o fôlego do corte de silêncio, a
+   velocidade e a câmera de cada bloco, a legenda (palavra mal transcrita,
+   estilo), o resumo para caber na duração, o b-roll (escolhendo **olhando** as
+   miniaturas) e a pós-edição inteira. Você acompanha o passo a passo na tela
+   de processamento ("Claude: pondo título…", "Claude: conferindo 3 quadros…");
+3. o Sharkcut gera a prévia e o arquivo final. O editor abre com tudo pronto.
+
+No topo do editor fica o **relatório** do que ele fez, e um campo **pedir ao
+Claude**: "aumenta a legenda", "tira o título do começo", "põe uma tela de
+tópico em 0:40" — ele faz só aquilo, sem refazer o resto.
+
+As travas: o Claude, nesta edição, **não tem terminal, não mexe em arquivo e
+não entra na internet** (as ferramentas internas dele ficam desligadas); só
+enxerga as ferramentas do Sharkcut, e as que exportariam, abririam outro
+projeto ou refariam o clique único ficam de fora. Ninguém precisa responder
+nada durante a edição.
+
+**Precisa:** o Claude Code instalado e logado uma vez (abra um terminal, rode
+`claude` e faça login). O botão **testar o Claude** confere as duas coisas.
+Se ele não estiver instalado, sem login ou no limite da assinatura, o vídeo
+sai do mesmo jeito — pela regra — e a tela diz o motivo; depois é só apertar
+**tentar de novo com o Claude** no editor.
+
+**O Gemini fica fora da edição.** Com o Claude como editor, o Gemini não
+decide corte, resumo, etapa, anexo nem b-roll. Ele continua disponível só
+para o que o Claude não faz: **gerar imagem e vídeo** (aba IA).
+
+**O que sai da máquina:** o arquivo de vídeo, não. O que o Claude lê vai para
+a Anthropic, como em qualquer conversa com ele: o texto da transcrição e, quando
+ele confere o resultado, quadros soltos do vídeo em tamanho de conferência.
 
 ### O Claude como editor: a pós-edição
 

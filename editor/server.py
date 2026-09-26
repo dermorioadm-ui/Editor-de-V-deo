@@ -308,13 +308,13 @@ def api_envelope(pid: str, points: int = 4000) -> dict:
 
 
 # --------------------------------------------------------------------- jobs
-def _run(kind: str, pid: str, fn) -> dict:
+def _run(kind: str, pid: str, fn, paralelo: bool = False) -> dict:
     # dois cliques no mesmo botão não podem virar dois jobs: o segundo
     # re-analisaria tudo e apagaria as decisões manuais feitas após o primeiro
     for existing in get_queue().list(pid):
         if existing.kind == kind and existing.status in ("fila", "rodando"):
             return existing.to_dict()
-    job = get_queue().submit(kind, pid, fn)
+    job = get_queue().submit(kind, pid, fn, paralelo=paralelo)
     return job.to_dict()
 
 
@@ -430,8 +430,13 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     # que também sobe os anexos e a trilha antes de disparar.
     fontes_extras = [str(m) for m in (payload.get("fontes_extras") or []) if m]
 
+    claude = project.plan.editor == "claude"
+
     def pipeline(ctx) -> dict:
-        res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras)
+        if claude:
+            res = _clique_do_claude(pid, ctx, fontes_extras)
+        else:
+            res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras)
         # e o MP4 final continua sendo gerado — por baixo, sem segurar a tela.
         # O botão de baixar no editor acende sozinho quando este job termina.
         try:
@@ -444,7 +449,54 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
             res["final_erro"] = str(exc)
         return res
 
-    return _run("clique-unico", pid, pipeline)
+    # com o Claude editando, o clique único ESPERA por ele — e ele dispara
+    # trabalhos (refazer o corte, baixar b-roll). Na fila única, eles
+    # esperariam o clique único e o clique único esperaria por eles: roda em
+    # linha própria (ver JobQueue.submit).
+    return _run("clique-unico", pid, pipeline, paralelo=claude)
+
+
+def _clique_do_claude(pid: str, ctx, fontes_extras: list[str]) -> dict:
+    """O clique único com o Claude Code como editor, de ponta a ponta.
+
+    O programa faz o mecânico (transcrever, cortar o silêncio pela regra,
+    legendar); o Claude decide o resto; o programa gera a prévia e o arquivo.
+    Se o Claude não rodar (não instalado, sem login, limite da assinatura),
+    o vídeo sai do mesmo jeito — pela regra, com o resumo e o b-roll pela
+    regra também — e a tela diz por quê.
+    """
+    from . import broll_auto, claude_editor
+
+    res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras,
+                        para_o_claude=True)
+    res["claude"] = svc._scoped(ctx, 0.62, 0.94,
+                                lambda c: claude_editor.editar(pid, c))
+    p = svc.load(pid)
+    if not res["claude"].get("ok"):
+        ctx.progress(0.94, "o Claude não editou: o vídeo sai pela regra — "
+                           + (res["claude"].get("erro") or ""))
+        if p.plan.alvo_duracao > 0:
+            try:
+                res["resumo"] = svc._scoped(ctx, 0.94, 0.95,
+                                            lambda c: svc.resumir_para_alvo(p, c))
+            except Exception as exc:  # noqa: BLE001
+                res["resumo"] = {"ok": False, "erro": str(exc)}
+        if (p.plan.broll or {}).get("auto"):
+            try:
+                res["broll"] = svc._scoped(ctx, 0.95, 0.96, lambda c: broll_auto.aplicar(
+                    p, c, p.plan.broll.get("frequencia", "medio")))
+            except Exception as exc:  # noqa: BLE001
+                res["broll"] = {"ok": False, "erro": str(exc)}
+        p = svc.load(pid)
+    try:
+        res["previa"] = svc._scoped(ctx, 0.96, 1.0,
+                                    lambda c: svc.previa_da_edicao(p, c))
+    except Exception as exc:  # noqa: BLE001
+        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
+        res["previa"] = {"ok": False}
+    p.set_status("pronto")
+    res["duracao"] = round(svc.duracao_de_saida(p), 2)
+    return res
 
 
 @app.post("/api/projects/{pid}/export")
@@ -517,6 +569,8 @@ def aplicar_receita(project, payload: dict) -> None:
     if "editor" in payload:
         # "claude": o Claude edita pelo MCP e o Gemini não decide nada
         plan.editor = "claude" if payload.get("editor") == "claude" else ""
+    if "pedido_claude" in payload:
+        plan.pedido_claude = str(payload.get("pedido_claude") or "")[:4000]
     if "alvo_duracao" in payload:
         try:
             plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
@@ -2367,6 +2421,78 @@ def api_pos_cena(pid: str, t: float = 0.0) -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
+# ------------------------------------------------------ o Claude como editor
+@app.get("/api/claude/estado")
+def api_claude_estado(forcar: bool = False) -> dict:
+    """Se o Claude Code está nesta máquina, e o que a primeira tela lembra."""
+    from . import claude_editor
+
+    return {**claude_editor.estado(forcar),
+            "editor_padrao": str(db.get_setting("editor_padrao", "") or ""),
+            "modelos": list(claude_editor.MODELOS)}
+
+
+@app.post("/api/claude/config")
+def api_claude_config(payload: dict = Body(...)) -> dict:
+    from . import claude_editor
+
+    if "caminho" in payload:
+        caminho = str(payload.get("caminho") or "").strip()
+        if caminho and not Path(caminho).is_file():
+            raise HTTPException(400, "esse arquivo não existe")
+        db.set_setting("claude_caminho", caminho)
+    if "modelo" in payload:
+        modelo = str(payload.get("modelo") or "")
+        if modelo not in claude_editor.MODELOS:
+            raise HTTPException(400, "modelo desconhecido")
+        db.set_setting("claude_modelo", modelo)
+    if "editor_padrao" in payload:
+        db.set_setting("editor_padrao",
+                       str(payload.get("editor_padrao") or "") if
+                       payload.get("editor_padrao") in ("claude", "gemini", "regra") else "")
+    return api_claude_estado(True)
+
+
+@app.post("/api/projects/{pid}/claude")
+def api_claude_retoque(pid: str, payload: dict = Body(default={})) -> dict:
+    """Pede ao Claude, de dentro do editor: "agora aumenta a legenda".
+
+    Com ``pedido``, ele faz SÓ aquilo em cima do que já existe; sem, refaz a
+    edição dele inteira (útil quando o login do Claude Code faltou no clique
+    único). Depois, prévia e arquivo final, como no clique único.
+    """
+    from . import claude_editor
+
+    project = _project(pid)
+    texto = str(payload.get("pedido") or "").strip()[:4000]
+    project.plan.editor = "claude"
+    project.save_plan()
+
+    def pipeline(ctx) -> dict:
+        r = svc._scoped(ctx, 0.0, 0.9, lambda c: claude_editor.editar(pid, c, retoque=texto))
+        p = svc.load(pid)
+        try:
+            previa = svc._scoped(ctx, 0.9, 1.0, lambda c: svc.previa_da_edicao(p, c))
+        except Exception as exc:  # noqa: BLE001
+            previa = {"ok": False, "erro": str(exc)}
+        try:
+            final = get_queue().submit("exportacao", pid,
+                                       lambda c: svc.exportar_final(svc.load(pid), c)).id
+        except Exception:  # noqa: BLE001
+            final = None
+        return {"claude": r, "previa": previa, "final_job": final}
+
+    return _run("claude", pid, pipeline, paralelo=True)
+
+
+@app.post("/api/claude/testar")
+def api_claude_testar() -> dict:
+    """Uma pergunta mínima ao Claude Code: instalado E logado?"""
+    from . import claude_editor
+
+    return claude_editor.testar(str(db.get_setting("claude_modelo", "") or ""))
+
+
 @app.get("/api/recorte/estado")
 def api_recorte_estado() -> dict:
     return _recorte_estado()
@@ -2753,6 +2879,38 @@ def api_banco_buscar(q: str = "", orientacao: str = "", pagina: int = 1,
         return banco.buscar(q, orientacao, max(1, min(50, pagina)))
     except banco.ErroDoBanco as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/banco/miniaturas")
+def api_banco_miniaturas(payload: dict = Body(...)) -> dict:
+    """As miniaturas de resultados de uma busca, para a IA escolher OLHANDO.
+
+    O endereço da miniatura nunca vem de fora: a busca é refeita pelo termo
+    (do cache de 24 h, sem rede) e o item é achado pelo id, como no download.
+    """
+    import base64
+
+    from . import banco
+
+    q = str(payload.get("q") or "").strip()
+    ids = [str(i) for i in (payload.get("ids") or [])][:8]
+    if not q or not ids:
+        raise HTTPException(400, "diga o termo e os ids")
+    try:
+        r = banco.buscar(q, str(payload.get("orientacao") or ""), 1)
+    except banco.ErroDoBanco as exc:
+        raise HTTPException(400, str(exc)) from exc
+    por_id = {str(it.get("id")): it for it in r.get("itens") or []}
+    out = []
+    for i in ids:
+        dados = banco.quadro_bytes(por_id[i]) if i in por_id else None
+        if not dados:
+            continue
+        mime = ("image/png" if dados[:8] == b"\x89PNG\r\n\x1a\n"
+                else "image/webp" if dados[8:12] == b"WEBP" else "image/jpeg")
+        out.append({"id": i, "mime": mime,
+                    "dados": base64.b64encode(dados).decode("ascii")})
+    return {"miniaturas": out}
 
 
 @app.get("/api/banco/baixados")

@@ -202,6 +202,39 @@ def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
     check("cena em" in texto and "luz" in texto and "fala" in texto,
           f"analisar_cena descreve o quadro e a fala dali ({texto[:120]!r})")
 
+    # ---- o que o Gemini decidia, agora pelas ferramentas
+    tl = svc.timeline_summary(svc.load(pid))
+    b0 = tl["blocks"][0]["id"]
+    texto = F.chamar(cliente, "ritmo", {"projeto": pid, "blocos": [
+        {"bloco": b0, "velocidade": 1.15, "zoom": 1.1, "etapa": "explicacao"},
+        {"bloco": "nao_existe", "velocidade": 1.1}]})
+    c0 = next(c for c in svc.load(pid).plan.clips if c.id == b0)
+    check(abs(c0.speed - 1.15) < 0.01 and abs(c0.zoom - 1.1) < 0.01
+          and c0.section == "explicacao" and "recusado" in texto,
+          f"ritmo muda velocidade, zoom e etapa do bloco; o bloco errado volta "
+          f"recusado sem derrubar os outros ({texto.splitlines()[0]})")
+    texto = F.chamar(cliente, "legendas", {"projeto": pid, "acao": "ver"})
+    check("  " in texto and ("–" in texto or "nenhuma" in texto),
+          "legendas acao=ver lista id, tempo e texto")
+    F.chamar(cliente, "legendas", {"projeto": pid, "acao": "corrigir",
+                                   "errado": "bravo", "certo": "BRAVO!"})
+    check(any("BRAVO!" in s.text for s in svc.load(pid).plan.subtitles),
+          "legendas acao=corrigir troca a palavra no vídeo inteiro")
+    F.chamar(cliente, "legendas", {"projeto": pid, "acao": "estilo", "posicao": "alto",
+                                   "maiusculas": True, "cor": "#FFD400"})
+    st = svc.load(pid).plan.style
+    check(st.align == 8 and st.uppercase and st.primary == "#FFD400",
+          "legendas acao=estilo muda posição, maiúsculas e cor")
+    removidas = svc.load(pid).analysis.get("removed_word_ids") or []
+    if removidas:
+        antes = svc.duracao_de_saida(svc.load(pid))
+        F.chamar(cliente, "devolver", {"projeto": pid, "palavras": [removidas[0]]})
+        check(svc.duracao_de_saida(svc.load(pid)) > antes
+              and removidas[0] not in (svc.load(pid).analysis.get("removed_word_ids") or []),
+              "devolver traz de volta a palavra que o corte levou")
+    texto = F.chamar(cliente, "respiro", {"projeto": pid, "corte": 0.1})
+    check("corte refeito" in texto, f"respiro refaz o corte com outro fôlego ({texto})")
+
     # a mão dele fica: tirar tudo só leva o que o Claude pôs
     p = svc.load(pid)
     from editor.models import Grafico

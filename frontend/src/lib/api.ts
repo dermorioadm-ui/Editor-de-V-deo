@@ -328,6 +328,14 @@ export const api = {
   posQuadroUrl: (id: string, t: number, lado = 540) =>
     `/api/projects/${id}/pos/quadro.jpg?t=${t.toFixed(3)}&lado=${lado}&_=${Date.now()}`,
   recorteEstado: () => req<any>('/api/recorte/estado'),
+  // O CLAUDE COMO EDITOR: o Claude Code desta máquina, sem janela
+  claudeEstado: (forcar = false) => req<any>(`/api/claude/estado${forcar ? '?forcar=true' : ''}`),
+  claudeConfig: (dados: { caminho?: string; modelo?: string; editor_padrao?: string }) =>
+    post<any>('/api/claude/config', dados),
+  claudeTestar: () => post<any>('/api/claude/testar', {}),
+  /** pedir ao Claude de dentro do editor ("agora aumenta a legenda") */
+  claudePedir: (id: string, pedido: string) =>
+    post<Job>(`/api/projects/${id}/claude`, { pedido }),
   recorteBaixar: () => post<any>('/api/recorte/baixar', {}),
 }
 

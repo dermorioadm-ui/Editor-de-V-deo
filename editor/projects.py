@@ -699,6 +699,16 @@ def analyze(project: Project, ctx) -> dict:
     }
 
 
+def gemini_permitido(project) -> bool:
+    """False quando o Claude é o editor: o Gemini não decide nada da edição.
+
+    Vale para os cortes, o resumo, a leitura do roteiro (etapa e ênfase), a
+    posição dos anexos e o plano de b-roll. Gerar imagem e vídeo continua sendo
+    do Gemini — o Claude não gera imagem.
+    """
+    return getattr(getattr(project, "plan", None), "editor", "") != "claude"
+
+
 def _cortes_da_ia(project: Project, ctx, words: list[dict],
                   claps: list[dict], whistles: list[dict]) -> dict | None:
     """Chama a IA para decidir os cortes. None = modo desligado ou sem chave.
@@ -714,7 +724,7 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     # como saber que era falta de chave — ainda mais porque a chave só existia
     # dentro do editor, que só abre DEPOIS deste processamento.
     ctx.stage("ia", "a IA vai decidir os cortes")
-    if getattr(getattr(project, "plan", None), "editor", "") == "claude":
+    if not gemini_permitido(project):
         ctx.progress(0.95, "o Claude é o editor deste vídeo: o corte sai pela "
                            "regra do programa e o Claude revisa pelo MCP")
         return {"ok": False, "erro": "claude", "pulada": True}
@@ -1150,6 +1160,8 @@ def enriquecer(project: Project, ctx) -> dict:
                           f"sem a IA ({motivo})")
         return {"ok": True, "sem_ia": True, "motivo": motivo, **r}
 
+    if not gemini_permitido(project):
+        return pelo_programa("o Claude é o editor deste vídeo")
     if not gemini.chave_guardada():
         return pelo_programa("sem chave do Gemini")
     ctx.stage("anexos", f"posicionando {len(midias)} mídia(s) e escrevendo "
@@ -1198,7 +1210,9 @@ def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
              if w.get("src_i", w["i"]) not in removidas]
     saida: dict = {"ok": False, "alvo": alvo, "antes": round(atual, 2),
                    "recusados": [], "cortes": 0, "por": "programa"}
-    chave = gemini.chave_guardada()
+    # com o Claude editando, o Gemini não escolhe o que sai: aqui só chega o
+    # resumo pela regra (a rede de segurança de quando o Claude não rodou)
+    chave = gemini.chave_guardada() if gemini_permitido(project) else ""
 
     if chave and vivas:
         try:
@@ -1255,7 +1269,8 @@ def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
     return saida
 
 
-def one_click(project: Project, ctx, fontes_extras: list[str] | None = None) -> dict:
+def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
+              para_o_claude: bool = False) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
     O usuário solta o arquivo e recebe o vídeo PRONTO: cortado (pela IA, com
@@ -1284,6 +1299,17 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None) -> 
     if extras:
         project.analysis = load(project.id).analysis
     b = _scoped(ctx, 0.52, 0.60, lambda c: auto_edit(project, c))
+    if para_o_claude:
+        # O CLAUDE EDITA A PARTIR DAQUI. O resumo, o b-roll e a pós são
+        # decisões dele; a prévia só depois que ele terminar (quem chama —
+        # server.api_oneclick — cuida disso). Os anexos entram pela regra,
+        # para ele já ver onde estão.
+        try:
+            x = _scoped(ctx, 0.60, 0.62, lambda c: enriquecer(project, c))
+        except Exception as exc:  # noqa: BLE001
+            x = {"ok": False, "erro": str(exc)}
+        return {"analysis": a, "edit": b, "anexos": x, "para_o_claude": True,
+                "duracao": round(duracao_de_saida(project), 2)}
     # RESUMO PARA CABER NO ALVO. Depois do corte (só aqui existe a duração de
     # verdade) e antes dos anexos (que se ancoram na linha do tempo final).
     r = {"ok": False, "pulada": True}

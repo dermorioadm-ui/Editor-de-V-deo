@@ -48,6 +48,10 @@ def main() -> int:
 
     host = args.host or ("0.0.0.0" if args.rede else HOST)
     port = args.port or PORT
+    # a porta de verdade vai para o ambiente: o MCP que o Claude Code abre
+    # (claude_editor) herda e fala com ESTE editor, mesmo com --port
+    import os
+    os.environ["EDITOR_PORT"] = str(port)
     ensure_dirs()
 
     ok, detail = ffmpeg_available()
