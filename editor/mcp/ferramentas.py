@@ -234,33 +234,70 @@ def ver_projeto(c: Cliente, a: dict) -> str:
 
 @ferramenta(
     "transcricao",
-    "O que foi dito, com o número de cada palavra. Os números são o que as "
-    "ferramentas de corte pedem. Peça um pedaço por vez em vídeo longo.",
+    "O que foi dito — TODAS as gravações do vídeo, na ordem da montagem — com "
+    "o número de cada palavra entre colchetes (é o número que cortar e "
+    "devolver pedem). Uma linha por frase ou pausa. ~ marca o que já foi "
+    "cortado. restante=true mostra só o que FICOU, para reler o texto como "
+    "ele vai soar. 'de' e 'ate' são posições na lista (400 por vez).",
     {
         "properties": {
             "projeto": {"type": "string"},
-            "de": {"type": "integer", "description": "primeira palavra (padrão 0)"},
-            "ate": {"type": "integer", "description": "última palavra (padrão: 400 adiante)"},
+            "de": {"type": "integer", "description": "posição inicial (padrão 0)"},
+            "ate": {"type": "integer", "description": "posição final (padrão: 400 adiante)"},
+            "restante": {"type": "boolean",
+                         "description": "true = só as palavras que ficaram no vídeo"},
         },
         "required": ["projeto"],
     },
 )
 def transcricao(c: Cliente, a: dict) -> str:
     pid = str(a.get("projeto") or "")
-    p = _projeto(c, pid)
-    palavras = ((p.get("analysis") or {}).get("words")) or []
+    analise = _projeto(c, pid).get("analysis") or {}
+    palavras = _palavras_da_montagem(analise)
     if not palavras:
         return "ainda não há transcrição. Rode editar_sozinho primeiro."
+    fora = set(analise.get("removed_word_ids") or [])
+    if a.get("restante"):
+        palavras = [w for w in palavras if w.get("i") not in fora]
     de = max(0, int(a.get("de") or 0))
     ate = int(a.get("ate") if a.get("ate") is not None else de + 400)
     fatia = palavras[de:ate + 1]
-    fora = set((p.get("analysis") or {}).get("removed_word_ids") or [])
-    texto = " ".join(
-        f"[{w.get('i', i + de)}]{'~' if w.get('i', i + de) in fora else ''}"
-        f"{w.get('text', '')}"
-        for i, w in enumerate(fatia))
+    linhas: list[str] = []
+    atual: list[str] = []
+    fonte = None
+    for k, w in enumerate(fatia):
+        if w.get("source", "main") != fonte:
+            if atual:
+                linhas.append(" ".join(atual))
+                atual = []
+            if fonte is not None or w.get("source", "main") != "main":
+                linhas.append(f"— gravação {w.get('_n', 1)} —")
+            fonte = w.get("source", "main")
+        i = w.get("i")
+        atual.append(f"[{i}]{'~' if i in fora else ''}{w.get('text', '')}")
+        prox = fatia[k + 1] if k + 1 < len(fatia) else None
+        fim_de_frase = str(w.get("text", "")).rstrip().endswith((".", "?", "!"))
+        pausa = prox is not None and float(prox.get("start", 0)) - float(w.get("end", 0)) > 0.7
+        if fim_de_frase or pausa:
+            linhas.append(" ".join(atual))
+            atual = []
+    if atual:
+        linhas.append(" ".join(atual))
+    titulo = "o que FICOU no vídeo" if a.get("restante") else "~ = já cortada"
     return (f"palavras {de} a {min(ate, len(palavras) - 1)} de {len(palavras) - 1} "
-            f"(~ = já cortada):\n{texto}")
+            f"({titulo}):\n" + "\n".join(linhas))
+
+
+def _palavras_da_montagem(analise: dict) -> list[dict]:
+    """As palavras de todas as gravações, na ordem da montagem."""
+    out = [{**w, "source": w.get("source", "main"), "_n": 1}
+           for w in analise.get("words") or []]
+    fontes = sorted((analise.get("fontes") or {}).values(),
+                    key=lambda f: (f or {}).get("ordem", 0))
+    for n, f in enumerate(fontes, start=2):
+        out += [{**w, "source": w.get("source") or f.get("media_id"), "_n": n}
+                for w in (f or {}).get("words") or []]
+    return out
 
 
 # ------------------------------------------------------------------- cortar
@@ -284,10 +321,26 @@ def transcricao(c: Cliente, a: dict) -> str:
 def cortar(c: Cliente, a: dict) -> str:
     pid = str(a.get("projeto") or "")
     antes = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
+    recusa = ""
     if a.get("palavras"):
         ids = [int(x) for x in a["palavras"]]
         r = c.post(f"/api/projects/{pid}/ops/remove-words", {"word_ids": ids})
-        o_que = f"{len(ids)} palavra(s)"
+        # cada trecho contínuo de palavras é um corte; o que não coube (sem
+        # vale de silêncio entre as vizinhas) volta DITO, com o texto — quem
+        # revisa precisa saber o que ficou para decidir o que fazer
+        grupos = r.get("applied") or []
+        feitos = [g for g in grupos if g.get("ok")]
+        recusados = [g for g in grupos if not g.get("ok")]
+        o_que = f"{len(ids)} palavra(s) em {len(feitos)} trecho(s)"
+        if recusados:
+            texto = {w.get("i"): w.get("text", "") for w in _palavras_da_montagem(
+                _projeto(c, pid).get("analysis") or {})}
+            recusa = "\n".join(
+                f"NÃO cortado: \"{' '.join(texto.get(i, str(i)) for i in g.get('words') or [])}\""
+                f" — {g.get('reason') or 'sem motivo'} (corte a expressão inteira em "
+                f"volta, ou deixe)" for g in recusados)
+            if not feitos:
+                return recusa
     elif a.get("inicio") is not None and a.get("fim") is not None:
         r = c.post(f"/api/projects/{pid}/ops/delete-range",
                    {"start": float(a["inicio"]), "end": float(a["fim"])})
@@ -299,7 +352,8 @@ def cortar(c: Cliente, a: dict) -> str:
     depois = ((_projeto(c, pid).get("timeline") or {}).get("duration")) or 0.0
     explica = " | ".join((r.get("explain") or [])[:2])
     return (f"cortado {o_que}: {_seg(antes)} → {_seg(depois)}"
-            + (f"\n{explica}" if explica else ""))
+            + (f"\n{explica}" if explica else "")
+            + (f"\n{recusa}" if recusa else ""))
 
 
 @ferramenta(

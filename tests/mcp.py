@@ -202,6 +202,27 @@ def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
     check("cena em" in texto and "luz" in texto and "fala" in texto,
           f"analisar_cena descreve o quadro e a fala dali ({texto[:120]!r})")
 
+    # ---- a revisão: ler em frases, cortar, reler só o que ficou
+    from editor.mcp.ferramentas import _palavras_da_montagem
+    montagem = _palavras_da_montagem({
+        "words": [{"i": 0, "text": "a"}],
+        "fontes": {"m2": {"ordem": 2, "media_id": "m2", "words": [{"i": 200000, "text": "c"}]},
+                   "m1": {"ordem": 1, "media_id": "m1", "words": [{"i": 100000, "text": "b"}]}}})
+    check([w["i"] for w in montagem] == [0, 100000, 200000]
+          and [w["_n"] for w in montagem] == [1, 2, 3],
+          "a transcrição que o Claude lê tem TODAS as gravações, na ordem da montagem")
+    texto = F.chamar(cliente, "transcricao", {"projeto": pid})
+    check("\n[" in texto and "~" in texto,
+          "a transcrição vem em linhas (frase/pausa) e marca o que já saiu")
+    ficou = F.chamar(cliente, "transcricao", {"projeto": pid, "restante": True})
+    fora = svc.load(pid).analysis.get("removed_word_ids") or []
+    check("FICOU" in ficou and fora and f"[{fora[0]}]" not in ficou,
+          "restante=true mostra só o que ficou, para reler o texto como ele vai soar")
+    vivas = [w["i"] for w in svc.load(pid).analysis["words"] if w["i"] not in fora]
+    texto = F.chamar(cliente, "cortar", {"projeto": pid, "palavras": [vivas[-2]]})
+    check("trecho(s)" in texto, f"cortar diz quantos trechos cortou ({texto.splitlines()[0]})")
+    F.chamar(cliente, "devolver", {"projeto": pid, "palavras": [vivas[-2]]})
+
     # ---- o que o Gemini decidia, agora pelas ferramentas
     tl = svc.timeline_summary(svc.load(pid))
     b0 = tl["blocks"][0]["id"]

@@ -319,6 +319,11 @@ def main() -> int:
               "o pedido leva o projeto e o que ele escreveu na primeira tela")
         check("Gemini NÃO participa" in a["prompt"],
               "e diz que o Gemini está fora")
+        check("REVISÃO — o seu trabalho principal" in a["prompt"]
+              and "REDUNDÂNCIA" in a["prompt"] and "MULETA" in a["prompt"]
+              and "Não refaça isso" in a["prompt"],
+              "na primeira edição o trabalho dele é a REVISÃO da fala; o mecânico "
+              "(silêncio, aceleração, legenda, filtro, música) o sistema já fez")
 
         proj = svc.load(pid)
         g = [x for x in proj.plan.graficos if x.origem == "claude"]

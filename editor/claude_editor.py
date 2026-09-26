@@ -328,8 +328,55 @@ def pedido_da_pos(project) -> str:
     ])
 
 
+REVISAO = [
+    "REVISÃO — o seu trabalho principal. Leia a transcrição INTEIRA antes de "
+    "cortar qualquer coisa: entenda a mensagem, o gancho, a promessa e a oferta. "
+    "Depois corte, com cortar (pelos números das palavras), tudo o que tira a "
+    "dinâmica da conversa:",
+    "  • REDUNDÂNCIA: a mesma ideia dita duas vezes com outras palavras — fica a "
+    "versão mais forte e mais curta.",
+    "  • REPETIÇÃO e TAKE REFEITO: a frase começada, abandonada e dita de novo — "
+    "fica a última versão completa.",
+    "  • MULETA que não carrega sentido: 'né', 'tipo', 'então', 'assim', 'é...', "
+    "'hã', 'basicamente', 'na verdade', 'vamos lá', 'beleza?', 'olha só', "
+    "'sabe?', 'enfim', 'aí'.",
+    "  • ENROLAÇÃO de abertura e de transição: 'então pessoal, hoje eu vou falar "
+    "com vocês sobre...', 'antes de começar...', 'como eu falei antes...' — o "
+    "vídeo começa no que importa.",
+    "  • EXPLICAÇÃO DEMAIS: detalhe que não muda a decisão de quem assiste, "
+    "exemplo em dobro, a mesma prova contada duas vezes.",
+    "  • AUTOCORREÇÃO audível ('quer dizer...', 'digo...') — fica só a forma certa.",
+    "  O QUE NUNCA SAI: o gancho, a promessa, o preço, a garantia, o CTA, números "
+    "e provas. Nenhum corte pode deixar frase sem sentido ou com concordância "
+    "quebrada: leia a frase como ela fica depois do corte. Prefira tirar a "
+    "expressão inteira a picotar uma palavra no meio da fala corrida; se o "
+    "cortar disser 'NÃO cortado', corte a expressão em volta ou deixe como está.",
+    "  Depois, RELEIA o que ficou (transcricao com restante=true): o texto tem que "
+    "fluir como se tivesse sido dito assim. Se algum corte truncou a fala, use "
+    "devolver. Palavra mal transcrita (nome, marca, número) também é revisão: "
+    "legendas acao=corrigir.",
+]
+
+
+def _o_que_o_sistema_fez(plan) -> str:
+    feito = ["o corte de silêncio", "a aceleração", "o jogo de câmera (zoom)"]
+    feito.append("a legenda" if plan.export.burn_subtitles else "sem legenda (pedido)")
+    if plan.look and plan.look != "nenhum":
+        feito.append(f"o filtro ({plan.look})")
+    if (plan.music or {}).get("media_id"):
+        feito.append("a música")
+    return ", ".join(feito)
+
+
 def pedido(project, modo: str = "completo") -> str:
-    """O pedido de edição, com o que a primeira tela decidiu."""
+    """O pedido da primeira edição: a REVISÃO é o trabalho do Claude.
+
+    O mecânico — corte de silêncio, aceleração, câmera, legenda, filtro,
+    música — o sistema já fez, do jeito que a primeira tela pediu. O que o
+    sistema não sabe fazer é ler a fala como um editor lê um texto: tirar a
+    redundância, a repetição, a muleta, a enrolação. É isso que o Claude faz;
+    o resto, só se o dono pedir.
+    """
     from .projects import duracao_de_saida
 
     if modo == "pos":
@@ -341,57 +388,43 @@ def pedido(project, modo: str = "completo") -> str:
         "vertical" if info and info.display_size[1] > info.display_size[0] else "horizontal")
     dono = _dono(plan)
     linhas = [
-        f"Você é o editor do projeto {project.id} (\"{project.name}\") no Sharkcut.",
-        f"O vídeo já foi transcrito e passou pelo corte automático pela REGRA "
-        f"(silêncio, palma, assobio, comando falado). Agora ele tem {dur:.1f} s, "
-        f"formato {formato}. O Gemini NÃO participa desta edição: tudo o que ele "
-        f"decidiria, você decide. Quando você terminar, o Sharkcut gera a prévia "
-        f"e o arquivo final sozinho — você não exporta.",
+        f"Você é o editor do projeto {project.id} (\"{project.name}\") no Sharkcut, "
+        f"na PRIMEIRA edição deste vídeo ({dur:.1f} s, formato {formato}).",
+        f"O Gemini NÃO participa: tudo o que ele decidiria, você decide.",
+        f"O SISTEMA JÁ FEZ, do jeito que a primeira tela pediu: {_o_que_o_sistema_fez(plan)}. "
+        f"Não refaça isso — respiro, ritmo e estilo de legenda só se o dono pedir "
+        f"abaixo. Quando você terminar, o Sharkcut gera a prévia e o arquivo final "
+        f"sozinho — você não exporta.",
         "",
-        "O QUE O DONO DO VÍDEO PEDIU: " + (dono or "nada específico — entregue o "
-                                           "melhor vídeo de anúncio que der."),
+        "O QUE O DONO DO VÍDEO PEDIU: " + (dono or "nada além da revisão."),
     ]
     if modo == "edicao":
-        linhas.append("SEM PÓS-EDIÇÃO: ele quer só a edição — nenhum título, tela, "
-                      "gráfico, transição ou camada por cima do vídeo.")
+        linhas.append("SEM PÓS-EDIÇÃO: nenhum título, tela, gráfico, transição ou "
+                      "camada por cima do vídeo.")
     if plan.alvo_duracao > 0:
-        linhas.append(f"DURAÇÃO: o vídeo final tem que caber em {plan.alvo_duracao:.0f} s. "
-                      f"Escolha você o que sai (nunca o gancho, o preço ou o CTA).")
+        linhas.append(f"DURAÇÃO: o vídeo final tem que caber em {plan.alvo_duracao:.0f} s — "
+                      f"a revisão escolhe o que sai (nunca o gancho, o preço ou o CTA).")
     br = plan.broll or {}
     if br.get("auto"):
         linhas.append(f"B-ROLL: ele quer b-roll na frequência {_freq(br.get('frequencia', 'medio'))}"
                       + (f", assunto: {br['assunto']}" if br.get("assunto") else "")
-                      + ". Use buscar_broll com ver=true para escolher OLHANDO e "
-                        "broll_do_banco para pôr — termos em português que tenham a ver "
-                        "com o assunto do vídeo inteiro, não com uma palavra solta. Se o "
-                        "banco não tiver chave, use broll_automatico.")
-    if not plan.export.burn_subtitles:
-        linhas.append("LEGENDA: o vídeo sai SEM legenda queimada.")
-    passos = [
-        "pos_contexto e transcricao (todas as palavras, de 400 em 400).",
-        "CORTES com cortar: repetições (a frase dita de novo — fica a melhor, "
-        "normalmente a última), frases começadas e abandonadas, gaguejo, muleta "
-        "('é...', 'né', 'tipo'), erro de fala. Nunca corte no meio de uma ideia. "
-        "Se o corte automático comeu uma palavra (frase sem sentido), use devolver.",
-        "FÔLEGO: se o vídeo inteiro estiver lento ou colado demais, respiro "
-        "(0 seco … 1 com respiro) — só neste ponto, antes do resto.",
-        "RITMO E CÂMERA com ritmo: a etapa de cada bloco; velocidade 1.0 no "
-        "gancho, na oferta, na garantia e no CTA, até 1.15–1.2 na explicação; "
-        "zoom mais fechado (1.08–1.15) nas frases de impacto e aberto (1.0) no "
-        "resto — alternar dá a sensação de duas câmeras.",
-        "LEGENDAS: legendas acao=ver; corrija com acao=corrigir nomes, marcas, "
-        "números e termos mal transcritos; ajuste o estilo se o pedido falar disso.",
-        "B-ROLL, se pedido.",
-    ]
+                      + ". Depois da revisão, use buscar_broll com ver=true para escolher "
+                        "OLHANDO e broll_do_banco para pôr — termos em português que tenham "
+                        "a ver com o assunto do vídeo inteiro. Sem chave do banco, "
+                        "broll_automatico.")
+    passos = ["pos_contexto e transcricao (TODAS as palavras, de 400 em 400)."]
+    passos.append("\n".join(REVISAO))
+    passos.append("SÓ SE O DONO PEDIU: respiro (fôlego do corte de silêncio), ritmo "
+                  "(velocidade, zoom e etapa de cada bloco), legendas acao=estilo.")
+    if br.get("auto"):
+        passos.append("B-ROLL.")
     if modo == "completo":
         passos += [GUIA_DA_POS,
                    "CONFIRA com ver_quadros o começo, cada gráfico e cada transição, "
                    "e corrija o que ficou ruim com grafico(id=...)."]
-    else:
-        passos += ["CONFIRA com ver_quadros o começo e alguns pontos (legenda, "
-                   "enquadramento, b-roll) e corrija o que ficou ruim."]
-    passos.append("Termine com um RELATÓRIO curto, em tópicos, dizendo o que você "
-                  "fez e por quê — ele aparece na tela do editor para o dono do vídeo.")
+    passos.append("Termine com um RELATÓRIO curto, em tópicos, para o dono do vídeo: "
+                  "o que você tirou na revisão (cite os trechos entre aspas) e por quê, "
+                  "o que mais mudou, e quanto o vídeo encurtou (antes → depois).")
     linhas += ["", "ORDEM DE TRABALHO:"] + [f"{i}. {x}" for i, x in enumerate(passos, 1)]
     return "\n".join(linhas)
 

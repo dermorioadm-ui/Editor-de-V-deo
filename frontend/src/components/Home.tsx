@@ -491,8 +491,10 @@ export default function Home() {
             <div className="space-y-2">
               {claude?.instalado ? (
                 <p className="text-[11px] text-emerald-300">
-                  ✓ Claude Code {claude.versao} nesta máquina — ele corta, acerta o ritmo, a
-                  câmera e a legenda, escolhe o b-roll e faz a pós-edição. O Gemini fica fora.
+                  ✓ Claude Code {claude.versao} nesta máquina. O sistema faz o mecânico (silêncio,
+                  aceleração, câmera, legenda, filtro, música); o Claude faz a REVISÃO da fala —
+                  tira redundância, repetição, muleta e enrolação — e o que você pedir aqui. O
+                  Gemini fica fora.
                 </p>
               ) : (
                 <div className="space-y-1">
@@ -517,7 +519,7 @@ export default function Home() {
                 <span className="label">o que você quer do Claude nesta edição (opcional)</span>
                 <textarea className="field w-full text-xs" rows={2} value={pedidoClaude}
                           data-campo="pedido-claude"
-                          placeholder="ex.: corte bem seco, legenda amarela em maiúsculas, título no gancho, telas de tópico quando mudo de assunto, texto atrás de mim no começo"
+                          placeholder="além da revisão (opcional): ex.: corte bem seco, legenda amarela, ritmo mais dinâmico, resumir para 60 s"
                           onChange={(e) => setPedidoClaude(e.target.value)} />
               </label>
               <div className="flex items-center gap-2">

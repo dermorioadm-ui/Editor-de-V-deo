@@ -1517,14 +1517,22 @@ amarela, título no gancho, telas de tópico quando mudo de assunto") e aperte
 
 O que acontece:
 
-1. o Sharkcut faz o mecânico: transcreve, corta o silêncio pela regra, legenda;
+1. o Sharkcut faz o mecânico, como sempre fez e como a primeira tela pediu:
+   transcreve, corta o silêncio, acelera, faz o jogo de câmera, legenda, põe
+   filtro e música;
 2. chama o **Claude Code desta máquina** sem janela, com o login da SUA
-   assinatura — nenhuma chave paga. O Claude recebe o projeto e as ferramentas
-   do Sharkcut e decide tudo o que o Gemini decidia: o que sai do corte
-   (repetição, frase errada, gaguejo), o fôlego do corte de silêncio, a
-   velocidade e a câmera de cada bloco, a legenda (palavra mal transcrita,
-   estilo), o resumo para caber na duração, o b-roll (escolhendo **olhando** as
-   miniaturas) e a pós-edição inteira. Você acompanha o passo a passo na tela
+   assinatura — nenhuma chave paga — para a parte que o sistema não sabe
+   fazer: a **REVISÃO** da fala. Ele lê a transcrição inteira, como um editor
+   lê um texto, e tira o que tira a dinâmica da conversa: a **redundância**
+   (a mesma ideia dita duas vezes), a **repetição** e o take refeito, a
+   **muleta** ("né", "tipo", "então", "assim", "é..."), a **enrolação** de
+   abertura ("então pessoal, hoje eu vou falar sobre..."), a explicação a
+   mais. Nunca o gancho, o preço, a garantia ou o CTA; e nenhum corte pode
+   deixar frase truncada — ele relê o texto que ficou e devolve o que precisar.
+   Também corrige na legenda a palavra mal transcrita (nome, marca, número).
+   O resto — fôlego do corte, ritmo, estilo da legenda, resumo, b-roll — só
+   se você pedir no campo da primeira tela, e a pós-edição se a chave dela
+   estiver em "entregar finalizado". Você acompanha o passo a passo na tela
    de processamento ("Claude: pondo título…", "Claude: conferindo 3 quadros…");
 3. o Sharkcut gera a prévia e o arquivo final. O editor abre com tudo pronto.
 
@@ -1549,8 +1557,8 @@ Entregou só a edição e depois quis a pós? No editor, **fazer a pós-edição
 ela entra por cima do que já está lá, e a prévia e o arquivo são refeitos. Não
 gostou? **tirar o que o Claude pôs**, na mesma aba — volta a ser só a edição.
 
-No topo do editor fica o **relatório** do que ele fez, e um campo **pedir ao
-Claude**: "aumenta a legenda", "tira o título do começo", "põe uma tela de
+No topo do editor fica o **relatório** do que ele fez — os trechos que ele
+tirou, entre aspas, e por quê —, e um campo **pedir ao Claude**: "aumenta a legenda", "tira o título do começo", "põe uma tela de
 tópico em 0:40" — ele faz só aquilo, sem refazer o resto.
 
 As travas: o Claude, nesta edição, **não tem terminal, não mexe em arquivo e
