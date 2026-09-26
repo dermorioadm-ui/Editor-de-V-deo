@@ -528,6 +528,8 @@ def aplicar_receita(project, payload: dict) -> None:
             atual["auto"] = bool(pedido["auto"])
         if "frequencia" in pedido and _freq(pedido["frequencia"]) in FREQUENCIAS:
             atual["frequencia"] = _freq(pedido["frequencia"])
+        if pedido.get("fonte") in ("banco", "biblioteca"):
+            atual["fonte"] = pedido["fonte"]
         plan.broll = atual
     if "look" in payload:
         from .render.looks import BY_ID
@@ -2547,6 +2549,21 @@ def api_banco_chaves(payload: dict = Body(...)) -> dict:
     for fonte in banco.FONTES:
         if fonte in payload:
             banco.guardar_chave(fonte, str(payload.get(fonte) or ""))
+            # testa NA HORA: descobrir a chave errada só ao gerar o vídeo, com
+            # o b-roll saindo vazio, é o pior momento
+            if banco.chave(fonte):
+                banco.testar_chave(fonte)
+    return {**banco.estado(), "baixados": len(banco.baixados())}
+
+
+@app.post("/api/banco/testar")
+def api_banco_testar() -> dict:
+    """Testa as chaves guardadas (uma busca mínima em cada banco)."""
+    from . import banco
+
+    for fonte in banco.FONTES:
+        if banco.chave(fonte):
+            banco.testar_chave(fonte)
     return {**banco.estado(), "baixados": len(banco.baixados())}
 
 
@@ -2635,8 +2652,10 @@ def api_broll_auto(pid: str, payload: dict = Body(default={})) -> dict:
     freq = broll_auto._freq(payload.get("frequencia")
                             or (project.plan.broll or {}).get("frequencia") or "medio")
     ia = bool(payload.get("ia", True))
+    fonte = payload.get("fonte") if payload.get("fonte") in broll_auto.FONTES else None
     return _run("broll-auto", pid,
-                lambda ctx: broll_auto.aplicar(svc.load(pid), ctx, freq, ia))
+                lambda ctx: broll_auto.aplicar(svc.load(pid), ctx, freq, ia,
+                                               fonte=fonte))
 
 
 @app.post("/api/projects/{pid}/broll-auto/tirar")

@@ -120,10 +120,17 @@ export default function BancoBroll({ projectId, onChanged, snapshot }: {
     if (chaves.pixabay.trim()) corpo.pixabay = chaves.pixabay.trim()
     if (!Object.keys(corpo).length) { toast('warn', 'Cole pelo menos uma chave'); return }
     try {
-      setEstado(await api.bancoChaves(corpo))
+      const e = await api.bancoChaves(corpo)
+      setEstado(e)
       setChaves({ pexels: '', pixabay: '' })
-      setEditandoChaves(false)
-      toast('ok', 'Chave guardada', 'Fica neste computador. Já dá para buscar.')
+      const ruins = (Object.keys(corpo) as ('pexels' | 'pixabay')[])
+        .filter((f) => e?.[f]?.funciona === false)
+      if (ruins.length) {
+        toast('warn', 'A chave não funcionou', ruins.map((f) => e[f].aviso).join(' · '))
+      } else {
+        setEditandoChaves(false)
+        toast('ok', 'Chave guardada e funcionando', 'Fica neste computador. Já dá para buscar.')
+      }
     } catch (e: any) {
       toast('error', 'Não guardei a chave', String(e.message ?? e))
     }
@@ -187,7 +194,11 @@ export default function BancoBroll({ projectId, onChanged, snapshot }: {
           </p>
           {(['pexels', 'pixabay'] as const).map((f) => (
             <div key={f} className="flex items-center gap-2">
-              <span className="text-xs w-16 text-slate-300">{f === 'pexels' ? 'Pexels' : 'Pixabay'}</span>
+              <span className="text-xs w-24 text-slate-300">
+                {f === 'pexels' ? 'Pexels' : 'Pixabay'}
+                {estado?.[f]?.funciona === true && <span className="text-emerald-300"> ✓</span>}
+                {estado?.[f]?.funciona === false && <span className="text-red-300" title={estado[f].aviso}> ✗</span>}
+              </span>
               <input className="field flex-1 font-mono text-xs" type="password"
                      placeholder={estado?.[f]?.tem_chave
                        ? `guardada (…${estado[f].final}) — cole outra para trocar`

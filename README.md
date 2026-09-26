@@ -792,10 +792,24 @@ Na primeira tela, **B-roll automático**: *sem*, *pouco* (1 a cada ~20 s),
 *médio* (~12 s) ou *muito* (~7 s). Com ele ligado, o vídeo já sai com os
 b-rolls. A IA (com a chave do Gemini) lê a fala e escolhe onde dá para
 ilustrar, quanto cada um dura e o que mostrar; sem a chave, a regra do
-programa escolhe uma frase por intervalo, a que melhor se ilustra. O vídeo de
-cada um vem **primeiro da sua biblioteca** (pelas palavras-chave) e, se não
-houver, do banco grátis. O começo (o gancho) e o fim ficam com o seu rosto, e
-a fala continua por baixo.
+programa escolhe uma frase por intervalo, a que melhor se ilustra. O começo
+(o gancho) e o fim ficam com o seu rosto, e a fala continua por baixo.
+
+**De onde vem o vídeo:** por padrão, do **Pexels e do Pixabay**, com as
+chaves grátis que você cadastrou. É de graça e não tem limite que um anúncio
+alcance (o Pexels deixa 200 buscas por hora). Cada b-roll busca o que a fala
+diz, primeiro **em inglês** (a IA dá a busca nas duas línguas; é em inglês que
+esses bancos acham mais) e depois em português, sempre no formato do seu vídeo
+(em pé, deitado ou quadrado). Entre os achados, vem antes o vídeo que você
+**ainda não usou** em outro anúncio: b-roll repetido de um criativo para o
+outro denuncia banco de imagem. A sua biblioteca só entra se o banco não
+responder (sem internet, por exemplo). Se preferir os seus vídeos, escolha
+**minha biblioteca primeiro**: aí entram os que você mandou (pelas
+palavras-chave) e o banco completa o resto.
+
+**As chaves são testadas** assim que você guarda: a tela mostra *Pexels ✓* e
+*Pixabay ✓* (ou o motivo, se a chave foi recusada). Depois de gerar, a linha
+de cima do editor diz quantos b-rolls vieram de cada banco.
 
 No editor, aba **Mídia › B-roll automático**: escolha a frequência e clique
 **pôr b-roll sozinho**. **Refazer** troca só os automáticos; os que você pôs à

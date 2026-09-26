@@ -3,6 +3,10 @@ import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { toast, useStore } from '../state/store'
 
+const NOME_FONTE: Record<string, string> = {
+  pexels: 'Pexels', pixabay: 'Pixabay', biblioteca: 'sua biblioteca',
+}
+
 const FREQ: Record<string, string> = {
   pouco: 'pouco (1 a cada ~20 s)', medio: 'médio (1 a cada ~12 s)', muito: 'muito (1 a cada ~7 s)',
 }
@@ -20,13 +24,20 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
   const [freq, setFreq] = useState<string>(project?.plan?.broll?.frequencia ?? 'medio')
+  // de onde vem o vídeo: o banco grátis (Pexels e Pixabay) primeiro, ou a
+  // biblioteca dele primeiro
+  const [fonte, setFonte] = useState<string>(project?.plan?.broll?.fonte ?? 'banco')
   const [estado, setEstado] = useState<any>(null)
   const [ia, setIa] = useState<any>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useStore((s) => (jobId ? s.jobs[jobId] : undefined))
 
   useEffect(() => {
-    api.bancoEstado().then(setEstado).catch(() => setEstado(null))
+    api.bancoEstado().then((e) => {
+      setEstado(e)
+      const falta = ['pexels', 'pixabay'].some((f) => e?.[f]?.tem_chave && e?.[f]?.funciona == null)
+      if (falta) api.bancoTestar().then(setEstado).catch(() => {})
+    }).catch(() => setEstado(null))
     api.aiConfig().then(setIa).catch(() => setIa(null))
   }, [projectId])
 
@@ -37,7 +48,9 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
       onChanged().then(() => {
         const r = job.result ?? {}
         const n = r.postos?.length ?? 0
-        toast(n ? 'ok' : 'warn', n ? `${n} b-roll(s) no vídeo` : 'Nenhum b-roll entrou',
+        const de = Object.entries(r.por_fonte ?? {})
+          .map(([k, v]) => `${v} do ${NOME_FONTE[k] ?? k}`).join(', ')
+        toast(n ? 'ok' : 'warn', n ? `${n} b-roll(s) no vídeo${de ? ` — ${de}` : ''}` : 'Nenhum b-roll entrou',
           (r.quem === 'ia' ? 'A IA escolheu os pontos. ' : 'A regra do programa escolheu os pontos. ')
           + (r.pulados?.length ? `${r.pulados.length} ponto(s) sem vídeo: ${r.pulados[0].motivo}. ` : '')
           + (n ? 'Clique num b-roll no trilho para ajustar ou substituir.' : ''))
@@ -64,11 +77,16 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
                 onChange={(e) => setFreq(e.target.value)}>
           {Object.entries(FREQ).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
+        <select className="field text-xs py-0.5 w-56" value={fonte} data-fonte="1"
+                onChange={(e) => setFonte(e.target.value)}>
+          <option value="banco">vídeos do Pexels e Pixabay (grátis)</option>
+          <option value="biblioteca">minha biblioteca primeiro</option>
+        </select>
         <button className="btn btn-xs btn-primary" disabled={ocupado} data-por-sozinho="1"
                 onClick={async () => {
                   snapshot()
                   try {
-                    const j = await api.brollAuto(projectId, freq)
+                    const j = await api.brollAuto(projectId, freq, fonte)
                     setJobId(j.id)
                   } catch (e: any) {
                     toast('error', 'Não deu para começar', String(e.message ?? e))
@@ -94,6 +112,20 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
         O vídeo vem da sua biblioteca (pelas palavras-chave) ou do banco grátis. A fala continua
         por baixo; o começo e o fim ficam com o seu rosto.
       </p>
+      {estado && (
+        <p className="text-[10px] mt-1" data-chaves-estado="1">
+          {(['pexels', 'pixabay'] as const).map((f, k) => {
+            const e = estado[f] ?? {}
+            const nome = NOME_FONTE[f]
+            const txt = !e.tem_chave ? `${nome}: sem chave (cole aqui embaixo)`
+              : e.funciona === true ? `${nome} ✓ funcionando`
+                : e.funciona === false ? `${nome} ✗ ${e.aviso}` : `${nome}: testando…`
+            const cor = !e.tem_chave ? 'text-slate-500'
+              : e.funciona === false ? 'text-red-300' : 'text-emerald-300'
+            return <span key={f} className={cor}>{k ? ' · ' : ''}{txt}</span>
+          })}
+        </p>
+      )}
       {semBanco && bibliotecaVazia && (
         <p className="text-[11px] text-amber-300 mt-1">
           Falta de onde tirar os vídeos: cole a chave grátis do banco (aqui embaixo) ou envie
@@ -101,7 +133,10 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
       )}
       {ultima && (
         <p className="text-[10px] text-slate-500 mt-1">
-          última vez: {ultima.postos} posto(s){ultima.pulados ? `, ${ultima.pulados} sem vídeo` : ''}
+          última vez: {ultima.postos} posto(s)
+          {Object.keys(ultima.por_fonte ?? {}).length > 0 && ` (${Object.entries(ultima.por_fonte)
+            .map(([k, v]) => `${v} do ${NOME_FONTE[k] ?? k}`).join(', ')})`}
+          {ultima.pulados ? `, ${ultima.pulados} sem vídeo` : ''}
           {' '}· {ultima.quem === 'ia' ? 'escolhidos pela IA' : 'escolhidos pela regra'}
           {ultima.aviso ? ` · ${ultima.aviso}` : ''}
         </p>

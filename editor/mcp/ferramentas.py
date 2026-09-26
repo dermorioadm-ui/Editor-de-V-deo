@@ -516,14 +516,19 @@ def broll_do_banco(c: Cliente, a: dict) -> str:
             "projeto": {"type": "string"},
             "frequencia": {"type": "string", "enum": ["pouco", "medio", "muito"],
                            "description": "pouco ~1 a cada 20 s, medio ~12 s, muito ~7 s"},
+            "fonte": {"type": "string", "enum": ["banco", "biblioteca"],
+                      "description": "banco = Pexels e Pixabay primeiro (padrão); "
+                                     "biblioteca = os vídeos dele primeiro"},
         },
         "required": ["projeto"],
     },
 )
 def broll_automatico(c: Cliente, a: dict) -> str:
     pid = str(a.get("projeto") or "")
-    job = c.post(f"/api/projects/{pid}/broll-auto",
-                 {"frequencia": a.get("frequencia") or "medio"})
+    corpo = {"frequencia": a.get("frequencia") or "medio"}
+    if a.get("fonte"):
+        corpo["fonte"] = a["fonte"]
+    job = c.post(f"/api/projects/{pid}/broll-auto", corpo)
     fim = c.esperar_job(pid, job.get("id", ""))
     ruim = _falhou(fim)
     if ruim:
@@ -533,7 +538,7 @@ def broll_automatico(c: Cliente, a: dict) -> str:
               + (f" ({r['aviso']})" if r.get("aviso") else "")]
     for p in r.get("postos") or []:
         linhas.append(f"b-roll “{p.get('busca')}” de {_seg(p.get('out_start'))} a "
-                      f"{_seg(p.get('out_end'))} (da {p.get('de')})")
+                      f"{_seg(p.get('out_end'))} ({p.get('fonte') or p.get('de')})")
     for x in r.get("pulados") or []:
         linhas.append(f"sem b-roll em {_seg(x.get('inicio'))}: {x.get('motivo')}")
     return "\n".join(linhas)

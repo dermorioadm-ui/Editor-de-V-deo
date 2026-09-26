@@ -2,8 +2,11 @@
 
 ONDE e QUANTO: a IA (Gemini) quando há chave, lendo a fala com os tempos;
 sem chave, a regra do programa (uma frase a cada N segundos, e as palavras
-de conteúdo dela viram a busca). O QUÊ: primeiro a biblioteca local (o que
-ele enviou ou já baixou, pelas palavras-chave), depois o banco grátis.
+de conteúdo dela viram a busca). O QUÊ: por padrão o BANCO GRÁTIS (Pexels e
+Pixabay, com as chaves que ele cadastrou), sempre preferindo vídeo que ainda
+não foi usado em outro anúncio; a biblioteca local entra quando o banco não
+responde. Com a fonte "biblioteca", a ordem se inverte: primeiro os vídeos
+dele, pelas palavras-chave, e o banco só completa.
 
 A fala nunca é tocada: b-roll é cobertura, troca só a imagem. O começo (o
 gancho, que é o rosto) e o fim (a chamada, que também é o rosto) ficam
@@ -26,6 +29,13 @@ NOMES = {"pouco": "pouco (1 a cada ~20 s)", "medio": "médio (1 a cada ~12 s)",
 MIN_DUR, MAX_DUR, DUR_PADRAO = 2.0, 5.0, 3.5
 LIVRE_NO_COMECO = 2.0
 LIVRE_NO_FIM = 2.5
+# de onde vem o vídeo de cada b-roll: o banco grátis primeiro (o padrão) ou a
+# biblioteca dele primeiro
+FONTES = ("banco", "biblioteca")
+
+
+def _fonte(fonte: str | None) -> str:
+    return fonte if fonte in FONTES else "banco"
 
 
 def _freq(frequencia: str) -> str:
@@ -66,6 +76,7 @@ def validar(slots: list[dict], duracao: float, maximo: int) -> list[dict]:
         if b - a < MIN_DUR * 0.75 or not busca:
             continue
         saida.append({"inicio": round(a, 3), "fim": round(b, 3), "busca": busca,
+                      "busca_en": " ".join(str(s.get("busca_en") or "").split())[:60],
                       "alternativas": list(s.get("alternativas") or [])[:3],
                       "porque": str(s.get("porque") or "")[:160]})
         if len(saida) >= maximo:
@@ -132,7 +143,10 @@ chamada para ação: ali o rosto vende.
 - "busca" são 1 a 3 palavras em português, CONCRETAS e FILMÁVEIS, do jeito \
 que alguém procuraria num banco de vídeos (ex.: "casa de praia", \
 "ladrão arrombando porta", "celular na mão"). Nada abstrato ("segurança", \
-"sucesso"). Dê também 1 ou 2 "alternativas" mais genéricas.
+"sucesso"). "busca_en" é a MESMA busca em inglês ("beach house", \
+"burglar breaking door"): os bancos de vídeo (Pexels, Pixabay) acham muito \
+mais em inglês. Dê também 1 ou 2 "alternativas" mais genéricas, em \
+português.
 - Espalhe os b-rolls pelo vídeo inteiro.
 Responda só o JSON do esquema."""
 
@@ -147,6 +161,7 @@ ESQUEMA = {
                     "inicio": {"type": "number"},
                     "fim": {"type": "number"},
                     "busca": {"type": "string"},
+                    "busca_en": {"type": "string"},
                     "alternativas": {"type": "array", "items": {"type": "string"}},
                     "porque": {"type": "string"},
                 },
@@ -228,32 +243,42 @@ def da_biblioteca(buscas: list[str], usados: set[str],
             comum = _palavras(busca) & chaves
             if not comum:
                 continue
+            # o vídeo que ELE mandou ganha do que só ficou guardado de um
+            # download do banco: "minha biblioteca" é, antes de tudo, a dele
             nota = (len(comum) * 10 - peso * 3
+                    + (8 if item.get("fonte") == "meu" else 0)
                     + (5 if float(item.get("duracao") or 0) >= precisa else 0))
             if melhor is None or nota > melhor[0]:
                 melhor = (nota, item)
     return melhor[1] if melhor else None
 
 
-def do_banco(buscas: list[str], orientacao: str, usados_ids: set[str],
+def do_banco(buscas: list[tuple[str, str]], orientacao: str, usados_ids: set[str],
              precisa: float, alvo_w: int, alvo_h: int, cancelado=None) -> dict | None:
-    """Busca no banco grátis e baixa o primeiro que serve (e não foi usado)."""
+    """Busca no banco grátis (Pexels e Pixabay) e baixa o primeiro que serve.
+
+    ``buscas`` é uma lista de (termo, idioma); a em inglês vem primeiro quando
+    a IA a deu. Entre os resultados, o que NÃO foi usado neste vídeo nem já
+    baixado para outro anúncio vem antes — b-roll repetido de um criativo
+    para o outro é o que denuncia banco de imagem —, e depois o que cobre a
+    duração inteira. Se um download falha, tenta o próximo.
+    """
     if not banco.estado().get("alguma"):
         return None
-    for busca in buscas:
+    ja_baixados = banco.ids_baixados()
+    for termo, idioma in buscas:
         try:
-            res = banco.buscar(busca, orientacao, 1, 15)
+            res = banco.buscar(termo, orientacao, 1, 15, idioma)
         except banco.ErroDoBanco:
             continue
         itens = [it for it in res.get("itens") or [] if it["id"] not in usados_ids]
-        if not itens:
-            continue
-        itens.sort(key=lambda it: float(it.get("duracao") or 0) < precisa)
-        try:
-            return banco.baixar(itens[0]["id"], alvo_w, alvo_h, busca,
-                                cancelado=cancelado)
-        except banco.ErroDoBanco:
-            continue
+        itens.sort(key=lambda it: (it["id"] in ja_baixados,
+                                   float(it.get("duracao") or 0) < precisa))
+        for it in itens[:3]:
+            try:
+                return banco.baixar(it["id"], alvo_w, alvo_h, termo, cancelado=cancelado)
+            except banco.ErroDoBanco:
+                continue
     return None
 
 
@@ -266,7 +291,7 @@ def tirar_automaticos(project) -> int:
 
 
 def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
-            substituir: bool = True) -> dict:
+            substituir: bool = True, fonte: str | None = None) -> dict:
     """Planeja, acha os vídeos e põe como b-roll. Mexe no ``project`` dado.
 
     Mexe no objeto recebido (e grava): o clique único segue com ele para a
@@ -277,6 +302,7 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
     from .projects import add_media, duracao_de_saida, list_media, timeline_summary
 
     frequencia = _freq(frequencia)
+    fonte = _fonte(fonte or (project.plan.broll or {}).get("fonte"))
     tirados = tirar_automaticos(project) if substituir else 0
     ctx.stage("broll", "escolhendo onde entra b-roll")
     plano = planejar(project, frequencia, usar_ia)
@@ -311,12 +337,25 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
             pulados.append({**slot, "motivo": "já tem b-roll aí"})
             continue
         buscas = [slot["busca"], *slot.get("alternativas", [])]
-        item = da_biblioteca(buscas, usados, b - a)
-        origem_video = "biblioteca"
-        if item is None:
-            item = do_banco(buscas, orientacao, usados_ids, b - a, w, h,
+        no_banco = ([(slot["busca_en"], "en")] if slot.get("busca_en") else []) \
+            + [(t, "pt") for t in buscas]
+
+        def _do_banco():
+            return do_banco(no_banco, orientacao, usados_ids, b - a, w, h,
                             getattr(ctx, "cancelled", None))
-            origem_video = "banco"
+
+        # a ordem de onde vem o vídeo: o banco grátis primeiro (o padrão), e a
+        # biblioteca quando o banco não responde — ou o contrário, se ele pediu
+        ordem = ((_do_banco, "banco"), (lambda: da_biblioteca(buscas, usados, b - a),
+                                        "biblioteca"))
+        if fonte == "biblioteca":
+            ordem = ordem[::-1]
+        item, origem_video = None, ""
+        for achar, nome in ordem:
+            item = achar()
+            if item is not None:
+                origem_video = nome
+                break
         if item is None:
             pulados.append({**slot, "motivo": (
                 f"nem a biblioteca nem o banco acharam “{slot['busca']}”"
@@ -352,10 +391,15 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
         postos.append({**corte.to_dict(), "busca": slot["busca"],
                        "de": origem_video, "autor": item.get("autor", ""),
                        "fonte": item.get("fonte", ""), "porque": slot.get("porque", "")})
-    resumo = {"frequencia": frequencia, "quem": plano["quem"], "aviso": plano["aviso"],
-              "planejados": len(slots), "postos": postos, "pulados": pulados,
-              "tirados": tirados}
+    por_fonte: dict[str, int] = {}
+    for x in postos:
+        chave = "biblioteca" if x.get("fonte") == "meu" else (x.get("fonte") or x["de"])
+        por_fonte[chave] = por_fonte.get(chave, 0) + 1
+    resumo = {"frequencia": frequencia, "fonte": fonte, "quem": plano["quem"],
+              "aviso": plano["aviso"], "planejados": len(slots), "postos": postos,
+              "pulados": pulados, "tirados": tirados, "por_fonte": por_fonte}
     project.plan.broll = {**(project.plan.broll or {}), "frequencia": frequencia,
+                          "fonte": fonte,
                           "ultima": {k: v for k, v in resumo.items()
                                      if k not in ("postos", "pulados")}
                           | {"postos": len(postos), "pulados": len(pulados)}}

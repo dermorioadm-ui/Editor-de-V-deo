@@ -6915,8 +6915,11 @@ def testar_banco_de_broll() -> None:
         r = cliente.get("/api/banco/buscar", params={"q": "academia", "pid": pid})
         corpo = r.json()
         itens = corpo["itens"]
-        ped_pexels = next(x for x in reg["pedidos"] if x["caminho"] == "/videos/search")
-        ped_pixabay = next(x for x in reg["pedidos"] if x["caminho"] == "/api/videos/")
+        # a busca de "academia" (guardar a chave já fez uma busca de teste antes)
+        ped_pexels = next(x for x in reg["pedidos"] if x["caminho"] == "/videos/search"
+                          and x["params"].get("query") == "academia")
+        ped_pixabay = next(x for x in reg["pedidos"] if x["caminho"] == "/api/videos/"
+                           and x["params"].get("q") == "academia")
         check(r.status_code == 200 and len(itens) == 5,
               f"a busca junta os dois bancos ({len(itens)} vídeos)")
         check(ped_pexels["auth"] == "chave-pexels-9999"
@@ -7341,8 +7344,17 @@ def testar_broll_automatico() -> None:
         banco.URL_PEXELS = banco.URL_PIXABAY = base
         banco._cache_busca.clear()
         banco._itens.clear()
-        banco.guardar_chave("pexels", "chave-pexels-9999")
-        banco.guardar_chave("pixabay", "chave-pixabay-8888")
+        # ---- as chaves são TESTADAS ao guardar --------------------------------
+        e = c.post("/api/banco/chaves", json={"pexels": "chave-errada-1234"}).json()
+        check(e["pexels"]["funciona"] is False and "recusou a chave" in e["pexels"]["aviso"],
+              f"uma chave errada é apontada NA HORA de guardar, não no vídeo pronto "
+              f"({e['pexels']['aviso']!r})")
+        e = c.post("/api/banco/chaves", json={"pexels": "chave-pexels-9999",
+                                              "pixabay": "chave-pixabay-8888"}).json()
+        check(e["pexels"]["funciona"] is True and e["pixabay"]["funciona"] is True,
+              "e as certas aparecem como funcionando (Pexels ✓, Pixabay ✓)")
+        check("chave-pexels" not in json.dumps(e) and "chave-pixabay" not in json.dumps(e),
+              "o teste também não devolve a chave")
 
         frases = ["olha so o que aconteceu comigo", "presta atencao nisso",
                   "eu comecei a academia esse ano",
@@ -7356,9 +7368,10 @@ def testar_broll_automatico() -> None:
         projeto = svc.create(str(fonte), "brollauto", "VSL")
         pid = projeto.id
         r = c.post(f"/api/projects/{pid}/params",
-                   json={"broll": {"auto": True, "frequencia": "muito"}})
-        check(r.json()["plan"]["broll"] == {"auto": True, "frequencia": "muito"},
-              "a primeira tela grava 'b-roll automático, muito' no plano")
+                   json={"broll": {"auto": True, "frequencia": "muito", "fonte": "banco"}})
+        check(r.json()["plan"]["broll"] == {"auto": True, "frequencia": "muito",
+                                             "fonte": "banco"},
+              "a primeira tela grava 'b-roll automático, muito, do Pexels e Pixabay' no plano")
         res = svc.one_click(svc.load(pid), Ctx(quiet=True))
         q = svc.load(pid)
         autos = [k for k in q.plan.cutaways if k.origem == "auto"]
@@ -7373,16 +7386,60 @@ def testar_broll_automatico() -> None:
         check(all(b.out_start >= a.out_end - 1e-6 for a, b in zip(ordenados, ordenados[1:])),
               "nenhum em cima do outro")
         nomes = {m["id"]: m["path"] for m in svc.list_media(pid)}
-        da_bib = [k for k in autos if Path(nomes[k.media_id]).name.startswith("meu_")]
-        check(bool(da_bib) and da_bib[0].termo == "academia",
-              "onde a fala diz 'academia', entrou o vídeo MEU da biblioteca (pela "
-              "palavra-chave), antes de ir ao banco")
-        check(any(Path(nomes[k.media_id]).name.startswith(("pexels", "pixabay"))
+        check(all(Path(nomes[k.media_id]).name.startswith(("pexels", "pixabay"))
                   for k in autos),
-              "e o resto veio do banco grátis")
+              "o vídeo automático pega o b-roll do PEXELS e do PIXABAY (as chaves "
+              "grátis dele) — mesmo com um vídeo da biblioteca que casaria com a fala")
+        por_fonte = (q.plan.broll.get("ultima") or {}).get("por_fonte") or {}
+        check(sum(por_fonte.values()) == len(autos) and set(por_fonte) <= {"pexels", "pixabay"},
+              f"e o plano conta de onde veio cada um ({por_fonte})")
+        pedidos_busca = [x for x in reg["pedidos"] if x["caminho"] in ("/videos/search", "/api/videos/")
+                         and not x["params"].get("id")]
+        check(any(x["caminho"] == "/videos/search" for x in pedidos_busca)
+              and any(x["caminho"] == "/api/videos/" for x in pedidos_busca),
+              "busca nos DOIS bancos")
+
+        # ---- vídeo novo antes do repetido --------------------------------------
+        ja = banco.ids_baixados()
+        novo_item = broll_auto.do_banco([("qualquer", "pt")], "portrait", set(), 1.0, 180, 320)
+        check(novo_item is not None and novo_item["id"] not in ja,
+              f"entre os achados, o que ainda não foi usado em outro vídeo vem antes "
+              f"({novo_item and novo_item['id']} fora de {sorted(ja)})")
+
+        # ---- com a IA: a busca vai em inglês primeiro --------------------------
+        real = (gemini.escolher_modelo, gemini.gerar_json)
+        db.set_setting("gemini_api_key", "chave-gemini-falsa")
+        try:
+            gemini.escolher_modelo = lambda chave, m: {"id": "falso", "saida": 4096}
+            gemini.gerar_json = lambda *a, **k: {"brolls": [
+                {"inicio": 3.0, "fim": 6.0, "busca": "casa de praia",
+                 "busca_en": "beach house", "alternativas": ["praia"]}]}
+            banco._cache_busca.clear()
+            antes = len(reg["pedidos"])
+            r_ia = broll_auto.aplicar(svc.load(pid), Ctx(quiet=True), "muito")
+        finally:
+            gemini.escolher_modelo, gemini.gerar_json = real
+            db.set_setting("gemini_api_key", "")
+        primeira = next((x for x in reg["pedidos"][antes:] if x["caminho"] == "/videos/search"), {})
+        check(r_ia["quem"] == "ia" and primeira.get("params", {}).get("query") == "beach house"
+              and primeira["params"].get("locale") == "en-US",
+              f"com a IA, o banco é buscado EM INGLÊS primeiro, que é onde ele acha mais "
+              f"({primeira.get('params')})")
+
+        # ---- "minha biblioteca primeiro" -----------------------------------------
+        c.post(f"/api/projects/{pid}/params", json={"broll": {"fonte": "biblioteca"}})
+        r_bib = broll_auto.aplicar(svc.load(pid), Ctx(quiet=True), "muito")
+        q = svc.load(pid)
+        nomes = {m["id"]: m["path"] for m in svc.list_media(pid)}
+        da_bib = [k for k in q.plan.cutaways if k.origem == "auto"
+                  and Path(nomes[k.media_id]).name.startswith("meu_")]
+        check(r_bib["fonte"] == "biblioteca" and bool(da_bib) and da_bib[0].termo == "academia",
+              "com 'minha biblioteca primeiro', onde a fala diz 'academia' entra o vídeo "
+              "MEU (pela palavra-chave), e o banco completa")
+        c.post(f"/api/projects/{pid}/params", json={"broll": {"fonte": "banco"}})
         check(all(c2.audio != "mute" for c2 in q.plan.active_clips),
               "a fala continua com som por baixo")
-        check((q.plan.broll.get("ultima") or {}).get("quem") == "regra",
+        check((svc.load(pid).plan.broll.get("ultima") or {}).get("quem") == "regra",
               "sem chave do Gemini, quem escolheu os pontos foi a regra (e o plano diz isso)")
 
         # ---- um posto à mão sobrevive ao "refazer" ----------------------------
@@ -7448,6 +7505,9 @@ def testar_broll_automatico() -> None:
         check("broll: { auto: brollAuto !== 'nao'" in home
               and "sem b-roll automático" in home and "muito (1 a cada ~7 s)" in home,
               "a primeira tela escolhe b-roll automático ou não, e a frequência")
+        check("fonte: brollFonte" in home and "vídeos do Pexels e Pixabay (grátis)" in home
+              and 'data-chaves-estado="1"' in home,
+              "e de onde vem o vídeo (Pexels e Pixabay por padrão), com o estado de cada chave")
         check("+ enviar vídeos meus" in (frente / "BancoBroll.tsx").read_text(encoding="utf-8")
               and "+ meus b-rolls na biblioteca" in home,
               "e dá para mandar os b-rolls dele para a biblioteca (no editor e na primeira tela)")

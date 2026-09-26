@@ -51,6 +51,12 @@ export default function Home() {
   })
   const [bancoEstado, setBancoEstado] = useState<any>(null)
   const [chavePexels, setChavePexels] = useState('')
+  const [chavePixabay, setChavePixabay] = useState('')
+  // de onde vem o vídeo do b-roll automático: o banco grátis (Pexels e
+  // Pixabay) primeiro, ou a biblioteca dele primeiro
+  const [brollFonte, setBrollFonte] = useState<string>(() => {
+    try { return localStorage.getItem('sharkcut.brollFonte') || 'banco' } catch { return 'banco' }
+  })
   const [resolucao, setResolucao] = useState('source')
   // 30 fps por padrão. Medido num 1920x1080 a 60 fps: baixar a saída para 30
   // corta 34% do trabalho de renderização inteiro, e num vídeo de alguém
@@ -202,7 +208,8 @@ export default function Home() {
       look: look || 'nenhum',
       // b-roll automático: entra depois da montagem, e o vídeo sai com ele
       broll: { auto: brollAuto !== 'nao',
-               frequencia: brollAuto === 'nao' ? 'medio' : brollAuto },
+               frequencia: brollAuto === 'nao' ? 'medio' : brollAuto,
+               fonte: brollFonte },
     }
   }
 
@@ -373,7 +380,13 @@ export default function Home() {
 
   useEffect(() => {
     api.musicas().then(setMusicas).catch(() => setMusicas([]))
-    api.bancoEstado().then(setBancoEstado).catch(() => setBancoEstado(null))
+    // o estado das chaves do banco, TESTADAS: "tem chave" não quer dizer
+    // "funciona", e é na primeira tela que ele decide o b-roll automático
+    api.bancoEstado().then((e) => {
+      setBancoEstado(e)
+      const falta = ['pexels', 'pixabay'].some((f) => e?.[f]?.tem_chave && e?.[f]?.funciona == null)
+      if (falta) api.bancoTestar().then(setBancoEstado).catch(() => {})
+    }).catch(() => setBancoEstado(null))
   }, [])
 
   return (
@@ -748,27 +761,68 @@ export default function Home() {
                         toast('warn', 'Não deu para enviar', String(e.message ?? e))
                       }
                     }}>+ meus b-rolls na biblioteca</button>
-            {brollAuto !== 'nao' && bancoEstado && !bancoEstado.alguma && (
-              <div className="mt-1 space-y-1">
-                <p className="text-[10px] text-amber-300 leading-tight">
-                  Sem a chave grátis do banco, só entram vídeos da sua biblioteca.</p>
-                <div className="flex gap-1">
-                  <input className="field flex-1 text-[10px] py-0.5 font-mono" type="password"
-                         placeholder="chave do Pexels" value={chavePexels}
-                         onChange={(e) => setChavePexels(e.target.value)} />
-                  <button className="btn btn-xs" disabled={!chavePexels.trim()}
-                          onClick={async () => {
-                            try {
-                              setBancoEstado(await api.bancoChaves({ pexels: chavePexels.trim() }))
-                              setChavePexels('')
-                              toast('ok', 'Chave do Pexels guardada')
-                            } catch (e: any) {
-                              toast('warn', 'Não guardei a chave', String(e.message ?? e))
-                            }
-                          }}>ok</button>
-                </div>
-                <a className="text-[10px] text-sky-400 underline" target="_blank" rel="noreferrer"
-                   href="https://www.pexels.com/api/">criar chave grátis</a>
+            {brollAuto !== 'nao' && (
+              <div className="mt-1 space-y-1" data-broll-fonte="1">
+                <select className="field w-full py-1 text-[11px]" value={brollFonte}
+                        onChange={(e) => {
+                          setBrollFonte(e.target.value)
+                          try { localStorage.setItem('sharkcut.brollFonte', e.target.value) } catch { /* sem memória */ }
+                        }}>
+                  <option value="banco">vídeos do Pexels e Pixabay (grátis)</option>
+                  <option value="biblioteca">minha biblioteca primeiro</option>
+                </select>
+                {/* O ESTADO DE CADA CHAVE, testada: ✓ é "buscou e respondeu" */}
+                {bancoEstado && (
+                  <p className="text-[10px] leading-tight" data-chaves-estado="1">
+                    {(['pexels', 'pixabay'] as const).map((f, k) => {
+                      const e = bancoEstado[f] ?? {}
+                      const nome = f === 'pexels' ? 'Pexels' : 'Pixabay'
+                      const txt = !e.tem_chave ? `${nome}: sem chave`
+                        : e.funciona === true ? `${nome} ✓`
+                          : e.funciona === false ? `${nome} ✗ ${e.aviso}` : `${nome}: testando…`
+                      const cor = !e.tem_chave ? 'text-slate-500'
+                        : e.funciona === false ? 'text-red-300' : 'text-emerald-300'
+                      return <span key={f} className={cor} title={e.aviso || ''}>{k ? ' · ' : ''}{txt}</span>
+                    })}
+                  </p>
+                )}
+                {bancoEstado && ['pexels', 'pixabay'].some((f) => !bancoEstado[f]?.tem_chave
+                  || bancoEstado[f]?.funciona === false) && (
+                  <>
+                    {(['pexels', 'pixabay'] as const)
+                      .filter((f) => !bancoEstado[f]?.tem_chave || bancoEstado[f]?.funciona === false)
+                      .map((f) => (
+                        <div key={f} className="flex gap-1">
+                          <input className="field flex-1 text-[10px] py-0.5 font-mono" type="password"
+                                 placeholder={`chave do ${f === 'pexels' ? 'Pexels' : 'Pixabay'}`}
+                                 value={f === 'pexels' ? chavePexels : chavePixabay}
+                                 onChange={(e) => (f === 'pexels' ? setChavePexels : setChavePixabay)(e.target.value)} />
+                          <button className="btn btn-xs"
+                                  disabled={!(f === 'pexels' ? chavePexels : chavePixabay).trim()}
+                                  onClick={async () => {
+                                    const valor = (f === 'pexels' ? chavePexels : chavePixabay).trim()
+                                    try {
+                                      const e = await api.bancoChaves({ [f]: valor })
+                                      setBancoEstado(e)
+                                      ;(f === 'pexels' ? setChavePexels : setChavePixabay)('')
+                                      if (e?.[f]?.funciona === false) {
+                                        toast('warn', 'A chave não funcionou', e[f].aviso)
+                                      } else {
+                                        toast('ok', `${f === 'pexels' ? 'Pexels' : 'Pixabay'} funcionando`,
+                                          'O b-roll automático já busca nele.')
+                                      }
+                                    } catch (err: any) {
+                                      toast('warn', 'Não guardei a chave', String(err.message ?? err))
+                                    }
+                                  }}>ok</button>
+                        </div>
+                      ))}
+                    {!bancoEstado.alguma && (
+                      <p className="text-[10px] text-amber-300 leading-tight">
+                        Sem nenhuma chave, só entram vídeos da sua biblioteca.</p>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>

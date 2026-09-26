@@ -42,6 +42,8 @@ TETO_BYTES = 600 * 1024 * 1024   # um b-roll maior que isso é 4K longo demais
 VALIDADE = 24 * 3600             # o Pixabay pede cache de 24 h nas buscas
 
 _cache_busca: dict[str, tuple[float, dict]] = {}
+# o resultado do último teste de cada chave: {fonte: {"ok", "mensagem", "quando"}}
+_teste: dict[str, dict] = {}
 _itens: dict[str, dict] = {}     # id → item, com os arquivos (fica no servidor)
 
 
@@ -74,11 +76,34 @@ def estado() -> dict:
     saida = {}
     for f in FONTES:
         c = chave(f)
+        t = _teste.get(f) or {}
         saida[f] = {"nome": NOMES[f], "tem_chave": bool(c),
                     "final": c[-4:] if len(c) > 8 else "",
-                    "onde_criar": ONDE_CRIAR[f]}
+                    "onde_criar": ONDE_CRIAR[f],
+                    # testada nesta sessão? None = ainda não
+                    "funciona": (t.get("ok") if c and t.get("final") == c[-4:] else None),
+                    "aviso": (t.get("mensagem", "") if c and t.get("final") == c[-4:] else "")}
     saida["alguma"] = any(saida[f]["tem_chave"] for f in FONTES)
     return saida
+
+
+def testar_chave(fonte: str) -> dict:
+    """Uma busca mínima, para dizer JÁ se a chave funciona.
+
+    Guardar a chave e só descobrir que ela estava errada na hora de gerar o
+    vídeo — com o b-roll saindo vazio — é o pior momento para descobrir.
+    """
+    c = chave(fonte)
+    if not c:
+        r = {"ok": False, "mensagem": f"falta a chave do {NOMES[fonte]}"}
+    else:
+        try:
+            _buscar_numa(fonte, "natureza", "", 1, 3, "pt")
+            r = {"ok": True, "mensagem": f"{NOMES[fonte]} funcionando"}
+        except ErroDoBanco as exc:
+            r = {"ok": False, "mensagem": str(exc)}
+    _teste[fonte] = {**r, "final": c[-4:] if c else "", "quando": time.time()}
+    return r
 
 
 # ---------------------------------------------------------------- formato
@@ -203,18 +228,20 @@ def _get_json(fonte: str, caminho: str, params: dict) -> dict:
 
 
 def _buscar_numa(fonte: str, termo: str, orientacao: str, pagina: int,
-                 por_pagina: int) -> list[dict]:
+                 por_pagina: int, idioma: str = "pt") -> list[dict]:
     if fonte == "pexels":
         params: dict[str, Any] = {"query": termo, "page": pagina,
                                   "per_page": min(80, por_pagina),
-                                  "locale": "pt-BR", "size": "medium"}
+                                  "locale": "en-US" if idioma == "en" else "pt-BR",
+                                  "size": "medium"}
         if orientacao:
             params["orientation"] = orientacao
         dados = _get_json("pexels", "/videos/search", params)
         itens = [_item_pexels(v) for v in dados.get("videos") or []]
     else:
         params = {"q": termo[:100], "page": pagina,
-                  "per_page": max(3, min(200, por_pagina)), "lang": "pt",
+                  "per_page": max(3, min(200, por_pagina)),
+                  "lang": "en" if idioma == "en" else "pt",
                   "safesearch": "true", "video_type": "film"}
         dados = _get_json("pixabay", "/api/videos/", params)
         itens = [_item_pixabay(h) for h in dados.get("hits") or []]
@@ -222,7 +249,7 @@ def _buscar_numa(fonte: str, termo: str, orientacao: str, pagina: int,
 
 
 def buscar(termo: str, orientacao: str = "", pagina: int = 1,
-           por_pagina: int = 20) -> dict:
+           por_pagina: int = 20, idioma: str = "pt") -> dict:
     """Busca nos bancos que têm chave. Um banco fora do ar não derruba o outro.
 
     O Pixabay não filtra vídeo por orientação: os que combinam com o quadro
@@ -235,8 +262,9 @@ def buscar(termo: str, orientacao: str = "", pagina: int = 1,
     com_chave = [f for f in FONTES if chave(f)]
     if not com_chave:
         raise ErroDoBanco("falta a chave grátis do Pexels ou do Pixabay")
+    idioma = "en" if idioma == "en" else "pt"
     chave_cache = json.dumps([termo.lower(), orientacao, pagina, por_pagina,
-                              com_chave])
+                              com_chave, idioma])
     agora = time.time()
     guardado = _cache_busca.get(chave_cache)
     if guardado and agora - guardado[0] < VALIDADE:
@@ -246,7 +274,8 @@ def buscar(termo: str, orientacao: str = "", pagina: int = 1,
     por_fonte: dict[str, list[dict]] = {}
     for f in com_chave:
         try:
-            por_fonte[f] = _buscar_numa(f, termo, orientacao, pagina, por_pagina)
+            por_fonte[f] = _buscar_numa(f, termo, orientacao, pagina, por_pagina,
+                                        idioma)
         except ErroDoBanco as exc:
             avisos.append(str(exc))
     # intercala os bancos: os dois aparecem na primeira tela de resultados
@@ -348,6 +377,17 @@ def _miniatura_local(video: Path, destino: Path, duracao: float = 0.0) -> bool:
 
 def _url_local(nome: str) -> str:
     return f"/api/banco/arquivo/{nome}"
+
+
+def ids_baixados() -> set[str]:
+    """Os ids do banco que já estão na biblioteca (já usados em algum vídeo)."""
+    saida = set()
+    for meta in pasta().glob("*.json"):
+        try:
+            saida.add(str(json.loads(meta.read_text(encoding="utf-8")).get("id") or ""))
+        except (OSError, ValueError):
+            continue
+    return saida
 
 
 def baixados() -> list[dict]:

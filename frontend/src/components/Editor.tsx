@@ -649,6 +649,12 @@ export default function Editor() {
                 {(project.plan?.speed?.global_multiplier ?? 1) > 1.001
                   && ` · +${Math.round(
                     (project.plan.speed.global_multiplier - 1) * 100)}% de ritmo`}
+                {(view.cutaways ?? []).length > 0 && ` · ${(view.cutaways ?? []).length} b-roll(s)${
+                  Object.keys(project.plan?.broll?.ultima?.por_fonte ?? {}).length
+                    ? ` (${Object.entries(project.plan.broll.ultima.por_fonte)
+                      .map(([k, v]) => `${v} ${k === 'biblioteca' ? 'da biblioteca'
+                        : k === 'pexels' ? 'do Pexels' : k === 'pixabay' ? 'do Pixabay' : k}`)
+                      .join(', ')})` : ''}`}
                 {project.plan?.music?.enabled && ` · trilha ${
                   project.plan.music.curva?.length
                     ? `com ${project.plan.music.curva.length} mudança(s) de volume`
