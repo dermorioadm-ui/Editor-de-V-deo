@@ -23,6 +23,10 @@ interface Props {
   onMoveItem: (kind: string, id: string, side: 'move' | 'start' | 'end',
                delta: number, ripple?: boolean) => void
   onDeleteItem: (kind: string, id: string, ripple?: boolean) => void
+  /** clique SEM arrastar num item de trilho: abre o painel dele */
+  onSelectItem?: (kind: string, id: string) => void
+  /** o item aberto no painel, para aparecer contornado no trilho */
+  itemSelecionado?: string | null
   onAddToTrack: (trackId: string) => void
   // arrastar um arquivo do disco em cima de um trilho
   onDropFile: (trackId: string, file: File) => void
@@ -495,6 +499,11 @@ export default function Timeline(props: Props) {
         g.fillStyle = '#0b1220'
         g.fillRect(x0, y + 2, 2.5, ROW.track - 4)
         g.fillRect(x1 - 2.5, y + 2, 2.5, ROW.track - 4)
+        if (props.itemSelecionado === item.id) {
+          g.strokeStyle = '#f8fafc'; g.lineWidth = 2
+          g.strokeRect(x0 + 1, y + 3, w - 2, ROW.track - 6)
+          g.lineWidth = 1
+        }
         if (w > 46) {
           g.fillStyle = '#0b1220'
           g.font = '9px system-ui'
@@ -549,7 +558,7 @@ export default function Timeline(props: Props) {
     }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip, selRemoved,
       subsOnSource, subDrag, redDrag, itemDrag, dropAlvo, bands, extras, toX,
-      outputToSourceT, itemSourceEdge, cortes, blocosNoEixo, eixo, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
+      outputToSourceT, itemSourceEdge, cortes, blocosNoEixo, eixo, props.itemSelecionado, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
       ySubs, yTracks])
 
   // onde a agulha está em pixels, para poder pegá-la com o mouse
@@ -823,7 +832,11 @@ export default function Timeline(props: Props) {
     if (!itemDrag) return
     const seg = itemDrag
     setItemDrag(null)
-    if (Math.abs(seg.delta) < 2) return
+    if (Math.abs(seg.delta) < 2) {
+      // não arrastou: foi um CLIQUE — abre o painel do item
+      props.onSelectItem?.(seg.kind, seg.id)
+      return
+    }
     // O ARRASTO É EM PIXELS NA RÉGUA DA FONTE. Antes o delta era convertido
     // pelos instantes 0 e delta da régua — e o instante 0 quase sempre cai
     // no silêncio cortado do começo, onde não existe tempo de saída: a conta

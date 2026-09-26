@@ -519,6 +519,16 @@ def aplicar_receita(project, payload: dict) -> None:
             plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
         except (TypeError, ValueError):
             pass
+    if isinstance(payload.get("broll"), dict):
+        from .broll_auto import FREQUENCIAS, _freq
+
+        pedido = payload["broll"]
+        atual = dict(plan.broll or {})
+        if "auto" in pedido:
+            atual["auto"] = bool(pedido["auto"])
+        if "frequencia" in pedido and _freq(pedido["frequencia"]) in FREQUENCIAS:
+            atual["frequencia"] = _freq(pedido["frequencia"])
+        plan.broll = atual
     if "look" in payload:
         from .render.looks import BY_ID
 
@@ -1518,6 +1528,20 @@ def api_cutaway_update(pid: str, cid: str, payload: dict = Body(...)) -> dict:
                 c.enabled = bool(payload["enabled"])
             if payload.get("fit"):
                 c.fit.update(payload["fit"])
+            if payload.get("media_id") and payload["media_id"] != c.media_id:
+                # SUBSTITUIR: outro vídeo no MESMO lugar. A janela continua a
+                # que ele escolheu; o ponto de entrada volta ao começo do vídeo
+                # novo, a não ser que ele mande outro. Quem trocou à mão fez o
+                # b-roll dele: sai do "automático".
+                try:
+                    anexos.validar(svc.list_media(pid), str(payload["media_id"]), "video")
+                except anexos.AnexoInvalido as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                c.media_id = str(payload["media_id"])
+                c.origem = ""
+                payload = {**payload, "media_start": float(payload.get("media_start", 0.0)),
+                           "out_start": payload.get("out_start", c.out_start),
+                           "out_end": payload.get("out_end", c.out_end)}
             if any(k in payload for k in
                    ("out_start", "out_end", "media_start", "speed")):
                 # arrastar a borda passa pela MESMA trava do POST: encolher a
@@ -2546,6 +2570,86 @@ def api_banco_baixados() -> list[dict]:
     return banco.baixados()
 
 
+@app.get("/api/banco/arquivo/{nome}")
+def api_banco_arquivo(nome: str, request: Request):
+    """Um arquivo da biblioteca (vídeo ou miniatura), para ver sem internet."""
+    from . import banco
+
+    if "/" in nome or "\\" in nome or nome.startswith("."):
+        raise HTTPException(400, "nome inválido")
+    alvo = (banco.pasta() / nome).resolve()
+    if alvo.parent != banco.pasta().resolve() or not alvo.is_file():
+        raise HTTPException(404, "não está na biblioteca")
+    return _range_response(alvo, request)
+
+
+@app.post("/api/banco/enviar")
+def api_banco_enviar(payload: dict = Body(...)) -> dict:
+    """Vídeos DELE para a biblioteca de b-roll (copiados para a pasta de dados)."""
+    from . import banco
+
+    caminhos = payload.get("paths") or ([payload["path"]] if payload.get("path") else [])
+    if not isinstance(caminhos, list) or not caminhos:
+        raise HTTPException(400, "mande os vídeos em 'paths'")
+    palavras = str(payload.get("palavras") or "")
+    guardados, recusados = [], []
+    for c in caminhos[:50]:
+        try:
+            guardados.append(banco.guardar_proprio(str(c), palavras))
+        except (FileNotFoundError, banco.ErroDoBanco) as exc:
+            recusados.append({"path": str(c), "motivo": str(exc)})
+    if not guardados and recusados:
+        raise HTTPException(400, "; ".join(f"{Path(r['path']).name}: {r['motivo']}"
+                                           for r in recusados))
+    return {"ok": True, "guardados": guardados, "recusados": recusados,
+            "biblioteca": banco.baixados()}
+
+
+@app.post("/api/banco/palavras")
+def api_banco_palavras(payload: dict = Body(...)) -> dict:
+    from . import banco
+
+    try:
+        return banco.mudar_palavras(str(payload.get("id") or ""),
+                                    str(payload.get("palavras") or ""))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/banco/tirar")
+def api_banco_tirar(payload: dict = Body(...)) -> dict:
+    """Tira da biblioteca (a cópia; o original dele fica onde está)."""
+    from . import banco
+
+    if not banco.tirar_da_biblioteca(str(payload.get("id") or "")):
+        raise HTTPException(404, "esse vídeo não está na biblioteca")
+    return {"ok": True, "biblioteca": banco.baixados()}
+
+
+@app.post("/api/projects/{pid}/broll-auto")
+def api_broll_auto(pid: str, payload: dict = Body(default={})) -> dict:
+    """B-roll automático no vídeo que já está montado (trabalho de fundo)."""
+    from . import broll_auto
+
+    project = _project(pid)
+    freq = broll_auto._freq(payload.get("frequencia")
+                            or (project.plan.broll or {}).get("frequencia") or "medio")
+    ia = bool(payload.get("ia", True))
+    return _run("broll-auto", pid,
+                lambda ctx: broll_auto.aplicar(svc.load(pid), ctx, freq, ia))
+
+
+@app.post("/api/projects/{pid}/broll-auto/tirar")
+def api_broll_auto_tirar(pid: str) -> dict:
+    """Tira só os b-rolls que o automático pôs; os postos à mão ficam."""
+    from . import broll_auto
+
+    project = _project(pid)
+    n = broll_auto.tirar_automaticos(project)
+    project.save_plan()
+    return {"ok": True, "tirados": n, "timeline": svc.timeline_summary(project)}
+
+
 @app.get("/api/projects/{pid}/banco/sugestao")
 def api_banco_sugestao(pid: str, t: float = 0.0) -> dict:
     project = _project(pid)
@@ -2567,7 +2671,9 @@ def api_banco_usar(pid: str, payload: dict = Body(...)) -> dict:
     pedido = {"ids": [str(x) for x in ids][:12],
               "at": float(payload.get("at") or 0.0),
               "duracao": float(payload.get("duracao") or svc.DURACAO_DO_BROLL),
-              "termo": str(payload.get("termo") or "")[:100]}
+              "termo": str(payload.get("termo") or "")[:100],
+              # o id de um b-roll que já existe: o baixado entra NO LUGAR dele
+              "substituir": str(payload.get("substituir") or "")}
     job = get_queue().submit("banco-broll", pid,
                              lambda ctx: svc.broll_do_banco(svc.load(pid), ctx, pedido))
     return job.to_dict()

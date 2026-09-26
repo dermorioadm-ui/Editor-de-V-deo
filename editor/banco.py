@@ -329,8 +329,33 @@ def _host_permitido(fonte: str, url: str) -> bool:
             or any(host == h or host.endswith("." + h) for h in HOSTS[fonte]))
 
 
+def _miniatura_local(video: Path, destino: Path, duracao: float = 0.0) -> bool:
+    """Um quadro do vídeo em JPG, para a biblioteca se ver sem internet."""
+    import subprocess
+
+    from .config import FFMPEG
+
+    instante = min(1.0, max(0.0, duracao / 2)) if duracao else 0.5
+    try:
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-ss", f"{instante:.2f}",
+                        "-i", str(video), "-frames:v", "1",
+                        "-vf", "scale=320:-2", "-q:v", "5", str(destino)],
+                       check=True, capture_output=True, timeout=60)
+        return destino.exists() and destino.stat().st_size > 0
+    except Exception:  # noqa: BLE001 — sem miniatura a biblioteca funciona igual
+        return False
+
+
+def _url_local(nome: str) -> str:
+    return f"/api/banco/arquivo/{nome}"
+
+
 def baixados() -> list[dict]:
-    """A biblioteca local: tudo que já foi baixado, com o crédito de cada um."""
+    """A biblioteca local: o que foi baixado do banco e o que ele enviou.
+
+    Cada item traz o crédito, as palavras-chave e, quando existe, a
+    miniatura LOCAL (a do banco só aparece com internet).
+    """
     saida = []
     for meta in sorted(pasta().glob("*.json"), key=lambda p: p.stat().st_mtime,
                        reverse=True):
@@ -339,9 +364,113 @@ def baixados() -> list[dict]:
         except (OSError, ValueError):
             continue
         arq = pasta() / str(dados.get("arquivo") or "")
-        if dados.get("arquivo") and arq.exists():
-            saida.append({**dados, "path": str(arq.resolve())})
+        if not (dados.get("arquivo") and arq.exists()):
+            continue
+        mini = pasta() / f"{meta.stem}.jpg"
+        extra = {"miniatura": _url_local(mini.name)} if mini.exists() else {}
+        saida.append({**dados, **extra, "path": str(arq.resolve()),
+                      "video": _url_local(arq.name)})
     return saida
+
+
+VIDEOS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
+
+
+def guardar_proprio(caminho: str, palavras: str = "") -> dict:
+    """Um vídeo DELE vai para a biblioteca de b-roll.
+
+    Copiado para a pasta de dados (como a música de fundo): o original vive
+    em Downloads, num pendrive, numa pasta que muda de nome, e a biblioteca
+    tem que sobreviver a isso. A identidade é o CONTEÚDO — mandar o mesmo
+    vídeo duas vezes não duplica, só atualiza as palavras-chave.
+
+    As ``palavras`` são o que o b-roll automático procura: "academia,
+    treino, halteres" faz esse vídeo entrar quando a fala toca no assunto.
+    """
+    import hashlib
+    import shutil
+
+    from .ffmpeg_utils import probe
+
+    src = Path(str(caminho or "")).expanduser()
+    if not src.exists() or not src.is_file():
+        raise FileNotFoundError(f"arquivo não encontrado: {src}")
+    if src.suffix.lower() not in VIDEOS:
+        raise ErroDoBanco(f"{src.name} não é vídeo — b-roll é vídeo")
+    h = hashlib.sha1()
+    with open(src, "rb") as fh:
+        for pedaco in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(pedaco)
+    base = f"meu_{h.hexdigest()[:12]}"
+    palavras = " ".join(str(palavras or "").split())[:200]
+    meta_path = pasta() / f"{base}.json"
+    if meta_path.exists():
+        try:
+            dados = json.loads(meta_path.read_text(encoding="utf-8"))
+            arq = pasta() / str(dados.get("arquivo") or "")
+            if arq.exists():
+                if palavras:
+                    dados["termo"] = dados["descricao"] = palavras
+                    meta_path.write_text(json.dumps(dados, ensure_ascii=False),
+                                         encoding="utf-8")
+                return {**dados, "path": str(arq.resolve()), "repetido": True}
+        except (OSError, ValueError):
+            pass
+    destino = pasta() / f"{base}{src.suffix.lower()}"
+    if not destino.exists():
+        shutil.copy2(src, destino)
+    try:
+        info = probe(destino)
+        dur = float(info.duration or 0.0)
+        w, hh = info.display_size
+    except Exception as exc:  # noqa: BLE001
+        destino.unlink(missing_ok=True)
+        raise ErroDoBanco(f"não consegui ler {src.name}: {exc}") from None
+    _miniatura_local(destino, pasta() / f"{base}.jpg", dur)
+    dados = {"id": f"meu:{base[4:]}", "fonte": "meu", "arquivo": destino.name,
+             "nome": src.stem, "duracao": dur, "largura": int(w), "altura": int(hh),
+             "autor": "você", "autor_url": "", "pagina": "", "miniatura": "",
+             "termo": palavras, "descricao": palavras, "baixado_em": time.time()}
+    meta_path.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    return {**dados, "path": str(destino.resolve()), "repetido": False}
+
+
+def mudar_palavras(item_id: str, palavras: str) -> dict:
+    """As palavras-chave de um vídeo da biblioteca (o que o automático busca)."""
+    base = _nome_seguro(item_id)
+    meta_path = pasta() / f"{base}.json"
+    if not meta_path.exists():
+        raise FileNotFoundError("esse vídeo não está na biblioteca")
+    dados = json.loads(meta_path.read_text(encoding="utf-8"))
+    dados["termo"] = dados["descricao"] = " ".join(str(palavras or "").split())[:200]
+    meta_path.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    return dados
+
+
+def tirar_da_biblioteca(item_id: str) -> bool:
+    """Apaga a CÓPIA da biblioteca (nunca o original dele, que fica onde está).
+
+    Um vídeo em uso num projeto continua no disco: só some da lista.
+    """
+    from . import db
+
+    base = _nome_seguro(item_id)
+    meta_path = pasta() / f"{base}.json"
+    if not meta_path.exists():
+        return False
+    try:
+        dados = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        dados = {}
+    arq = pasta() / str(dados.get("arquivo") or "")
+    meta_path.unlink(missing_ok=True)
+    (pasta() / f"{base}.jpg").unlink(missing_ok=True)
+    if dados.get("arquivo") and arq.exists() and arq.resolve().parent == pasta().resolve():
+        em_uso = any(Path(m["path"]).resolve() == arq.resolve()
+                     for m in db.q("SELECT path FROM media WHERE kind='video'"))
+        if not em_uso:
+            arq.unlink(missing_ok=True)
+    return True
 
 
 def baixar(item_id: str, alvo_w: int, alvo_h: int, termo: str = "",
@@ -402,6 +531,7 @@ def baixar(item_id: str, alvo_w: int, alvo_h: int, termo: str = "",
              "miniatura": item["miniatura"], "termo": termo[:100],
              "descricao": item.get("descricao", ""), "baixado_em": time.time()}
     meta_path.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+    _miniatura_local(destino, pasta() / f"{base}.jpg", float(item["duracao"] or 0))
     return {**dados, "path": str(destino.resolve()), "reaproveitado": False}
 
 
@@ -416,6 +546,7 @@ tua nosso nossa ser estar ter haver fazer ir vou vai vamos foi era é sao são
 tem tinha tenho temos está esta estão estou fica ficar muito muita muitos
 muitas mais menos bem mal so só tambem também ainda sempre nunca todo toda
 todos todas cada qual quais quem coisa coisas tipo gente agora hoje depois
+comigo contigo conosco consigo nisso nisto naquilo disso disto daquilo
 antes então aí ai né ne olha olhe veja vc voce você pode posso poder quer
 quero querer sabe saber vai vem dia dias vez vezes ano anos
 """.split())
@@ -426,12 +557,26 @@ def _sem_acento(s: str) -> str:
                    if unicodedata.category(c) != "Mn")
 
 
+# terminações de VERBO conjugado. Não saem da lista (a regra erra às vezes:
+# "museu" termina em "eu"), só vão para o fim: b-roll se busca por COISA —
+# "a porta de casa ficou aberta" tem que buscar "porta", não "ficou"
+_VERBO = ("ou", "ei", "eu", "iu", "ava", "avam", "ando", "endo", "indo",
+          "aram", "eram", "iram", "amos", "emos", "imos", "asse", "esse")
+
+
+def _parece_verbo(p: str) -> bool:
+    return len(p) > 4 and _sem_acento(p).endswith(_VERBO)
+
+
 def sugerir_termos(texto: str, limite: int = 4) -> list[str]:
     """As palavras de conteúdo da fala — o que um b-roll pode ilustrar.
 
-    Sem IA e sem rede: tira as palavras vazias e fica com as mais longas e
-    repetidas, na ordem em que aparecem. O Pexels busca em português
-    (locale pt-BR) e o Pixabay também (lang=pt), então não precisa traduzir.
+    Sem IA e sem rede: tira as palavras vazias; a repetida vem primeiro (é o
+    assunto), depois a que aparece PRIMEIRO na frase — em português o
+    substantivo costuma vir antes do adjetivo ("porta aberta"), e escolher a
+    mais longa pegava justamente o adjetivo. Forma de verbo vai para o fim.
+    O Pexels busca em português (locale pt-BR) e o Pixabay também (lang=pt),
+    então não precisa traduzir.
     """
     palavras = re.findall(r"[A-Za-zÀ-ÿ]+", str(texto or "").lower())
     vistas: dict[str, int] = {}
@@ -442,7 +587,6 @@ def sugerir_termos(texto: str, limite: int = 4) -> list[str]:
         if p not in vistas:
             ordem.append(p)
         vistas[p] = vistas.get(p, 0) + 1
-    # a repetida primeiro (é o assunto), depois a mais longa (mais concreta),
-    # e no empate a que veio antes
     posicao = {p: i for i, p in enumerate(ordem)}
-    return sorted(ordem, key=lambda p: (-vistas[p], -len(p), posicao[p]))[:limite]
+    return sorted(ordem, key=lambda p: (-vistas[p], _parece_verbo(p),
+                                         posicao[p]))[:limite]

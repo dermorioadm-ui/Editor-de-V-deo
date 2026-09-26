@@ -5,6 +5,7 @@ import PhotoPanel from './PhotoPanel'
 import Positioner from './Positioner'
 import GerarIA from './GerarIA'
 import BancoBroll from './BancoBroll'
+import BrollAutomatico from './BrollAutomatico'
 import CartoesIA from './CartoesIA'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
@@ -71,6 +72,7 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
 
   return (
     <div className="p-4 space-y-5 max-w-5xl">
+      <BrollAutomatico projectId={project.id} onChanged={onChanged} snapshot={snapshot} />
       <BancoBroll projectId={project.id} onChanged={onChanged} snapshot={snapshot} />
       <CartoesIA projectId={project.id} onChanged={onChanged} snapshot={snapshot}
                  cartoes={(view.overlays ?? [])

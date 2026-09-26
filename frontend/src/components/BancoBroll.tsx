@@ -34,6 +34,26 @@ export default function BancoBroll({ projectId, onChanged, snapshot }: {
   const [baixados, setBaixados] = useState<any[]>([])
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useStore((s) => (jobId ? s.jobs[jobId] : undefined))
+  const [palavrasNovas, setPalavrasNovas] = useState('')
+  const [editandoBib, setEditandoBib] = useState(false)
+
+  const enviarMeus = async () => {
+    try {
+      const r = await api.escolher('video', 'Escolher vídeos para a biblioteca de b-roll', true)
+      if (r.cancelado) return
+      const paths = (r.paths?.length ? r.paths : [r.path]).filter(Boolean)
+      toast('info', `Copiando ${paths.length} vídeo(s) para a biblioteca…`,
+        'Os originais ficam onde estão.')
+      const res = await api.bancoEnviar(paths, palavrasNovas)
+      carregarBaixados()
+      toast('ok', `${res.guardados?.length ?? 0} vídeo(s) na biblioteca`,
+        palavrasNovas ? `Palavras-chave: ${palavrasNovas}`
+          : 'Dica: ponha palavras-chave para o b-roll automático achar estes vídeos.')
+      for (const x of res.recusados ?? []) toast('warn', 'Um não entrou', x.motivo)
+    } catch (e: any) {
+      toast('warn', 'Não deu para enviar', String(e.message ?? e))
+    }
+  }
 
   const carregarEstado = () =>
     api.bancoEstado().then(setEstado).catch(() => setEstado(null))
@@ -277,27 +297,64 @@ export default function BancoBroll({ projectId, onChanged, snapshot }: {
         </>
       )}
 
-      {baixados.length > 0 && (
-        <details className="mt-2">
-          <summary className="text-[11px] text-slate-400 cursor-pointer">
-            já baixados ({baixados.length}) — usam sem internet
-          </summary>
-          <div className="grid gap-1.5 mt-1.5" style={GRADE}>
+      {/* A BIBLIOTECA DE B-ROLL: o que veio do banco e o que ele enviou.
+          Fica na pasta de dados e serve para todos os vídeos, sem internet.
+          As palavras-chave são o que o b-roll automático procura. */}
+      <div className="mt-3 border-t border-line pt-2" data-biblioteca="1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wide">
+            Biblioteca de b-roll ({baixados.length})</span>
+          <input className="field text-xs py-0.5 w-44" value={palavrasNovas}
+                 placeholder="palavras-chave (ex.: academia, treino)"
+                 title="o que o b-roll automático vai procurar para usar estes vídeos"
+                 onChange={(e) => setPalavrasNovas(e.target.value)} />
+          <button className="btn btn-xs" data-enviar-meus="1" onClick={enviarMeus}>
+            + enviar vídeos meus</button>
+          {baixados.length > 0 && (
+            <button className={`btn btn-xs ml-auto ${editandoBib ? 'btn-primary' : ''}`}
+                    onClick={() => setEditandoBib((v) => !v)}>
+              {editandoBib ? 'pronto' : 'editar'}</button>
+          )}
+        </div>
+        {baixados.length === 0 ? (
+          <p className="hint mt-1">
+            Vazia. O que você baixar do banco e os vídeos que você enviar ficam aqui,
+            para usar em qualquer vídeo, sem internet.</p>
+        ) : (
+          <div className="grid gap-1.5 mt-1.5 max-h-72 overflow-auto" style={GRADE}>
             {baixados.map((b) => (
-              <button key={b.id} className="rounded-md overflow-hidden border border-line text-left"
-                      title={`${b.termo || ''} — de ${b.autor}. Clique para pôr no cursor.`}
-                      onClick={() => usarBaixado(b)}>
-                {b.miniatura
-                  ? <img src={b.miniatura} alt="" loading="lazy" className="w-full h-20 object-cover"
-                         onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
-                  : <div className="h-20 bg-ink-900" />}
-                <span className="block px-1 py-0.5 text-[9px] text-slate-400 truncate">
-                  {b.termo || b.arquivo} · {b.autor}</span>
-              </button>
+              <div key={b.id} className="rounded-md overflow-hidden border border-line text-left">
+                <button className="block w-full text-left"
+                        title={`${b.termo || b.nome || ''} — de ${b.autor}. Clique para pôr no cursor.`}
+                        onClick={() => usarBaixado(b)}>
+                  {b.miniatura
+                    ? <img src={b.miniatura} alt="" loading="lazy" className="w-full h-20 object-cover"
+                           onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
+                    : <div className="h-20 bg-ink-900" />}
+                  <span className="block px-1 py-0.5 text-[9px] text-slate-400 truncate">
+                    {b.fonte === 'meu' ? '★ ' : ''}{b.termo || b.nome || b.arquivo} · {b.autor}</span>
+                </button>
+                {editandoBib && (
+                  <div className="p-1 space-y-1 bg-ink-900">
+                    <input className="field w-full text-[10px] py-0.5" defaultValue={b.termo || ''}
+                           placeholder="palavras-chave"
+                           onBlur={async (e) => {
+                             if (e.target.value === (b.termo || '')) return
+                             await api.bancoPalavras(b.id, e.target.value).catch(() => null)
+                             carregarBaixados()
+                           }} />
+                    <button className="btn btn-xs btn-danger w-full"
+                            onClick={async () => {
+                              await api.bancoTirar(b.id).catch(() => null)
+                              carregarBaixados()
+                            }}>tirar da biblioteca</button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
-        </details>
-      )}
+        )}
+      </div>
     </section>
   )
 }

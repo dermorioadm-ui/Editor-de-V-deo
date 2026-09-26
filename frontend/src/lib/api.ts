@@ -229,6 +229,20 @@ export const api = {
     req<any>(`/api/projects/${pid}/banco/sugestao?t=${t.toFixed(2)}`),
   bancoUsar: (pid: string, ids: string[], at: number, termo: string) =>
     post<any>(`/api/projects/${pid}/banco/usar`, { ids, at, termo }),
+  /** o baixado entra NO LUGAR do b-roll `cutawayId` (mesma janela) */
+  bancoSubstituir: (pid: string, id: string, cutawayId: string, termo: string) =>
+    post<any>(`/api/projects/${pid}/banco/usar`,
+              { ids: [id], at: 0, termo, substituir: cutawayId }),
+  // a biblioteca de b-roll: vídeos DELE (copiados para a pasta de dados)
+  bancoEnviar: (paths: string[], palavras: string) =>
+    post<any>('/api/banco/enviar', { paths, palavras }),
+  bancoPalavras: (id: string, palavras: string) =>
+    post<any>('/api/banco/palavras', { id, palavras }),
+  bancoTirar: (id: string) => post<any>('/api/banco/tirar', { id }),
+  // b-roll automático no vídeo montado
+  brollAuto: (pid: string, frequencia: string) =>
+    post<any>(`/api/projects/${pid}/broll-auto`, { frequencia }),
+  brollAutoTirar: (pid: string) => post<any>(`/api/projects/${pid}/broll-auto/tirar`),
   /** b-roll por cima da fala: vários vídeos, em sequência a partir de `at` */
   brolls: (id: string, paths: string[], at: number, duracao?: number) =>
     post<{ ok: boolean; postos: any[]; recusados: { path: string; motivo: string }[] }>(

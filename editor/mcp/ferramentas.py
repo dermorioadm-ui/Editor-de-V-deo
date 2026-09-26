@@ -505,6 +505,41 @@ def broll_do_banco(c: Cliente, a: dict) -> str:
 
 
 @ferramenta(
+    "broll_automatico",
+    "Põe b-roll SOZINHO no vídeo montado: a IA (ou a regra do programa, sem "
+    "chave do Gemini) escolhe os momentos da fala que dá para ilustrar, quanto "
+    "cada b-roll dura e o que buscar; o vídeo sai da biblioteca dele ou do "
+    "banco grátis. A fala continua por baixo. Refazer troca só os automáticos; "
+    "os postos à mão ficam.",
+    {
+        "properties": {
+            "projeto": {"type": "string"},
+            "frequencia": {"type": "string", "enum": ["pouco", "medio", "muito"],
+                           "description": "pouco ~1 a cada 20 s, medio ~12 s, muito ~7 s"},
+        },
+        "required": ["projeto"],
+    },
+)
+def broll_automatico(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    job = c.post(f"/api/projects/{pid}/broll-auto",
+                 {"frequencia": a.get("frequencia") or "medio"})
+    fim = c.esperar_job(pid, job.get("id", ""))
+    ruim = _falhou(fim)
+    if ruim:
+        return f"o b-roll automático {ruim}"
+    r = fim.get("result") or {}
+    linhas = [f"quem escolheu os pontos: {'a IA' if r.get('quem') == 'ia' else 'a regra do programa'}"
+              + (f" ({r['aviso']})" if r.get("aviso") else "")]
+    for p in r.get("postos") or []:
+        linhas.append(f"b-roll “{p.get('busca')}” de {_seg(p.get('out_start'))} a "
+                      f"{_seg(p.get('out_end'))} (da {p.get('de')})")
+    for x in r.get("pulados") or []:
+        linhas.append(f"sem b-roll em {_seg(x.get('inicio'))}: {x.get('motivo')}")
+    return "\n".join(linhas)
+
+
+@ferramenta(
     "animar",
     "Faz uma sobreposição se mover, crescer, girar ou aparecer ao longo do "
     "tempo. Cada marco é um instante e o valor das propriedades naquele "

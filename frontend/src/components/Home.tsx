@@ -45,6 +45,12 @@ export default function Home() {
   // para quem quer maior ou menor — em porcentagem do tamanho certo, nunca
   // um número cru de pixels que muda de significado a cada resolução.
   const [legenda, setLegenda] = useState(1.0)
+  // B-ROLL AUTOMÁTICO: 'nao' ou a frequência. Lembrado entre um vídeo e outro
+  const [brollAuto, setBrollAuto] = useState<string>(() => {
+    try { return localStorage.getItem('sharkcut.broll') || 'nao' } catch { return 'nao' }
+  })
+  const [bancoEstado, setBancoEstado] = useState<any>(null)
+  const [chavePexels, setChavePexels] = useState('')
   const [resolucao, setResolucao] = useState('source')
   // 30 fps por padrão. Medido num 1920x1080 a 60 fps: baixar a saída para 30
   // corta 34% do trabalho de renderização inteiro, e num vídeo de alguém
@@ -194,6 +200,9 @@ export default function Home() {
       export: { scale: resolucao, extras, fps: fpsSaida,
                 burn_subtitles: legenda > 0 },
       look: look || 'nenhum',
+      // b-roll automático: entra depois da montagem, e o vídeo sai com ele
+      broll: { auto: brollAuto !== 'nao',
+               frequencia: brollAuto === 'nao' ? 'medio' : brollAuto },
     }
   }
 
@@ -364,6 +373,7 @@ export default function Home() {
 
   useEffect(() => {
     api.musicas().then(setMusicas).catch(() => setMusicas([]))
+    api.bancoEstado().then(setBancoEstado).catch(() => setBancoEstado(null))
   }, [])
 
   return (
@@ -702,6 +712,65 @@ export default function Home() {
               {legenda > 0 ? 'já sai no tamanho certo do formato'
                 : 'o vídeo sai sem legenda queimada — o .srt continua saindo'}
             </p>
+          </div>
+
+          <div className="w-52" data-broll-home="1">
+            <label className="label">B-roll automático</label>
+            <select className="field w-full py-1.5 text-xs" value={brollAuto}
+                    onChange={(e) => {
+                      setBrollAuto(e.target.value)
+                      try { localStorage.setItem('sharkcut.broll', e.target.value) } catch { /* sem memória */ }
+                    }}>
+              <option value="nao">sem b-roll automático</option>
+              <option value="pouco">pouco (1 a cada ~20 s)</option>
+              <option value="medio">médio (1 a cada ~12 s)</option>
+              <option value="muito">muito (1 a cada ~7 s)</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              {brollAuto === 'nao'
+                ? 'dá para pôr depois, no editor'
+                : 'a IA escolhe onde e o quê; o vídeo já sai com eles'}
+              {bancoEstado ? ` · biblioteca: ${bancoEstado.baixados ?? 0}` : ''}
+            </p>
+            <button className="text-[10px] text-sky-400 hover:text-sky-300 underline"
+                    onClick={async () => {
+                      try {
+                        const r = await api.escolher('video', 'Vídeos para a biblioteca de b-roll', true)
+                        if (r.cancelado) return
+                        const paths = (r.paths?.length ? r.paths : [r.path]).filter(Boolean)
+                        const palavras = window.prompt(
+                          'Palavras-chave destes vídeos (o automático usa para achar):', '') ?? ''
+                        const res = await api.bancoEnviar(paths, palavras)
+                        setBancoEstado(await api.bancoEstado().catch(() => bancoEstado))
+                        toast('ok', `${res.guardados?.length ?? 0} vídeo(s) na biblioteca de b-roll`,
+                          'Os originais ficam onde estão.')
+                      } catch (e: any) {
+                        toast('warn', 'Não deu para enviar', String(e.message ?? e))
+                      }
+                    }}>+ meus b-rolls na biblioteca</button>
+            {brollAuto !== 'nao' && bancoEstado && !bancoEstado.alguma && (
+              <div className="mt-1 space-y-1">
+                <p className="text-[10px] text-amber-300 leading-tight">
+                  Sem a chave grátis do banco, só entram vídeos da sua biblioteca.</p>
+                <div className="flex gap-1">
+                  <input className="field flex-1 text-[10px] py-0.5 font-mono" type="password"
+                         placeholder="chave do Pexels" value={chavePexels}
+                         onChange={(e) => setChavePexels(e.target.value)} />
+                  <button className="btn btn-xs" disabled={!chavePexels.trim()}
+                          onClick={async () => {
+                            try {
+                              setBancoEstado(await api.bancoChaves({ pexels: chavePexels.trim() }))
+                              setChavePexels('')
+                              toast('ok', 'Chave do Pexels guardada')
+                            } catch (e: any) {
+                              toast('warn', 'Não guardei a chave', String(e.message ?? e))
+                            }
+                          }}>ok</button>
+                </div>
+                <a className="text-[10px] text-sky-400 underline" target="_blank" rel="noreferrer"
+                   href="https://www.pexels.com/api/">criar chave grátis</a>
+              </div>
+            )}
           </div>
 
           <div className="w-44">

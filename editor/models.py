@@ -152,6 +152,10 @@ class Cutaway:
         "brightness": 0.0, "saturation": 1.0, "contrast": 1.0,
     })
     enabled: bool = True
+    # "auto" = posto pelo b-roll automático (refazer tira só esses); "" = à
+    # mão. `termo` é o que foi buscado, para o painel dizer por que está ali
+    origem: str = ""
+    termo: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -287,6 +291,9 @@ class EditPlan:
     # RESUMO: a duração que o vídeo tem que caber (segundos). 0 = sem alvo.
     # Quando há alvo, a IA escolhe o que sai da copy até o vídeo caber.
     alvo_duracao: float = 0.0
+    # B-ROLL AUTOMÁTICO: {"auto": bool, "frequencia": "pouco"|"medio"|"muito",
+    # "ultima": resumo da última vez que rodou}. Vazio = nunca pedido.
+    broll: dict = field(default_factory=dict)
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -325,6 +332,7 @@ class EditPlan:
             "repeats": self.repeats,
             "enquadramento": self.enquadramento,
             "alvo_duracao": self.alvo_duracao,
+            "broll": self.broll,
             "version": self.version,
         }
 
@@ -368,6 +376,7 @@ class EditPlan:
             plan.alvo_duracao = max(0.0, float(data.get("alvo_duracao") or 0.0))
         except (TypeError, ValueError):
             plan.alvo_duracao = 0.0
+        plan.broll = dict(data.get("broll") or {})
         plan.version = int(data.get("version", 1))
         return plan
 

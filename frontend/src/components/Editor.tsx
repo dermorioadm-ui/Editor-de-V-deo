@@ -5,6 +5,7 @@ import Inspector from './Inspector'
 import TextEditor from './TextEditor'
 import SubtitlePanel from './SubtitlePanel'
 import MediaPanel from './MediaPanel'
+import BrollInspector from './BrollInspector'
 import LookPanel from './LookPanel'
 import AudioPanel from './AudioPanel'
 import AIPanel from './AIPanel'
@@ -76,6 +77,9 @@ export default function Editor() {
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
 
   useEffect(() => { api.presets().then(setPresets).catch(() => {}) }, [])
+
+  // o item de trilho aberto no painel da direita (clique num b-roll)
+  const [itemSel, setItemSel] = useState<{ kind: string; id: string } | null>(null)
 
   const refresh = useCallback(async () => {
     if (!project) return
@@ -850,7 +854,13 @@ export default function Editor() {
                     ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null} />
         </main>
 
-        <aside className="w-[300px] shrink-0 border-l border-line overflow-auto">
+        <aside className={`${itemSel?.kind === 'cutaway' ? 'w-[340px]' : 'w-[300px]'}
+                           shrink-0 border-l border-line overflow-auto`}>
+          {itemSel?.kind === 'cutaway'
+            && (view?.cutaways ?? []).some((c: any) => c.id === itemSel.id) && (
+            <BrollInspector cutawayId={itemSel.id} onChanged={refresh} snapshot={snapshot}
+                            onClose={() => setItemSel(null)} />
+          )}
           <Inspector onChanged={refresh} snapshot={snapshot}
                      onToggleTake={async (id, restored) => {
                        snapshot()
@@ -892,6 +902,8 @@ export default function Editor() {
                       toast('warn', 'Não deu para mover', String(e.message ?? e))
                     }
                   }}
+                  onSelectItem={(kind, id) => setItemSel({ kind, id })}
+                  itemSelecionado={itemSel?.id ?? null}
                   onDeleteItem={async (kind, id, ripple) => {
                     snapshot()
                     const r = await api.deleteItem(project.id, kind, id, ripple)

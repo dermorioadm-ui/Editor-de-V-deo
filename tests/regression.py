@@ -346,6 +346,7 @@ def main() -> int:
     testar_trocar_a_musica()
     testar_banco_de_broll()
     testar_linha_do_tempo_com_varias_gravacoes()
+    testar_broll_automatico()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -7217,6 +7218,257 @@ def testar_linha_do_tempo_com_varias_gravacoes() -> None:
     check("palavrasDaMontagem" in (frente / "components/Editor.tsx").read_text(encoding="utf-8")
           and "words.slice(Math.min(a, b)" in texto,
           "o painel Texto tem as palavras das três gravações e seleciona por posição")
+
+
+def testar_broll_automatico() -> None:
+    """B-roll automático, a biblioteca de b-roll dele e o "substituir".
+
+    Pedido: "quero que a IA sugira onde dá para colocar b-roll e o tamanho, e
+    coloque sozinho o b-roll grátis; antes de gerar, escolher se quero
+    automático ou não e a frequência; quando gerar, o vídeo pronto; e poder
+    subir b-rolls meus para a biblioteca." E: "se eu quiser substituir, é só
+    clicar em cima dele e escolher outro".
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor import banco, broll_auto, db
+    from editor import projects as svc
+    from editor.ai import gemini
+    from editor.config import FFMPEG
+    from editor.mcp import ferramentas as F
+    from editor.mcp.cliente import Cliente
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="brollauto_"))
+    pid = None
+    srv = None
+    base_antiga = (banco.URL_PEXELS, banco.URL_PIXABAY)
+    chaves_antigas = {f: db.get_setting(banco.CHAVES[f], "") for f in banco.FONTES}
+    gemini_antiga = db.get_setting("gemini_api_key", "")
+    ambiente = {v: os.environ.pop(v, None)
+                for v in (*banco.AMBIENTE.values(), "EDITOR_GEMINI_KEY")}
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    try:
+        db.set_setting("gemini_api_key", "")
+        c = TestClient(app)
+
+        # ---- a biblioteca dele ----------------------------------------------
+        meu = tmp / "meu treino.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=0x00aa44:s=320x568:r=25:d=6", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(meu)], check=True)
+        r = c.post("/api/banco/enviar", json={"paths": [str(meu), str(tmp / "nao.mp4")],
+                                              "palavras": "academia treino halteres"})
+        corpo = r.json()
+        check(r.status_code == 200 and len(corpo["guardados"]) == 1
+              and corpo["recusados"],
+              "mandar um vídeo meu para a biblioteca funciona (e o que não existe "
+              "volta com o motivo)")
+        item = corpo["guardados"][0]
+        check(Path(item["path"]).parent == banco.pasta() and Path(item["path"]).exists()
+              and meu.exists(),
+              "a biblioteca guarda uma CÓPIA na pasta de dados; o original fica onde está")
+        bib = c.get("/api/banco/baixados").json()
+        meus = [b for b in bib if b["fonte"] == "meu"]
+        check(len(meus) == 1 and meus[0]["miniatura"].startswith("/api/banco/arquivo/")
+              and c.get(meus[0]["miniatura"]).status_code == 200,
+              "com miniatura LOCAL, que abre sem internet")
+        check(c.get(meus[0]["video"], headers={"Range": "bytes=0-99"}).status_code in (200, 206),
+              "e o vídeo da biblioteca toca no navegador (para escolher o trecho)")
+        check(c.get("/api/banco/arquivo/..%2F..%2Fsegredo").status_code in (400, 404),
+              "a rota da biblioteca não sai da pasta dela")
+        r = c.post("/api/banco/enviar", json={"paths": [str(meu)]})
+        check(r.json()["guardados"][0].get("repetido")
+              and len([b for b in c.get("/api/banco/baixados").json()
+                       if b["fonte"] == "meu"]) == 1,
+              "mandar o mesmo vídeo de novo não duplica")
+
+        # ---- a regra do programa (sem Gemini) --------------------------------
+        falas = [{"start": t, "end": t + 2.0, "text": f"a academia mudou meu treino {t}"}
+                 for t in (0.5, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0)]
+        slots = broll_auto.pela_regra(falas, 21.0, "muito")
+        check(slots and slots[0]["inicio"] >= broll_auto.LIVRE_NO_COMECO
+              and all(s["fim"] <= 21.0 - broll_auto.LIVRE_NO_FIM + 1e-6 for s in slots),
+              f"sem IA, a regra deixa o gancho e o fim livres ({[(s['inicio'], s['fim']) for s in slots]})")
+        check(all(b["inicio"] - a["inicio"] >= broll_auto.FREQUENCIAS["muito"] - 0.01
+                  for a, b in zip(slots, slots[1:])),
+              "e respeita a frequência pedida")
+        check(len(broll_auto.pela_regra(falas, 21.0, "pouco")) < len(slots),
+              "'pouco' põe menos b-roll que 'muito'")
+        check(slots[0]["busca"] == "academia",
+              f"a busca sai das palavras da fala ({slots[0]['busca']})")
+        t = banco.sugerir_termos
+        check(t("a porta de casa ficou aberta")[0] == "porta"
+              and t("o celular tocou de madrugada")[0] == "celular"
+              and t("eu comecei a academia esse ano")[0] == "academia",
+              f"a busca é a COISA da frase, não o verbo nem o adjetivo "
+              f"({t('a porta de casa ficou aberta')[:2]}, "
+              f"{t('eu comecei a academia esse ano')[:2]})")
+
+        # ---- a IA: o que ela devolve passa pela trava -------------------------
+        real = (gemini.chave_guardada, gemini.escolher_modelo, gemini.gerar_json)
+        try:
+            gemini.escolher_modelo = lambda chave, m: {"id": "falso", "saida": 4096}
+            gemini.gerar_json = lambda *a, **k: {"brolls": [
+                {"inicio": 0.5, "fim": 3.0, "busca": "casa"},           # no gancho
+                {"inicio": 4.0, "fim": 7.0, "busca": "casa de praia"},
+                {"inicio": 5.0, "fim": 8.0, "busca": "ladrão"},          # sobrepõe
+                {"inicio": 10.0, "fim": 20.0, "busca": "cadeado"},       # longo demais
+                {"inicio": 14.0, "fim": 16.0, "busca": ""},              # sem busca
+            ]}
+            got = broll_auto.pela_ia("x", "", falas, 21.0, "muito")
+        finally:
+            gemini.chave_guardada, gemini.escolher_modelo, gemini.gerar_json = real
+        check(all(g["inicio"] >= 2.0 for g in got)
+              and all(b["inicio"] >= a["fim"] for a, b in zip(got, got[1:]))
+              and all(g["fim"] - g["inicio"] <= broll_auto.MAX_DUR + 1e-6 for g in got)
+              and all(g["busca"] for g in got),
+              f"o que a IA sugere passa pela trava: sem gancho, sem sobrepor, "
+              f"no máximo {broll_auto.MAX_DUR:.0f} s, sempre com busca "
+              f"({[(g['inicio'], g['fim'], g['busca']) for g in got]})")
+
+        # ---- o clique único com b-roll automático -----------------------------
+        clipe = tmp / "banco.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=0xff00ff:s=180x320:r=25:d=8", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(clipe)], check=True)
+        base, reg = _banco_falso(tmp, clipe)
+        srv = reg["_srv"]
+        banco.URL_PEXELS = banco.URL_PIXABAY = base
+        banco._cache_busca.clear()
+        banco._itens.clear()
+        banco.guardar_chave("pexels", "chave-pexels-9999")
+        banco.guardar_chave("pixabay", "chave-pixabay-8888")
+
+        frases = ["olha so o que aconteceu comigo", "presta atencao nisso",
+                  "eu comecei a academia esse ano",
+                  "a porta de casa ficou aberta", "o celular tocou de madrugada",
+                  "a academia virou rotina", "o carro ficou na garagem",
+                  "meu cachorro latiu a noite toda", "a cozinha estava uma bagunca",
+                  "e foi assim que mudou tudo"]
+        install(frases)
+        amostras, _m, dur = build_track([(f, 0.8) for f in frases])
+        fonte = make_video(tmp / "fala.mp4", amostras, dur, 180, 320, 30)
+        projeto = svc.create(str(fonte), "brollauto", "VSL")
+        pid = projeto.id
+        r = c.post(f"/api/projects/{pid}/params",
+                   json={"broll": {"auto": True, "frequencia": "muito"}})
+        check(r.json()["plan"]["broll"] == {"auto": True, "frequencia": "muito"},
+              "a primeira tela grava 'b-roll automático, muito' no plano")
+        res = svc.one_click(svc.load(pid), Ctx(quiet=True))
+        q = svc.load(pid)
+        autos = [k for k in q.plan.cutaways if k.origem == "auto"]
+        dur_saida = svc.duracao_de_saida(q)
+        check(len(autos) >= 2 and (res.get("broll") or {}).get("postos"),
+              f"o clique único já entrega o vídeo com b-roll ({len(autos)} postos "
+              f"num vídeo de {dur_saida:.1f} s)")
+        check(all(k.out_start >= broll_auto.LIVRE_NO_COMECO - 1e-6 for k in autos)
+              and all(k.out_end <= dur_saida - broll_auto.LIVRE_NO_FIM + 1e-3 for k in autos),
+              "sem cobrir o gancho nem o fim")
+        ordenados = sorted(autos, key=lambda k: k.out_start)
+        check(all(b.out_start >= a.out_end - 1e-6 for a, b in zip(ordenados, ordenados[1:])),
+              "nenhum em cima do outro")
+        nomes = {m["id"]: m["path"] for m in svc.list_media(pid)}
+        da_bib = [k for k in autos if Path(nomes[k.media_id]).name.startswith("meu_")]
+        check(bool(da_bib) and da_bib[0].termo == "academia",
+              "onde a fala diz 'academia', entrou o vídeo MEU da biblioteca (pela "
+              "palavra-chave), antes de ir ao banco")
+        check(any(Path(nomes[k.media_id]).name.startswith(("pexels", "pixabay"))
+                  for k in autos),
+              "e o resto veio do banco grátis")
+        check(all(c2.audio != "mute" for c2 in q.plan.active_clips),
+              "a fala continua com som por baixo")
+        check((q.plan.broll.get("ultima") or {}).get("quem") == "regra",
+              "sem chave do Gemini, quem escolheu os pontos foi a regra (e o plano diz isso)")
+
+        # ---- um posto à mão sobrevive ao "refazer" ----------------------------
+        livre = next((t for t in (dur_saida - 1.2,) if t > 0), 0)
+        manual_mid = svc.add_media(pid, str(clipe), "video")["id"]
+        c.post(f"/api/projects/{pid}/cutaways",
+               json={"media_id": manual_mid, "out_start": livre - 0.8, "out_end": livre})
+        n_manual = len([k for k in svc.load(pid).plan.cutaways if k.origem != "auto"])
+        job = c.post(f"/api/projects/{pid}/broll-auto", json={"frequencia": "pouco"}).json()
+        import time as _t
+        fim = _t.time() + 120
+        while _t.time() < fim:
+            j = next(x for x in c.get("/api/jobs", params={"project_id": pid}).json()
+                     if x["id"] == job["id"])
+            if j["status"] in ("ok", "erro", "cancelado"):
+                break
+            _t.sleep(0.3)
+        q = svc.load(pid)
+        check(j["status"] == "ok"
+              and len([k for k in q.plan.cutaways if k.origem != "auto"]) == n_manual,
+              f"refazer o automático troca só os automáticos; o posto à mão fica "
+              f"({j['status']}: {j.get('error')})")
+        check(len([k for k in q.plan.cutaways if k.origem == "auto"]) <= len(autos),
+              "e 'pouco' põe menos que 'muito'")
+
+        # ---- substituir: outro vídeo no mesmo lugar ---------------------------
+        alvo = next(k for k in q.plan.cutaways if k.origem == "auto")
+        r = c.put(f"/api/projects/{pid}/cutaways/{alvo.id}",
+                  json={"media_id": manual_mid, "media_start": 1.5})
+        novo = r.json().get("cutaway") or {}
+        check(r.status_code == 200 and novo.get("media_id") == manual_mid
+              and abs(novo["out_start"] - alvo.out_start) < 1e-6
+              and abs(novo["media_start"] - 1.5) < 1e-6 and novo.get("origem") == "",
+              "substituir põe OUTRO vídeo no mesmo lugar, do trecho escolhido, e "
+              "ele deixa de ser 'automático'")
+
+        # ---- tirar os automáticos ----------------------------------------------
+        r = c.post(f"/api/projects/{pid}/broll-auto/tirar")
+        q = svc.load(pid)
+        check(r.status_code == 200 and not [k for k in q.plan.cutaways if k.origem == "auto"]
+              and len(q.plan.cutaways) == n_manual + 1,
+              "'tirar os automáticos' tira só eles")
+
+        # ---- pelo MCP ---------------------------------------------------------
+        texto = F.chamar(Cliente(transporte=c), "broll_automatico",
+                         {"projeto": pid, "frequencia": "medio"})
+        check("b-roll" in texto and "regra do programa" in texto,
+              f"o Claude na máquina dele também põe b-roll automático ({texto[:60]!r})")
+
+        # ---- a tela ------------------------------------------------------------
+        frente = Path("frontend/src/components")
+        tl_tsx = (frente / "Timeline.tsx").read_text(encoding="utf-8")
+        insp = (frente / "BrollInspector.tsx").read_text(encoding="utf-8")
+        home = (frente / "Home.tsx").read_text(encoding="utf-8")
+        check("props.onSelectItem?.(seg.kind, seg.id)" in tl_tsx
+              and "<BrollInspector" in (frente / "Editor.tsx").read_text(encoding="utf-8"),
+              "clicar (sem arrastar) num b-roll no trilho abre o painel dele")
+        check(all(k in insp for k in ('data-campo="inicio"', 'data-campo="dura"',
+                                      'data-campo="entra"', "substituir…", "do computador…",
+                                      "banco grátis", "api.bancoSubstituir(")),
+              "o painel tem começo, duração, o trecho do b-roll, e substituir pela "
+              "biblioteca, pelo banco ou por um arquivo do computador")
+        check("broll: { auto: brollAuto !== 'nao'" in home
+              and "sem b-roll automático" in home and "muito (1 a cada ~7 s)" in home,
+              "a primeira tela escolhe b-roll automático ou não, e a frequência")
+        check("+ enviar vídeos meus" in (frente / "BancoBroll.tsx").read_text(encoding="utf-8")
+              and "+ meus b-rolls na biblioteca" in home,
+              "e dá para mandar os b-rolls dele para a biblioteca (no editor e na primeira tela)")
+    finally:
+        svc.previa_da_edicao = previa_real
+        banco.URL_PEXELS, banco.URL_PIXABAY = base_antiga
+        for f, v in chaves_antigas.items():
+            db.set_setting(banco.CHAVES[f], v)
+        db.set_setting("gemini_api_key", gemini_antiga)
+        for k, v in ambiente.items():
+            if v is not None:
+                os.environ[k] = v
+        if srv is not None:
+            srv.shutdown()
+        if pid:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(banco.pasta(), ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 if __name__ == "__main__":
     install(["frase %d" % i for i in range(20)])

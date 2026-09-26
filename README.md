@@ -751,6 +751,16 @@ matemática permite.
 Tudo entra no mesmo `filter_complex` do bloco, junto com a velocidade. Cada
 bloco continua sendo encodado **uma única vez**.
 
+### Várias gravações na mesma linha do tempo
+
+Com duas ou mais gravações no projeto (o pacote, ou "acrescentar vídeo"), a
+linha do tempo mostra **todas, uma depois da outra**, com uma linha laranja na
+emenda e o nome de cada vídeo em cima. Tudo o que se faz na primeira se faz
+nas outras: marcar e cortar com Delete, arrastar a borda do vermelho,
+devolver um trecho, clicar num bloco. O corte de cada vídeo encaixa no
+silêncio do **próprio** áudio. O painel **Texto** também tem as palavras de
+todas as gravações, com o título de cada uma.
+
 ### Camadas
 
 A trilha tem faixas separadas, e cada uma aceita itens:
@@ -775,6 +785,48 @@ no trilho para mudar. A fala continua por baixo: nenhuma palavra sai do lugar
 e a duração do vídeo não muda. O que não couber (fim do vídeo, imagem em vez
 de vídeo) volta com o motivo escrito. Imagem entra pela aba Mídia, como
 janela ou como foto.
+
+### B-roll automático
+
+Na primeira tela, **B-roll automático**: *sem*, *pouco* (1 a cada ~20 s),
+*médio* (~12 s) ou *muito* (~7 s). Com ele ligado, o vídeo já sai com os
+b-rolls. A IA (com a chave do Gemini) lê a fala e escolhe onde dá para
+ilustrar, quanto cada um dura e o que mostrar; sem a chave, a regra do
+programa escolhe uma frase por intervalo, a que melhor se ilustra. O vídeo de
+cada um vem **primeiro da sua biblioteca** (pelas palavras-chave) e, se não
+houver, do banco grátis. O começo (o gancho) e o fim ficam com o seu rosto, e
+a fala continua por baixo.
+
+No editor, aba **Mídia › B-roll automático**: escolha a frequência e clique
+**pôr b-roll sozinho**. **Refazer** troca só os automáticos; os que você pôs à
+mão ficam. **tirar os automáticos** tira só eles.
+
+### Editar um b-roll: clique em cima dele no trilho
+
+Clique (sem arrastar) num b-roll no trilho **B-roll** e o painel dele abre na
+direita:
+
+- **começa em** e **dura**: digite. Aumenta ou diminui na hora.
+- **trecho do b-roll que aparece**: escolha de que segundo do vídeo de b-roll
+  ele começa (um vídeo de 1 minuto mostrando só os 15 s que você quer). A
+  prévia do painel toca só esse trecho, em laço.
+- **velocidade**.
+- **substituir…**: outro vídeo no mesmo lugar, da **biblioteca**, do **banco
+  grátis** (busca ali mesmo) ou **do computador**.
+- **apagar**.
+
+Se o vídeo escolhido acaba antes da duração pedida, a duração encolhe para
+caber. Um b-roll nunca faz faltar imagem nem corta a fala.
+
+### A sua biblioteca de b-roll
+
+Aba **Mídia › Biblioteca de b-roll › + enviar vídeos meus** (ou, na primeira
+tela, **+ meus b-rolls na biblioteca**). Escreva antes as **palavras-chave**
+(ex.: *academia, treino, halteres*): são elas que o b-roll automático procura
+para usar os seus vídeos. Os vídeos são **copiados** para a pasta de dados
+(`media/broll`), e os originais ficam onde estão. Mandar o mesmo vídeo de
+novo não duplica. Em **editar** você muda as palavras-chave de cada um ou tira
+da biblioteca.
 
 ### Banco de b-roll grátis (Pexels e Pixabay)
 
@@ -1406,11 +1458,11 @@ Em português, do jeito que você falaria:
 - *"põe essa música de fundo em -20 dB"*
 - *"exporta e me diz onde ficou"*
 
-São vinte e duas ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+São vinte e três ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
 transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
 **b-roll** (vários vídeos por cima da fala, em sequência), **buscar b-roll no
 banco grátis** e **pôr b-roll do banco** (ele lê o que você fala no ponto,
-procura e põe), animar, recortar em
+procura e põe), **b-roll automático**, animar, recortar em
 forma, efeitos, trilha, formatos (inclusive o 4:5 do feed), exportar,
 acrescentar vídeo, juntar vídeos, gravações, listar projetos e estado do
 editor.

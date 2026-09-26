@@ -1297,6 +1297,20 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None) -> 
     except Exception as exc:  # noqa: BLE001 — o vídeo sai sem os anexos
         ctx.progress(0.68, f"anexos não entraram ({exc})")
         x = {"ok": False, "erro": str(exc)}
+    # B-ROLL AUTOMÁTICO, se ele pediu na primeira tela. Aqui porque só agora
+    # existe a linha do tempo final (com resumo e anexos) e as legendas com
+    # os tempos de saída — é por elas que se decide onde cada b-roll entra.
+    # Antes da prévia: o vídeo que ele abre já sai com eles.
+    br = {"ok": False, "pulada": True}
+    if (project.plan.broll or {}).get("auto"):
+        from . import broll_auto
+
+        try:
+            br = _scoped(ctx, 0.68, 0.72, lambda c: broll_auto.aplicar(
+                project, c, project.plan.broll.get("frequencia", "medio")))
+        except Exception as exc:  # noqa: BLE001 — o vídeo sai sem b-roll
+            ctx.progress(0.72, f"b-roll automático não entrou ({exc})")
+            br = {"ok": False, "erro": str(exc)}
     # A CÓPIA LEVE DA FONTE saiu do caminho crítico. Ela existe para arrastar a
     # agulha sobre a fonte, e o player só cai nela enquanto a prévia da edição
     # está sendo refeita — ou seja, só depois do primeiro retoque. Gerá-la aqui
@@ -1322,7 +1336,8 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None) -> 
     # pronto.
     project.set_status("pronto")
     return {"analysis": a, "edit": b, "resumo": r, "anexos": x, "proxy": p,
-            "previa": v, "duracao": round(duracao_de_saida(project), 2)}
+            "broll": br, "previa": v,
+            "duracao": round(duracao_de_saida(project), 2)}
 
 
 def exportar_final(project: Project, ctx) -> dict:
@@ -2515,11 +2530,48 @@ def broll_do_banco(project: Project, ctx, pedido: dict) -> dict:
     if not caminhos:
         raise RuntimeError("; ".join(f["motivo"] for f in falhas)
                            or "nenhum vídeo baixou")
+    if pedido.get("substituir"):
+        # SUBSTITUIR: o vídeo baixado entra no lugar de um b-roll que já
+        # existe, na mesma janela
+        ctx.progress(0.95, "trocando o vídeo do b-roll", "banco")
+        fresco = load(project.id)
+        existente = {m["path"]: m for m in list_media(project.id)}
+        midia = existente.get(caminhos[0]) or add_media(project.id, caminhos[0],
+                                                        "video", papel="anexo")
+        r = substituir_broll(fresco, str(pedido["substituir"]), midia["id"])
+        return {**r, "postos": [], "recusados": falhas, "creditos": creditos}
     ctx.progress(0.95, "pondo no vídeo", "banco")
     res = inserir_brolls(load(project.id), caminhos,
                          float(pedido.get("at") or 0.0),
                          float(pedido.get("duracao") or DURACAO_DO_BROLL))
     return {**res, "recusados": falhas + res["recusados"], "creditos": creditos}
+
+
+def substituir_broll(project: Project, cutaway_id: str, media_id: str,
+                     media_start: float = 0.0) -> dict:
+    """Outro vídeo no lugar de um b-roll: a MESMA janela, o trecho do começo.
+
+    Passa pela trava de sempre: se o vídeo novo é mais curto que a janela,
+    a janela encolhe (nunca o contrário — segmento curto come o fim da
+    frase). Quem trocou à mão fez o b-roll dele: sai do "automático".
+    """
+    from . import anexos
+
+    for c in project.plan.cutaways:
+        if c.id != cutaway_id:
+            continue
+        midia = anexos.validar(list_media(project.id), media_id, "video")
+        j = anexos.encaixar(midia, c.out_start, c.out_end, media_start, c.speed,
+                            limite=duracao_de_saida(project))
+        anexos.sem_sobreposicao(project.plan.cutaways, j.out_start, j.out_end,
+                                ignorar=c.id)
+        c.media_id = media_id
+        c.origem = ""
+        c.out_start, c.out_end = j.out_start, j.out_end
+        c.media_start, c.speed = j.media_start, j.speed
+        project.save_plan()
+        return {"ok": True, "cutaway": c.to_dict(), "ajustes": j.ajustes}
+    raise KeyError(f"b-roll {cutaway_id} não existe")
 
 
 def termos_no_cursor(project: Project, t: float, janela: float = 4.0) -> dict:
