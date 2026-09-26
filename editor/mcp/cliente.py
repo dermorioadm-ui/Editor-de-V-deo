@@ -25,6 +25,12 @@ class ErroDoEditor(Exception):
 FINAIS = ("ok", "erro", "cancelado", "done", "error", "cancelled")
 
 
+# O editor está em 127.0.0.1: nunca por proxy. O urllib lê o proxy do sistema
+# (no Windows, o do registro), e a exceção "<local>" de lá só cobre nome sem
+# ponto — 127.0.0.1 ia parar no proxy de um antivírus ou de uma VPN.
+_DIRETO = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 class Cliente:
     """Cliente HTTP do editor local.
 
@@ -55,7 +61,7 @@ class Cliente:
         req = urllib.request.Request(url, data=dados, headers=cabecalhos,
                                      method=metodo)
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
+            with _DIRETO.open(req, timeout=timeout or self.timeout) as r:
                 bruto = r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             detalhe = exc.read().decode("utf-8", "replace")[:400]

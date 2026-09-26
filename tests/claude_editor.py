@@ -87,26 +87,38 @@ if modo == "sem_login":
           "result": "Invalid API key · Please run /login"})
     sys.exit(1)
 
+import urllib.request
 cfg = json.load(open(args[args.index("--mcp-config") + 1], encoding="utf-8"))
 srv_cfg = cfg["mcpServers"]["sharkcut"]
-srv = subprocess.Popen([srv_cfg["command"], *srv_cfg.get("args", [])],
-                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                       env={**os.environ, **srv_cfg.get("env", {})},
-                       text=True, encoding="utf-8", bufsize=1)
+# como o Claude Code de verdade: MCP pela porta HTTP, com o cabeçalho da chave
+assert srv_cfg.get("type") == "http", srv_cfg
 n = [0]
+def post(corpo):
+    req = urllib.request.Request(srv_cfg["url"], data=json.dumps(corpo).encode(), method="POST",
+                                 headers={**srv_cfg.get("headers", {}),
+                                          "Content-Type": "application/json",
+                                          "Accept": "application/json, text/event-stream"})
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=600) as r:
+        return r.status, r.read().decode("utf-8")
 def rpc(metodo, params=None):
     n[0] += 1
-    srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": n[0], "method": metodo,
-                                "params": params or {}}) + "\n")
-    srv.stdin.flush()
-    return json.loads(srv.stdout.readline())["result"]
+    status, corpo = post({"jsonrpc": "2.0", "id": n[0], "method": metodo, "params": params or {}})
+    return json.loads(corpo)["result"]
 
+if modo == "sem_ferramentas":
+    emit({"type": "system", "subtype": "init", "model": "claude-falso",
+          "mcp_servers": [{"name": "sharkcut", "status": "failed"}]})
+    import time; time.sleep(30)          # o de verdade seguiria sem ferramenta
+    sys.exit(0)
 rpc("initialize", {"protocolVersion": "2025-06-18"})
+assert post({"jsonrpc": "2.0", "method": "notifications/initialized"})[0] == 202
 nomes = {t["name"] for t in rpc("tools/list")["tools"]}
 permitidas = set(args[args.index("--allowedTools") + 1].split(","))
 emit({"type": "system", "subtype": "init", "model": "claude-falso",
       "mcp_servers": [{"name": "sharkcut", "status": "connected"}]})
 pid = re.search(r"projeto (\S+) \(", prompt).group(1)
+import time
+time.sleep(float(os.environ.get("CLAUDE_FALSO_PENSA", "0")))
 
 def chamar(nome, a):
     emit({"type": "assistant", "message": {"content": [
@@ -143,7 +155,6 @@ emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 9,
       "total_cost_usd": 0.0,
       "result": "- pus o título amarelo no gancho\n- corrigi 'cliente'\n"
                 + ("- conferi o quadro" if viu else "- NÃO consegui ver o quadro")})
-srv.stdin.close(); srv.wait(timeout=20)
 '''
 
 
@@ -161,6 +172,33 @@ def http(metodo: str, rota: str, corpo: dict | None = None, base: str = "") -> d
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as r:
         return json.loads(r.read().decode() or "{}")
+
+
+def mcp_post(base: str, auth: str, corpo: dict, origem: str = "",
+             tipo: str = "application/json") -> tuple[int, dict]:
+    cab = {"Content-Type": tipo, "Accept": "application/json, text/event-stream"}
+    if auth:
+        cab["Authorization"] = auth
+    if origem:
+        cab["Origin"] = origem
+    req = urllib.request.Request(base + "/mcp", data=json.dumps(corpo).encode(), method="POST",
+                                 headers=cab)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            bruto = r.read().decode()
+            return r.status, (json.loads(bruto) if bruto.strip() else {})
+    except urllib.error.HTTPError as exc:
+        return exc.code, {}
+
+
+def mcp_get(base: str, auth: str) -> int:
+    req = urllib.request.Request(base + "/mcp", headers={"Authorization": auth,
+                                                         "Accept": "text/event-stream"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
 
 
 def esperar(base: str, pid: str, job_id: str, limite: float = 900.0) -> tuple[dict, list]:
@@ -504,16 +542,69 @@ def main() -> int:
         check(proj.plan.editor == "claude" and proj.plan.pedido_claude,
               "o projeto lembra que o Claude é o editor e o pedido")
 
+        print("\n-- as ferramentas pela porta local (/mcp), com a chave da edição")
+        cfg_mcp = json.loads((proj.dir / "claude" / "mcp.json").read_text(encoding="utf-8"))
+        srv = cfg_mcp["mcpServers"]["sharkcut"]
+        check(srv.get("type") == "http" and srv["url"].endswith("/mcp")
+              and srv["headers"]["Authorization"].startswith("Bearer ")
+              and "command" not in srv,
+              "o Claude liga as ferramentas pela porta do Sharkcut que já está aberta — "
+              "sem abrir um segundo programa (era onde o Windows dele falhava)")
+        velha = srv["headers"]["Authorization"]
+        check(mcp_post(base, velha, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[0] == 401,
+              "a chave morre quando a edição acaba")
+        from editor import claude_editor as C
+        chave = "Bearer " + C.abrir_chave()
+        st, corpo = mcp_post(base, chave, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                           "params": {"protocolVersion": "2025-06-18"}})
+        check(st == 200 and corpo["result"]["serverInfo"]["name"] == "sharkcut",
+              "com a chave, a porta responde o MCP", str(corpo)[:100])
+        st, corpo = mcp_post(base, chave, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        nomes = {t["name"] for t in corpo["result"]["tools"]}
+        check(st == 200 and {"pos_contexto", "cortar", "ver_quadros"} <= nomes,
+              "e lista as mesmas ferramentas do mcp.bat", str(len(nomes)))
+        check(mcp_post(base, chave, {"jsonrpc": "2.0", "method": "notifications/initialized"})[0]
+              == 202, "aviso sem id: 202, sem corpo")
+        check(mcp_post(base, "", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})[0] == 401
+              and mcp_post(base, "Bearer inventada", {"jsonrpc": "2.0", "id": 3,
+                                                       "method": "tools/list"})[0] == 401,
+              "sem a chave (ou com uma inventada), nada")
+        check(mcp_post(base, chave, {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
+                       origem="http://site-qualquer.com")[0] == 403
+              and mcp_post(base, chave, {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
+                           tipo="text/plain")[0] == 415,
+              "uma página aberta no navegador não chama as ferramentas (origem e tipo)")
+        check(mcp_get(base, chave) == 405, "GET: 405 (sem fluxo do servidor), como manda a regra")
+        C.fechar_chave(chave[7:])
+
         print("\n-- pedir mais ao Claude de dentro do editor")
+        os.environ["CLAUDE_FALSO_PENSA"] = "7"
         job = http("POST", f"/api/projects/{pid}/claude", {"pedido": "aumenta a legenda"},
                    base=base)
         fim, _m = esperar(base, pid, job["id"])
+        os.environ.pop("CLAUDE_FALSO_PENSA")
+        check(any("pensando há" in m for m in _m),
+              "enquanto ele pensa, a barra diz há quanto tempo — não parece travada",
+              str([m for m in _m if "Claude" in m][:3]))
         a = json.loads(registro.read_text(encoding="utf-8"))
         check(fim["status"] == "ok" and (fim.get("result") or {}).get("claude", {}).get("ok"),
               "o pedido de retoque roda (em linha própria, sem travar)", fim.get("error") or "")
         check("PEDIU AGORA: aumenta a legenda" in a["prompt"]
               and "SÓ o que ele pediu" in a["prompt"],
               "e o Claude recebe só o pedido novo, para não refazer o resto")
+
+        print("\n-- as ferramentas não ligam: para na hora e diz o porquê")
+        os.environ["CLAUDE_FALSO_MODO"] = "sem_ferramentas"
+        t_ini = time.time()
+        job = http("POST", f"/api/projects/{pid}/claude", {"pedido": "qualquer coisa"},
+                   base=base)
+        fim, _m = esperar(base, pid, job["id"])
+        os.environ.pop("CLAUDE_FALSO_MODO")
+        cl = (fim.get("result") or {}).get("claude") or {}
+        check(not cl.get("ok") and "ligar as ferramentas" in cl.get("erro", "")
+              and time.time() - t_ini < 20,
+              "sem as ferramentas, o Sharkcut encerra o Claude na hora (não deixa ele "
+              "inventar texto) e escreve o motivo", f"{cl.get('erro', '')} {time.time() - t_ini:.0f}s")
 
         print("\n-- o Claude editando, SEM a pós-edição (só o que o Gemini fazia)")
         p3 = http("POST", "/api/projects", {"source_path": str(fonte), "name": "sem pós",

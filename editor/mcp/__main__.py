@@ -66,16 +66,6 @@ def _aviso(texto: str) -> None:
     print(texto, file=sys.stderr, flush=True)
 
 
-def _responder(saida, ident, resultado=None, erro=None) -> None:
-    msg = {"jsonrpc": "2.0", "id": ident}
-    if erro is not None:
-        msg["error"] = erro
-    else:
-        msg["result"] = resultado
-    saida.write(json.dumps(msg, ensure_ascii=False) + "\n")
-    saida.flush()
-
-
 def _texto(t: str, erro: bool = False) -> dict:
     return {"content": [{"type": "text", "text": t}], "isError": erro}
 
@@ -128,6 +118,39 @@ def tratar(pedido: dict, cliente: Cliente) -> tuple[bool, dict | None]:
     return True, None  # método desconhecido: quem chama vira erro
 
 
+def processar(pedido, cliente: Cliente):
+    """Uma mensagem JSON-RPC (ou um lote) → a resposta, ou None se não há o
+    que responder (aviso). O mesmo miolo serve o stdio (mcp.bat) e a porta
+    HTTP (/mcp), que é por onde o Claude chamado pelo próprio Sharkcut entra."""
+    if isinstance(pedido, list):
+        # lote: a especificação permite, e responder a um lote com uma
+        # resposta solta quebra clientes que casam id por posição
+        respostas = []
+        for p in pedido:
+            if not isinstance(p, dict):
+                continue
+            tem, corpo = tratar(p, cliente)
+            if tem and p.get("id") is not None:
+                respostas.append({"jsonrpc": "2.0", "id": p["id"],
+                                  "result": corpo} if corpo is not None else
+                                 {"jsonrpc": "2.0", "id": p["id"],
+                                  "error": {"code": -32601,
+                                            "message": "método desconhecido"}})
+        return respostas or None
+    if not isinstance(pedido, dict):
+        return None
+    tem, corpo = tratar(pedido, cliente)
+    if not tem:
+        return None
+    msg = {"jsonrpc": "2.0", "id": pedido.get("id")}
+    if corpo is None:
+        msg["error"] = {"code": -32601,
+                        "message": f"método desconhecido: {pedido.get('method')}"}
+    else:
+        msg["result"] = corpo
+    return msg
+
+
 def servir(entrada=None, saida=None, cliente: Cliente | None = None) -> int:
     entrada = entrada if entrada is not None else sys.stdin
     saida = saida if saida is not None else sys.stdout
@@ -141,32 +164,10 @@ def servir(entrada=None, saida=None, cliente: Cliente | None = None) -> int:
         except json.JSONDecodeError:
             _aviso(f"linha que não é JSON, ignorada: {linha[:120]}")
             continue
-        if isinstance(pedido, list):
-            # lote: a especificação permite, e responder a um lote com uma
-            # resposta solta quebra clientes que casam id por posição
-            respostas = []
-            for p in pedido:
-                tem, corpo = tratar(p, cliente)
-                if tem and p.get("id") is not None:
-                    respostas.append({"jsonrpc": "2.0", "id": p["id"],
-                                      "result": corpo} if corpo is not None else
-                                     {"jsonrpc": "2.0", "id": p["id"],
-                                      "error": {"code": -32601,
-                                                "message": "método desconhecido"}})
-            if respostas:
-                saida.write(json.dumps(respostas, ensure_ascii=False) + "\n")
-                saida.flush()
-            continue
-        tem, corpo = tratar(pedido, cliente)
-        if not tem:
-            continue
-        ident = pedido.get("id")
-        if corpo is None:
-            _responder(saida, ident, erro={
-                "code": -32601,
-                "message": f"método desconhecido: {pedido.get('method')}"})
-        else:
-            _responder(saida, ident, resultado=corpo)
+        resposta = processar(pedido, cliente)
+        if resposta is not None:
+            saida.write(json.dumps(resposta, ensure_ascii=False) + "\n")
+            saida.flush()
     return 0
 
 

@@ -1567,6 +1567,21 @@ enxerga as ferramentas do Sharkcut, e as que exportariam, abririam outro
 projeto ou refariam o clique único ficam de fora. Ninguém precisa responder
 nada durante a edição.
 
+**Como ele liga as ferramentas:** pela porta do próprio Sharkcut
+(`http://127.0.0.1:<porta>/mcp`), o mesmo servidor que já está aberto — sem
+abrir um segundo programa. Abrir esse programa (o Python do `mcp.bat`) era o
+que falhava no Windows com `&` no nome da pasta: o Claude entrava sem
+ferramenta nenhuma e a edição dele não acontecia. A porta só atende esta
+máquina, só com uma chave que vale para aquela edição (gerada na hora,
+apagada no fim) e nunca a pedido de uma página aberta no navegador. Se mesmo
+assim as ferramentas não ligarem, o Sharkcut encerra o Claude na hora e a tela
+diz o motivo — em vez de deixar ele seguir sem ferramenta.
+
+**Enquanto ele pensa**, a barra diz o que ele fez por último e há quanto
+tempo está pensando ("Claude conectado, lendo o vídeo — pensando há 1 min 10
+s"). Com o Opus, o primeiro passo pode levar um ou dois minutos: é leitura e
+planejamento, não travamento.
+
 **Precisa:** o Claude Code nesta máquina, com login feito uma vez. **Quem usa
 o app Claude (a janela, com a aba Code) já tem:** o app guarda o Claude Code
 dele numa pasta própria (`%APPDATA%\Claude\claude-code\<versão>\claude.exe`,

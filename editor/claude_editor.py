@@ -459,18 +459,79 @@ def ferramentas_negadas(modo: str = "completo") -> list[str]:
     return [f"mcp__{SERVIDOR}__{n}" for n in _nomes() if n not in _liberadas(modo)]
 
 
-def config_mcp(pasta: Path) -> Path:
-    """O arquivo de MCP desta edição: só o servidor do Sharkcut."""
-    raiz = str(Path(__file__).resolve().parent.parent)
-    env = {"EDITOR_PORT": str(os.environ.get("EDITOR_PORT") or PORT),
-           "PYTHONPATH": raiz, "PYTHONIOENCODING": "utf-8",
-           "EDITOR_DATA_DIR": str(os.environ.get("EDITOR_DATA_DIR") or DATA_DIR)}
-    cfg = {"mcpServers": {SERVIDOR: {"command": sys.executable,
-                                     "args": ["-m", "editor.mcp"], "env": env}}}
+# AS FERRAMENTAS PELA PORTA HTTP. O Claude Code chamado pelo Sharkcut fala
+# com o Sharkcut por http://127.0.0.1:<porta>/mcp — o MESMO servidor que já
+# está aberto —, e não por um segundo programa que ele mesmo abriria (o
+# python do mcp.bat). Abrir esse programa era onde a máquina dele falhava:
+# "o Claude não conseguiu ligar as ferramentas", e o Claude seguia sem
+# ferramenta nenhuma. Pela porta não há processo para abrir, caminho com "&"
+# para quebrar nem antivírus no meio.
+#
+# A porta só abre com uma CHAVE que vale para UMA edição: gerada aqui, escrita
+# no mcp.json desta sessão, apagada quando ela acaba. Nada de fora — outra
+# máquina da rede, uma página aberta no navegador — chama as ferramentas.
+_chaves: dict[str, float] = {}
+_trava_chaves = threading.Lock()
+
+
+def abrir_chave() -> str:
+    import secrets
+
+    chave = secrets.token_urlsafe(24)
+    with _trava_chaves:
+        _chaves[chave] = time.time() + TETO_MINUTOS * 60 + 600
+    return chave
+
+
+def fechar_chave(chave: str) -> None:
+    with _trava_chaves:
+        _chaves.pop(chave, None)
+
+
+def chave_ok(chave: str) -> bool:
+    agora = time.time()
+    with _trava_chaves:
+        for k in [k for k, fim in _chaves.items() if fim < agora]:
+            _chaves.pop(k, None)
+        return bool(chave) and chave in _chaves
+
+
+def _porta() -> str:
+    return str(os.environ.get("EDITOR_PORT") or PORT)
+
+
+def config_mcp(pasta: Path, chave: str) -> Path:
+    """O arquivo de MCP desta edição: só o Sharkcut, pela porta local."""
+    cfg = {"mcpServers": {SERVIDOR: {
+        "type": "http", "url": f"http://127.0.0.1:{_porta()}/mcp",
+        "headers": {"Authorization": f"Bearer {chave}"}}}}
     pasta.mkdir(parents=True, exist_ok=True)
     alvo = pasta / "mcp.json"
     alvo.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
     return alvo
+
+
+def _conferir_porta(chave: str) -> str:
+    """Por que as ferramentas não ligaram? Pergunta à porta /mcp daqui mesmo,
+    como o Claude perguntaria. "" = a porta responde."""
+    import urllib.error
+    import urllib.request
+
+    corpo = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                        "params": {"protocolVersion": "2025-06-18"}}).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{_porta()}/mcp", data=corpo, method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "Authorization": f"Bearer {chave}"})
+    try:
+        abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with abridor.open(req, timeout=15) as r:
+            json.loads(r.read().decode("utf-8") or "{}")
+        return ""
+    except urllib.error.HTTPError as exc:
+        return f"a porta do Sharkcut respondeu {exc.code}"
+    except (OSError, ValueError) as exc:
+        return f"a porta do Sharkcut não respondeu ({exc})"
 
 
 SISTEMA = (
@@ -731,15 +792,30 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
     if not est["instalado"]:
         saida["erro"] = est["motivo"] or "Claude Code não encontrado"
         return _gravar(pid, saida, t0)
+    if est.get("logado") is False:
+        saida["erro"] = _explicar("not logged in")
+        return _gravar(pid, saida, t0)
     project = svc.load(pid)
     pasta = project.dir / "claude"
-    cfg = config_mcp(pasta)
+    chave = abrir_chave()
+    try:
+        return _conduzir(pid, ctx, project, pasta, chave, est, modelo, retoque, modo, saida, t0)
+    finally:
+        fechar_chave(chave)
+
+
+def _conduzir(pid, ctx, project, pasta: Path, chave: str, est: dict, modelo, retoque: str,
+              modo: str, saida: dict, t0: float) -> dict:
+    cfg = config_mcp(pasta, chave)
     modelo = modelo if modelo is not None else str(db.get_setting("claude_modelo", "") or "")
     cmd = comando(est["caminho"], cfg, modelo, modo)
     env = dict(os.environ)
     env.setdefault("MCP_TIMEOUT", "60000")
     env.setdefault("MCP_TOOL_TIMEOUT", "900000")
     env["PYTHONIOENCODING"] = "utf-8"
+    # a porta das ferramentas é local: nunca pelo proxy do sistema
+    for var in ("NO_PROXY", "no_proxy"):
+        env[var] = ",".join(x for x in ("127.0.0.1", "localhost", env.get(var, "")) if x)
     diario = pasta / f"sessao_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
     try:
         proc = _abrir(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -767,6 +843,19 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
     threading.Thread(target=ler_erros, daemon=True).start()
     parar = threading.Event()
     cancelado = threading.Event()
+    # O QUE A BARRA MOSTRA. Entre uma ferramenta e outra o Claude pensa — com
+    # o Opus, às vezes um minuto ou mais antes da primeira. Sem notícia, a
+    # barra parava em 1% e parecia travada; agora ela diz o que ele fez por
+    # último e há quanto tempo está pensando.
+    barra = {"fracao": 0.005, "frase": "abrindo o Claude Code", "t": time.time()}
+
+    def avisar(fracao: float, frase: str) -> None:
+        barra.update(fracao=fracao, frase=frase, t=time.time())
+        ctx.progress(fracao, frase, "claude")
+
+    def _mmss(seg: float) -> str:
+        seg = int(seg)
+        return f"{seg // 60} min {seg % 60:02d} s" if seg >= 60 else f"{seg} s"
 
     def vigia() -> None:
         limite = t0 + TETO_MINUTOS * 60
@@ -779,8 +868,16 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
                 except OSError:
                     pass
                 return
+            parado = time.time() - barra["t"]
+            if parado >= 5 and int(parado) % 5 == 0:
+                try:
+                    ctx.progress(barra["fracao"], f"{barra['frase']} — pensando há {_mmss(parado)}",
+                                 "claude")
+                except BaseException:  # noqa: BLE001 — cancelar chega por aqui também
+                    cancelado.set()
 
     threading.Thread(target=vigia, daemon=True).start()
+    avisar(0.005, "abrindo o Claude Code")
     resultado: dict = {}
     ultimo_texto = ""
     try:
@@ -795,10 +892,20 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
                 if tipo == "system" and ev.get("subtype") == "init":
                     servidores = {s.get("name"): s.get("status")
                                   for s in ev.get("mcp_servers") or []}
-                    if servidores.get(SERVIDOR) not in (None, "connected"):
+                    situacao = servidores.get(SERVIDOR)
+                    if situacao not in (None, "connected"):
+                        # sem as ferramentas ele só inventaria texto: para já,
+                        # e diz o porquê em vez de "não fez nada"
+                        porque = _conferir_porta(chave)
                         saida["erro"] = (f"o Claude não conseguiu ligar as ferramentas do "
-                                         f"Sharkcut ({servidores.get(SERVIDOR)})")
-                    ctx.progress(0.01, f"Claude conectado ({ev.get('model', '')})")
+                                         f"Sharkcut ({situacao})"
+                                         + (f": {porque}" if porque else ""))
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                        break
+                    avisar(0.01, f"Claude conectado ({ev.get('model', '')}), lendo o vídeo")
                 elif tipo == "assistant":
                     msg = ev.get("message") or ev
                     for bloco in msg.get("content") or []:
@@ -809,8 +916,7 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
                             saida["passos"].append(frase)
                             del saida["passos"][:-60]
                             try:
-                                ctx.progress(_curva(saida["ferramentas"]),
-                                             f"Claude: {frase}", "claude")
+                                avisar(_curva(saida["ferramentas"]), f"Claude: {frase}")
                             except KeyboardInterrupt:
                                 cancelado.set()
                                 raise

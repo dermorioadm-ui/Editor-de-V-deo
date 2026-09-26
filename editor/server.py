@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import (Body, FastAPI, File, Form, HTTPException, Query, Request,
                      UploadFile, WebSocket,
                      WebSocketDisconnect)
-from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
                                Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
@@ -2549,6 +2549,74 @@ def api_claude_entrar(request: Request) -> dict:
         raise HTTPException(403, "o login do Claude abre uma janela neste computador: "
                                  "aperte o botão nele mesmo, não pelo celular")
     return claude_editor.entrar()
+
+
+# ------------------------------------------------------------ MCP pela porta
+# O Claude Code que o Sharkcut chama liga as ferramentas por aqui (Streamable
+# HTTP do MCP, resposta em JSON), e não por um segundo programa. Três portas
+# fechadas: só desta máquina; só com a chave da edição em curso (ver
+# claude_editor.abrir_chave); e nunca a pedido de uma página aberta no
+# navegador (Origin de fora é recusado — a defesa contra DNS rebinding que a
+# especificação pede).
+_LOCAIS = ("127.0.0.1", "::1", "localhost")
+
+
+def _mcp_barrar(request: Request) -> None:
+    from urllib.parse import urlparse
+
+    from . import claude_editor
+
+    if request.client and request.client.host not in _LOCAIS:
+        raise HTTPException(403, "as ferramentas do Sharkcut só atendem esta máquina")
+    origem = request.headers.get("origin")
+    if origem and (urlparse(origem).hostname or "") not in _LOCAIS:
+        raise HTTPException(403, "origem recusada")
+    auth = request.headers.get("authorization") or ""
+    chave = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not claude_editor.chave_ok(chave):
+        raise HTTPException(401, "sem a chave desta edição")
+
+
+@app.post("/mcp")
+async def api_mcp(request: Request):
+    import json as _json
+
+    from starlette.concurrency import run_in_threadpool
+
+    from .mcp.__main__ import processar
+    from .mcp.cliente import Cliente
+
+    _mcp_barrar(request)
+    if "application/json" not in (request.headers.get("content-type") or "").lower():
+        raise HTTPException(415, "o MCP fala JSON")
+    try:
+        pedido = _json.loads((await request.body()).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32700, "message": "JSON inválido"}},
+                            status_code=400)
+    porta = request.scope.get("server", (None, _config.PORT))[1] or _config.PORT
+    cliente = Cliente(base=f"http://127.0.0.1:{porta}")
+    # a ferramenta chama a API deste mesmo servidor: roda fora do laço de
+    # eventos, senão ela esperaria por ele e ele por ela
+    resposta = await run_in_threadpool(processar, pedido, cliente)
+    if resposta is None:
+        return Response(status_code=202)
+    return JSONResponse(resposta)
+
+
+@app.get("/mcp")
+def api_mcp_get(request: Request):
+    _mcp_barrar(request)
+    # sem fluxo de mensagens do servidor para o cliente: a especificação
+    # manda responder 405, e o cliente segue só com os POST
+    return Response(status_code=405, headers={"Allow": "POST"})
+
+
+@app.delete("/mcp")
+def api_mcp_delete(request: Request):
+    _mcp_barrar(request)
+    return Response(status_code=405, headers={"Allow": "POST"})
 
 
 @app.get("/api/recorte/estado")

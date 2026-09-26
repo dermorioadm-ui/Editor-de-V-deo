@@ -173,6 +173,14 @@ def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
     imagens = [x for x in r["content"] if x["type"] == "image"]
     check(len(imagens) == 2 and imagens[0]["mimeType"] == "image/jpeg",
           "ver_quadros devolve IMAGENS (conteúdo de imagem do MCP)")
+    # o instante da emenda: o último quadro de cada bloco (o Claude de verdade
+    # pediu 10.00 s bem ali, e o ffmpeg saía sem foto nenhuma)
+    beiras = [round(b["out_end"] - 0.001, 3) for b in svc.timeline_summary(svc.load(pid))["blocks"]]
+    r2 = F.chamar(cliente, "ver_quadros", {"projeto": pid, "tempos": beiras[:6], "lado": 160})
+    fotos = [x for x in r2["content"] if x["type"] == "image"]
+    check(len(fotos) == len(beiras[:6]),
+          f"o quadro na beira de cada bloco sai (o último quadro antes da emenda): "
+          f"{len(fotos)}/{len(beiras[:6])}")
     com = _jpeg_para_rgb(base64.b64decode(imagens[0]["data"]))
     sem = _jpeg_para_rgb(base64.b64decode(imagens[1]["data"]))
     h, w, _ = com.shape

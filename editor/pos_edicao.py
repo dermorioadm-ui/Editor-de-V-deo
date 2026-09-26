@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import copy
 import itertools
+import math
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -254,12 +255,21 @@ def quadros(project, tempos: list[float], lado: int = LADO_DO_QUADRO) -> list[di
                                          media_paths, None, recorte=recorte)
         corte = args.index("[vout]") + 1
         destino = pasta / f"quadro_{pedaco.index}.jpg"
-        cmd = (args[:corte]
-               + ["-ss", f"{max(0.0, desloc):.4f}", "-frames:v", "1",
-                  "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", str(destino)])
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0 or not destino.exists():
-            raise RuntimeError(f"o quadro de {t:.2f} s não saiu: {r.stderr[-300:]}")
+        # o último quadro do pedaço começa um quadro ANTES do fim dele: pedir
+        # o instante da emenda (t no último quadro do bloco) mandava o -ss
+        # para depois do último quadro, e o ffmpeg saía sem erro e sem foto
+        # (visto com o Claude de verdade, pedindo o quadro de 10.00 s)
+        ultimo = max(0.0, (math.ceil(pedaco.out_theoretical * fps - 1e-6) - 1) / fps)
+        r = None
+        for ss in dict.fromkeys((min(max(0.0, desloc), ultimo), max(0.0, ultimo - 1.0 / fps), 0.0)):
+            cmd = (args[:corte]
+                   + ["-ss", f"{ss:.4f}", "-frames:v", "1",
+                      "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", str(destino)])
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0 and destino.exists():
+                break
+        if r is None or r.returncode != 0 or not destino.exists():
+            raise RuntimeError(f"o quadro de {t:.2f} s não saiu: {(r.stderr if r else '')[-300:]}")
         avisos = list(pedaco.avisos)
         if janelas and not RC.pronto():
             avisos.append("o recorte da pessoa não está instalado: camadas e "
