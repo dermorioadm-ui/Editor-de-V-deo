@@ -811,6 +811,27 @@ palavras-chave) e o banco completa o resto.
 *Pixabay ✓* (ou o motivo, se a chave foi recusada). Depois de gerar, a linha
 de cima do editor diz quantos b-rolls vieram de cada banco.
 
+**Como a IA escolhe o b-roll (com a chave do Gemini):**
+
+1. Ela lê o vídeo **inteiro** primeiro e escreve o assunto e o universo
+   visual dele (num vídeo de segurança de Airbnb: apartamento de temporada,
+   anfitrião, fechadura, câmera de segurança…).
+2. Para cada ponto, ela descreve a **cena** ideal e dá buscas de 2 a 5
+   palavras, em inglês e em português, sempre **dentro desse assunto**. Nunca
+   uma palavra solta: "essas pessoas invadiram" vira *"burglar entering
+   vacation rental"*, não *"people"*.
+3. O programa busca alguns candidatos no Pexels e no Pixabay e manda as
+   **miniaturas** para a IA, que escolhe olhando a que mostra a cena. Se
+   nenhuma combina, ela **recusa**, e aquele ponto fica sem b-roll: é melhor
+   que um vídeo sem nada a ver.
+
+Se quiser guiar, escreva o **assunto do vídeo** (ex.: *segurança de Airbnb*)
+no campo que aparece ao ligar o b-roll automático. Com a IA, ele vai junto
+com a leitura dela. **Sem a chave do Gemini**, a busca é pelas palavras da
+frase (bem menos precisa), e o assunto que você escrever vai junto em cada
+busca para dar contexto. O aviso do resultado diz qual dos dois caminhos
+rodou e o assunto que a IA leu.
+
 No editor, aba **Mídia › B-roll automático**: escolha a frequência e clique
 **pôr b-roll sozinho**. **Refazer** troca só os automáticos; os que você pôs à
 mão ficam. **tirar os automáticos** tira só eles.

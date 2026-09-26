@@ -240,8 +240,10 @@ export const api = {
     post<any>('/api/banco/palavras', { id, palavras }),
   bancoTirar: (id: string) => post<any>('/api/banco/tirar', { id }),
   // b-roll automático no vídeo montado
-  brollAuto: (pid: string, frequencia: string, fonte?: string) =>
-    post<any>(`/api/projects/${pid}/broll-auto`, { frequencia, ...(fonte ? { fonte } : {}) }),
+  brollAuto: (pid: string, frequencia: string, fonte?: string, assunto?: string) =>
+    post<any>(`/api/projects/${pid}/broll-auto`, {
+      frequencia, ...(fonte ? { fonte } : {}),
+      ...(assunto !== undefined ? { assunto } : {}) }),
   /** testa as chaves guardadas (uma busca mínima em cada banco) */
   bancoTestar: () => post<any>('/api/banco/testar', {}),
   brollAutoTirar: (pid: string) => post<any>(`/api/projects/${pid}/broll-auto/tirar`),

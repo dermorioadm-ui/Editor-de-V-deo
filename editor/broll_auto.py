@@ -75,8 +75,13 @@ def validar(slots: list[dict], duracao: float, maximo: int) -> list[dict]:
         busca = " ".join(str(s.get("busca") or "").split())[:60]
         if b - a < MIN_DUR * 0.75 or not busca:
             continue
+        en = [" ".join(str(x or "").split())[:60] for x in (s.get("buscas_en") or [])]
+        if s.get("busca_en"):
+            en.insert(0, " ".join(str(s["busca_en"]).split())[:60])
+        en = list(dict.fromkeys(x for x in en if x))[:4]
         saida.append({"inicio": round(a, 3), "fim": round(b, 3), "busca": busca,
-                      "busca_en": " ".join(str(s.get("busca_en") or "").split())[:60],
+                      "busca_en": en[0] if en else "", "buscas_en": en,
+                      "cena": str(s.get("cena") or "")[:200],
                       "alternativas": list(s.get("alternativas") or [])[:3],
                       "porque": str(s.get("porque") or "")[:160]})
         if len(saida) >= maximo:
@@ -131,69 +136,162 @@ def pela_regra(falas: list[dict], duracao: float, frequencia: str,
 
 
 INSTRUCAO = """Você edita vídeos de anúncio falados em português (uma pessoa \
-falando para a câmera). Sua tarefa é escolher os momentos em que entra \
-B-ROLL: um vídeo ilustrativo que cobre a imagem enquanto a voz continua.
+falando para a câmera) e escolhe o B-ROLL: vídeos ilustrativos de banco de \
+imagem (Pexels, Pixabay) que cobrem a imagem enquanto a voz continua.
 
-Regras:
-- B-roll ilustra o que está sendo DITO naquele instante: um objeto, lugar, \
-ação ou situação concreta. Nunca cubra a promessa principal, o preço ou a \
-chamada para ação: ali o rosto vende.
-- Não use os primeiros 2 segundos (o gancho) nem os últimos 3 segundos.
-- Cada b-roll dura de 2 a 5 segundos, sem se sobrepor a outro.
-- "busca" são 1 a 3 palavras em português, CONCRETAS e FILMÁVEIS, do jeito \
-que alguém procuraria num banco de vídeos (ex.: "casa de praia", \
-"ladrão arrombando porta", "celular na mão"). Nada abstrato ("segurança", \
-"sucesso"). "busca_en" é a MESMA busca em inglês ("beach house", \
-"burglar breaking door"): os bancos de vídeo (Pexels, Pixabay) acham muito \
-mais em inglês. Dê também 1 ou 2 "alternativas" mais genéricas, em \
-português.
-- Espalhe os b-rolls pelo vídeo inteiro.
+PRIMEIRO leia o vídeo INTEIRO e entenda o contexto:
+- "tema": em uma frase, do que o vídeo fala e o que ele vende.
+- "cenario": o universo VISUAL desse tema — lugares, objetos, pessoas e \
+situações que aparecem nesse assunto (ex.: num vídeo sobre segurança de \
+Airbnb: "apartamento de temporada, anfitrião entregando chaves, fechadura \
+eletrônica, câmera de segurança, hóspede com mala").
+
+DEPOIS escolha os momentos do b-roll. Regras:
+- Cada b-roll ilustra o que está sendo dito naquele instante, SEMPRE dentro \
+do tema e do cenário do vídeo. Uma palavra solta da frase não é busca: \
+"essas pessoas invadiram" num vídeo de Airbnb é "burglar entering vacation \
+rental apartment", não "people".
+- Nunca cubra a promessa principal, o preço ou a chamada para ação: ali o \
+rosto vende. Não use os primeiros 2 segundos nem os últimos 3.
+- Cada b-roll dura de 2 a 5 segundos, sem se sobrepor a outro, espalhados \
+pelo vídeo inteiro.
+- "cena": em português, o que o plano ideal MOSTRA (quem, onde, fazendo o \
+quê), em uma frase.
+- "buscas_en": 2 ou 3 buscas EM INGLÊS de banco de vídeo, de 2 a 5 palavras \
+cada, da mais específica para a mais ampla, todas dentro do cenário \
+(ex.: "airbnb host handing keys", "vacation rental front door", \
+"smart lock door"). Nada abstrato ("security", "success"), nada de uma \
+palavra só.
+- "busca": a busca principal em português (2 a 4 palavras).
 Responda só o JSON do esquema."""
 
 ESQUEMA = {
-    "type": "object",
+    "type": "OBJECT",
     "properties": {
+        "tema": {"type": "STRING"},
+        "cenario": {"type": "STRING"},
         "brolls": {
-            "type": "array",
+            "type": "ARRAY",
             "items": {
-                "type": "object",
+                "type": "OBJECT",
                 "properties": {
-                    "inicio": {"type": "number"},
-                    "fim": {"type": "number"},
-                    "busca": {"type": "string"},
-                    "busca_en": {"type": "string"},
-                    "alternativas": {"type": "array", "items": {"type": "string"}},
-                    "porque": {"type": "string"},
+                    "inicio": {"type": "NUMBER"},
+                    "fim": {"type": "NUMBER"},
+                    "cena": {"type": "STRING"},
+                    "buscas_en": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "busca": {"type": "STRING"},
+                    "porque": {"type": "STRING"},
                 },
-                "required": ["inicio", "fim", "busca"],
+                "required": ["inicio", "fim", "cena", "buscas_en", "busca"],
+                "propertyOrdering": ["inicio", "fim", "cena", "buscas_en", "busca",
+                                     "porque"],
             },
         },
     },
-    "required": ["brolls"],
+    "required": ["tema", "cenario", "brolls"],
+    "propertyOrdering": ["tema", "cenario", "brolls"],
 }
 
 
-def pedido_para_ia(falas: list[dict], duracao: float, n: int) -> str:
-    linhas = [f"Duração do vídeo: {duracao:.1f} s. Quero cerca de {n} b-roll(s).",
-              "", "A fala, frase a frase, com os tempos em segundos:"]
+def pedido_para_ia(falas: list[dict], duracao: float, n: int,
+                   assunto: str = "") -> str:
+    linhas = [f"Duração do vídeo: {duracao:.1f} s. Quero cerca de {n} b-roll(s)."]
+    if assunto:
+        linhas.append(f"O dono do vídeo disse que o assunto é: {assunto}")
+    linhas += ["", "A fala inteira, frase a frase, com os tempos em segundos:"]
     for f in falas[:400]:
         linhas.append(f"[{f['start']:.1f}–{f['end']:.1f}] {f['text']}")
     return "\n".join(linhas)
 
 
 def pela_ia(chave: str, modelo: str, falas: list[dict], duracao: float,
-            frequencia: str) -> list[dict]:
+            frequencia: str, assunto: str = "") -> dict:
+    """O plano da IA: o contexto do vídeo e, dentro dele, cada b-roll."""
     from .ai import gemini
 
     n = quantos(duracao, frequencia)
     if not n or not falas:
-        return []
+        return {"slots": [], "tema": "", "cenario": ""}
     escolhido = gemini.escolher_modelo(chave, modelo)
     resposta = gemini.gerar_json(chave, escolhido["id"], INSTRUCAO,
-                                 pedido_para_ia(falas, duracao, n), ESQUEMA,
+                                 pedido_para_ia(falas, duracao, n, assunto), ESQUEMA,
                                  temperatura=0.3,
-                                 maximo=min(escolhido.get("saida") or 4096, 4096))
-    return validar(list(resposta.get("brolls") or []), duracao, int(n * 1.5) + 1)
+                                 maximo=min(escolhido.get("saida") or 8192, 8192))
+    return {"slots": validar(list(resposta.get("brolls") or []), duracao,
+                             int(n * 1.5) + 1),
+            "tema": str(resposta.get("tema") or "")[:300],
+            "cenario": str(resposta.get("cenario") or "")[:400],
+            "modelo": escolhido["id"]}
+
+
+# A IA OLHA ANTES DE ESCOLHER. A busca de banco de imagem devolve de tudo —
+# "front door" traz porta de igreja, de carro, de desenho animado. Ler o
+# título não basta; é olhando o quadro que se vê se ele mostra a cena.
+INSTRUCAO_ESCOLHA = """Você escolhe b-roll para um anúncio em vídeo. Para cada \
+b-roll há uma CENA desejada e algumas opções, cada uma um quadro de um vídeo \
+de banco de imagem. Escolha a opção que MELHOR mostra a cena e combina com o \
+tema do vídeo. Se nenhuma combina de verdade (assunto errado, país/época \
+estranhos, desenho quando o vídeo é realista, texto ou marca d'água \
+aparecendo), responda -1: é melhor ficar sem b-roll do que pôr um que não \
+tem nada a ver. Responda só o JSON do esquema."""
+
+ESQUEMA_ESCOLHA = {
+    "type": "OBJECT",
+    "properties": {
+        "escolhas": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "broll": {"type": "INTEGER"},
+                    "opcao": {"type": "INTEGER"},
+                    "porque": {"type": "STRING"},
+                },
+                "required": ["broll", "opcao"],
+                "propertyOrdering": ["broll", "opcao", "porque"],
+            },
+        },
+    },
+    "required": ["escolhas"],
+}
+
+
+def escolher_olhando(chave: str, modelo: str, tema: str, cenario: str,
+                     pares: list[tuple[dict, list[dict]]]) -> dict[int, tuple[int, str]]:
+    """Manda os quadros dos candidatos e a IA escolhe um por b-roll (ou -1).
+
+    Devolve {índice do b-roll: (índice da opção, porquê)}. Candidato sem
+    quadro não entra na conversa (não dá para julgar sem ver).
+    """
+    from .ai import gemini
+
+    imagens: list = []
+    linhas = [f"TEMA do vídeo: {tema}", f"CENÁRIO: {cenario}", ""]
+    for k, (slot, cands) in enumerate(pares):
+        opcoes = [j for j, c in enumerate(cands) if c.get("_quadro")]
+        if not opcoes:
+            continue
+        linhas.append(f"B-ROLL {k}: cena = {slot.get('cena') or slot['busca']} "
+                      f"(opções: {', '.join(str(j) for j in opcoes)})")
+        for j in opcoes:
+            imagens.append((f"B-ROLL {k}, opção {j}:", cands[j]["_quadro"]))
+    if not imagens:
+        return {}
+    linhas.append("")
+    linhas.append("Para cada B-ROLL, diga o número da opção escolhida (ou -1).")
+    escolhido = gemini.escolher_modelo(chave, modelo)
+    resposta = gemini.gerar_json(chave, escolhido["id"], INSTRUCAO_ESCOLHA,
+                                 "\n".join(linhas), ESQUEMA_ESCOLHA,
+                                 imagens=imagens, temperatura=0.1, maximo=2048)
+    saida: dict[int, tuple[int, str]] = {}
+    for e in resposta.get("escolhas") or []:
+        try:
+            k, j = int(e.get("broll")), int(e.get("opcao"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= k < len(pares) and (j == -1 or 0 <= j < len(pares[k][1])):
+            saida[k] = (j, str(e.get("porque") or "")[:160])
+    return saida
 
 
 def palavras_da_biblioteca() -> set[str]:
@@ -210,18 +308,24 @@ def planejar(project, frequencia: str, usar_ia: bool = True) -> dict:
 
     duracao = duracao_de_saida(project)
     falas = _falas(project)
+    assunto = str((project.plan.broll or {}).get("assunto") or "").strip()[:200]
     aviso = ""
     if usar_ia and chave_guardada():
         try:
-            slots = pela_ia(chave_guardada(), db.get_setting("gemini_model", "") or "",
-                            falas, duracao, frequencia)
-            if slots:
-                return {"slots": slots, "quem": "ia", "aviso": ""}
+            r = pela_ia(chave_guardada(), db.get_setting("gemini_model", "") or "",
+                        falas, duracao, frequencia, assunto)
+            if r["slots"]:
+                return {**r, "quem": "ia", "aviso": "", "assunto": assunto}
             aviso = "a IA não sugeriu nenhum ponto; usei a regra do programa"
         except Exception as exc:  # noqa: BLE001 — sem IA, a regra decide
-            aviso = f"a IA não respondeu ({exc}); usei a regra do programa"
-    return {"slots": pela_regra(falas, duracao, frequencia, palavras_da_biblioteca()),
-            "quem": "regra", "aviso": aviso}
+            aviso = (f"a IA não respondeu ({exc}); usei a regra do programa, que "
+                     f"busca pelas palavras da frase")
+    elif usar_ia:
+        aviso = ("sem a chave do Gemini, a busca é pelas palavras da frase — com a "
+                 "chave, a IA lê o vídeo inteiro e busca dentro do assunto")
+    slots = pela_regra(falas, duracao, frequencia, palavras_da_biblioteca())
+    return {"slots": slots, "quem": "regra", "aviso": aviso, "tema": assunto,
+            "cenario": "", "assunto": assunto}
 
 
 # ------------------------------------------------------------------ o quê
@@ -282,6 +386,36 @@ def do_banco(buscas: list[tuple[str, str]], orientacao: str, usados_ids: set[str
     return None
 
 
+def candidatos_do_banco(buscas: list[tuple[str, str]], orientacao: str,
+                        usados_ids: set[str], precisa: float,
+                        maximo: int = 5) -> list[dict]:
+    """Os melhores resultados das buscas de UM b-roll, sem baixar nada.
+
+    Da busca mais específica para a mais ampla; entre os achados, o que ainda
+    não foi usado em outro anúncio vem antes, depois o que cobre a duração.
+    """
+    if not banco.estado().get("alguma"):
+        return []
+    ja_baixados = banco.ids_baixados()
+    vistos: set[str] = set()
+    saida: list[dict] = []
+    for termo, idioma in buscas:
+        try:
+            res = banco.buscar(termo, orientacao, 1, 15, idioma)
+        except banco.ErroDoBanco:
+            continue
+        itens = [it for it in res.get("itens") or []
+                 if it["id"] not in usados_ids and it["id"] not in vistos]
+        itens.sort(key=lambda it: (it["id"] in ja_baixados,
+                                   float(it.get("duracao") or 0) < precisa))
+        for it in itens[:3]:
+            vistos.add(it["id"])
+            saida.append({**banco.detalhe(it["id"]), "_busca": termo})
+        if len(saida) >= maximo:
+            break
+    return saida[:maximo]
+
+
 # ----------------------------------------------------------------- aplicar
 def tirar_automaticos(project) -> int:
     antes = len(project.plan.cutaways)
@@ -323,25 +457,102 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
              if b.get("kind") == "photo"]
     postos: list[dict] = []
     pulados: list[dict] = []
+    bloqueio: dict[int, str] = {}
     for k, slot in enumerate(slots):
-        ctx.progress(0.1 + 0.85 * k / max(1, len(slots)),
+        a, b = slot["inicio"], slot["fim"]
+        if any(min(b, fb) - max(a, fa) > 0.02 for fa, fb in fotos):
+            bloqueio[k] = "em cima de uma foto inserida"
+        elif any(min(b, c.out_end) - max(a, c.out_start) > 0.02
+                 for c in project.plan.cutaways):
+            bloqueio[k] = "já tem b-roll aí"
+
+    # A IA ESCOLHE OLHANDO. Com a IA e o banco, cada b-roll ganha alguns
+    # candidatos (das buscas em inglês, dentro do assunto, e da em português),
+    # e a IA vê o quadro de cada um antes de escolher — ou recusa todos. O que
+    # a busca devolve sozinha é de tudo; é o olhar que tira o vídeo que não
+    # tem nada a ver.
+    pre: dict[int, list[dict]] = {}
+    recusados_ia: dict[int, str] = {}
+    aviso_escolha = ""
+    ia_olhou = False
+    if plano["quem"] == "ia" and fonte == "banco" and banco.estado().get("alguma"):
+        from . import db
+        from .ai.gemini import chave_guardada
+
+        pares: list[tuple[dict, list[dict]]] = []
+        indices: list[int] = []
+        for k, slot in enumerate(slots):
+            if k in bloqueio:
+                continue
+            ctx.progress(0.05 + 0.35 * k / max(1, len(slots)),
+                         f"buscando vídeos para: {slot.get('busca_en') or slot['busca']}",
+                         "broll")
+            buscas_k = ([(t, "en") for t in slot.get("buscas_en") or []]
+                        + [(slot["busca"], "pt")])
+            cands = candidatos_do_banco(buscas_k, orientacao, set(),
+                                        slot["fim"] - slot["inicio"])
+            for cnd in cands:
+                cnd["_quadro"] = banco.quadro_bytes(cnd)
+            pre[k] = cands
+            pares.append((slot, cands))
+            indices.append(k)
+        if any(cands for _s, cands in pares):
+            try:
+                ctx.progress(0.45, "a IA está olhando os vídeos achados", "broll")
+                mapa = escolher_olhando(chave_guardada(),
+                                        db.get_setting("gemini_model", "") or "",
+                                        plano.get("tema", ""), plano.get("cenario", ""),
+                                        pares)
+                ia_olhou = True
+                for pos, k in enumerate(indices):
+                    if pos not in mapa:
+                        continue
+                    j, porque = mapa[pos]
+                    if j < 0:
+                        recusados_ia[k] = porque
+                    else:
+                        pre[k] = [pre[k][j]] + [c for x, c in enumerate(pre[k]) if x != j]
+            except Exception as exc:  # noqa: BLE001 — fica o primeiro de cada busca
+                aviso_escolha = (f"a IA não conseguiu olhar os vídeos ({exc}); "
+                                 f"fiquei com o primeiro de cada busca")
+
+    for k, slot in enumerate(slots):
+        ctx.progress(0.5 + 0.45 * k / max(1, len(slots)),
                      f"b-roll {k + 1} de {len(slots)}: {slot['busca']}", "broll")
         if getattr(ctx, "cancelled", None) and ctx.cancelled():
             break
         a, b = slot["inicio"], slot["fim"]
-        if any(min(b, fb) - max(a, fa) > 0.02 for fa, fb in fotos):
-            pulados.append({**slot, "motivo": "em cima de uma foto inserida"})
+        if k in bloqueio:
+            pulados.append({**slot, "motivo": bloqueio[k]})
             continue
-        if any(min(b, c.out_end) - max(a, c.out_start) > 0.02
-               for c in project.plan.cutaways):
-            pulados.append({**slot, "motivo": "já tem b-roll aí"})
+        if k in recusados_ia:
+            pulados.append({**slot, "motivo": (
+                f"a IA olhou os vídeos achados e nenhum mostrava "
+                f"“{slot.get('cena') or slot['busca']}”"
+                + (f" ({recusados_ia[k]})" if recusados_ia[k] else ""))})
             continue
         buscas = [slot["busca"], *slot.get("alternativas", [])]
-        no_banco = ([(slot["busca_en"], "en")] if slot.get("busca_en") else []) \
-            + [(t, "pt") for t in buscas]
+        no_banco = ([(t, "en") for t in slot.get("buscas_en") or []]
+                    + [(t, "pt") for t in buscas])
+        assunto = plano.get("assunto") or ""
+        if assunto and plano["quem"] == "regra":
+            # sem IA, o assunto que ele escreveu dá o contexto que a palavra
+            # solta não tem: "pessoas" vira "pessoas airbnb segurança"
+            no_banco = [(f"{slot['busca']} {assunto}", "pt")] + no_banco
 
-        def _do_banco():
-            return do_banco(no_banco, orientacao, usados_ids, b - a, w, h,
+        def _do_banco(_k=k, _no_banco=no_banco, _a=a, _b=b):
+            if pre.get(_k):
+                # os candidatos já vistos (o escolhido pela IA na frente)
+                for cnd in pre[_k]:
+                    if cnd["id"] in usados_ids:
+                        continue
+                    try:
+                        return banco.baixar(cnd["id"], w, h, cnd.get("_busca", ""),
+                                            cancelado=getattr(ctx, "cancelled", None))
+                    except banco.ErroDoBanco:
+                        continue
+                return None
+            return do_banco(_no_banco, orientacao, usados_ids, _b - _a, w, h,
                             getattr(ctx, "cancelled", None))
 
         # a ordem de onde vem o vídeo: o banco grátis primeiro (o padrão), e a
@@ -389,15 +600,19 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
         if item.get("id"):
             usados_ids.add(str(item["id"]))
         postos.append({**corte.to_dict(), "busca": slot["busca"],
+                       "busca_en": slot.get("busca_en", ""), "cena": slot.get("cena", ""),
                        "de": origem_video, "autor": item.get("autor", ""),
                        "fonte": item.get("fonte", ""), "porque": slot.get("porque", "")})
     por_fonte: dict[str, int] = {}
     for x in postos:
         chave = "biblioteca" if x.get("fonte") == "meu" else (x.get("fonte") or x["de"])
         por_fonte[chave] = por_fonte.get(chave, 0) + 1
+    aviso = "; ".join(x for x in (plano["aviso"], aviso_escolha) if x)
     resumo = {"frequencia": frequencia, "fonte": fonte, "quem": plano["quem"],
-              "aviso": plano["aviso"], "planejados": len(slots), "postos": postos,
-              "pulados": pulados, "tirados": tirados, "por_fonte": por_fonte}
+              "tema": plano.get("tema", ""), "cenario": plano.get("cenario", ""),
+              "ia_olhou": ia_olhou, "aviso": aviso, "planejados": len(slots),
+              "postos": postos, "pulados": pulados, "tirados": tirados,
+              "por_fonte": por_fonte}
     project.plan.broll = {**(project.plan.broll or {}), "frequencia": frequencia,
                           "fonte": fonte,
                           "ultima": {k: v for k, v in resumo.items()

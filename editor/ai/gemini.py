@@ -218,7 +218,7 @@ def escolher_modelo(chave: str, pedido: str = "") -> dict:
 
 
 def gerar_json(chave: str, modelo: str, instrucao: str, pedido: str,
-               esquema: dict, imagens: list[bytes] | None = None,
+               esquema: dict, imagens: list | None = None,
                temperatura: float = 0.2, maximo: int = 4096) -> dict:
     """Uma chamada, saída validada contra o esquema.
 
@@ -228,6 +228,11 @@ def gerar_json(chave: str, modelo: str, instrucao: str, pedido: str,
     """
     partes: list[dict] = []
     for img in (imagens or []):
+        # (rótulo, bytes): o rótulo vai logo antes da imagem, para o pedido
+        # poder dizer "opção 2.3" e o modelo saber qual é qual
+        if isinstance(img, tuple):
+            rotulo, img = img
+            partes.append({"text": str(rotulo)})
         partes.append({"inline_data": {
             "mime_type": "image/jpeg",
             "data": base64.b64encode(img).decode("ascii")}})

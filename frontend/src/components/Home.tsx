@@ -52,6 +52,8 @@ export default function Home() {
   const [bancoEstado, setBancoEstado] = useState<any>(null)
   const [chavePexels, setChavePexels] = useState('')
   const [chavePixabay, setChavePixabay] = useState('')
+  // o assunto do vídeo, em poucas palavras: o contexto da busca de b-roll
+  const [brollAssunto, setBrollAssunto] = useState('')
   // de onde vem o vídeo do b-roll automático: o banco grátis (Pexels e
   // Pixabay) primeiro, ou a biblioteca dele primeiro
   const [brollFonte, setBrollFonte] = useState<string>(() => {
@@ -209,7 +211,7 @@ export default function Home() {
       // b-roll automático: entra depois da montagem, e o vídeo sai com ele
       broll: { auto: brollAuto !== 'nao',
                frequencia: brollAuto === 'nao' ? 'medio' : brollAuto,
-               fonte: brollFonte },
+               fonte: brollFonte, assunto: brollAssunto.trim() },
     }
   }
 
@@ -763,6 +765,11 @@ export default function Home() {
                     }}>+ meus b-rolls na biblioteca</button>
             {brollAuto !== 'nao' && (
               <div className="mt-1 space-y-1" data-broll-fonte="1">
+                <input className="field w-full py-1 text-[11px]" value={brollAssunto}
+                       data-broll-assunto="1"
+                       placeholder="assunto do vídeo (ex.: segurança de Airbnb)"
+                       title="opcional: ajuda a IA a buscar b-roll que tem a ver com o vídeo inteiro"
+                       onChange={(e) => setBrollAssunto(e.target.value)} />
                 <select className="field w-full py-1 text-[11px]" value={brollFonte}
                         onChange={(e) => {
                           setBrollFonte(e.target.value)

@@ -530,6 +530,10 @@ def aplicar_receita(project, payload: dict) -> None:
             atual["frequencia"] = _freq(pedido["frequencia"])
         if pedido.get("fonte") in ("banco", "biblioteca"):
             atual["fonte"] = pedido["fonte"]
+        if "assunto" in pedido:
+            # o assunto do vídeo em poucas palavras: dá à busca o contexto que
+            # uma frase solta não tem ("segurança de Airbnb")
+            atual["assunto"] = " ".join(str(pedido["assunto"] or "").split())[:200]
         plan.broll = atual
     if "look" in payload:
         from .render.looks import BY_ID
@@ -2653,6 +2657,10 @@ def api_broll_auto(pid: str, payload: dict = Body(default={})) -> dict:
                             or (project.plan.broll or {}).get("frequencia") or "medio")
     ia = bool(payload.get("ia", True))
     fonte = payload.get("fonte") if payload.get("fonte") in broll_auto.FONTES else None
+    if "assunto" in payload:
+        project.plan.broll = {**(project.plan.broll or {}), "assunto":
+                              " ".join(str(payload["assunto"] or "").split())[:200]}
+        project.save_plan()
     return _run("broll-auto", pid,
                 lambda ctx: broll_auto.aplicar(svc.load(pid), ctx, freq, ia,
                                                fonte=fonte))

@@ -27,6 +27,9 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
   // de onde vem o vídeo: o banco grátis (Pexels e Pixabay) primeiro, ou a
   // biblioteca dele primeiro
   const [fonte, setFonte] = useState<string>(project?.plan?.broll?.fonte ?? 'banco')
+  // o assunto (o que ele escreveu, ou o que a IA leu da última vez)
+  const [assunto, setAssunto] = useState<string>(
+    project?.plan?.broll?.assunto ?? '')
   const [estado, setEstado] = useState<any>(null)
   const [ia, setIa] = useState<any>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -51,7 +54,10 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
         const de = Object.entries(r.por_fonte ?? {})
           .map(([k, v]) => `${v} do ${NOME_FONTE[k] ?? k}`).join(', ')
         toast(n ? 'ok' : 'warn', n ? `${n} b-roll(s) no vídeo${de ? ` — ${de}` : ''}` : 'Nenhum b-roll entrou',
-          (r.quem === 'ia' ? 'A IA escolheu os pontos. ' : 'A regra do programa escolheu os pontos. ')
+          (r.quem === 'ia'
+            ? `A IA leu o vídeo${r.tema ? ` (“${r.tema}”)` : ''}${r.ia_olhou ? ' e escolheu olhando os vídeos' : ''}. `
+            : 'A regra do programa escolheu os pontos. ')
+          + (r.aviso ? `${r.aviso}. ` : '')
           + (r.pulados?.length ? `${r.pulados.length} ponto(s) sem vídeo: ${r.pulados[0].motivo}. ` : '')
           + (n ? 'Clique num b-roll no trilho para ajustar ou substituir.' : ''))
       })
@@ -77,6 +83,10 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
                 onChange={(e) => setFreq(e.target.value)}>
           {Object.entries(FREQ).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
+        <input className="field text-xs py-0.5 w-60" value={assunto} data-broll-assunto="1"
+               placeholder="assunto do vídeo (ex.: segurança de Airbnb)"
+               title="opcional: dá à busca o contexto do vídeo inteiro"
+               onChange={(e) => setAssunto(e.target.value)} />
         <select className="field text-xs py-0.5 w-56" value={fonte} data-fonte="1"
                 onChange={(e) => setFonte(e.target.value)}>
           <option value="banco">vídeos do Pexels e Pixabay (grátis)</option>
@@ -86,7 +96,7 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
                 onClick={async () => {
                   snapshot()
                   try {
-                    const j = await api.brollAuto(projectId, freq, fonte)
+                    const j = await api.brollAuto(projectId, freq, fonte, assunto.trim())
                     setJobId(j.id)
                   } catch (e: any) {
                     toast('error', 'Não deu para começar', String(e.message ?? e))
@@ -137,7 +147,10 @@ export default function BrollAutomatico({ projectId, onChanged, snapshot }: {
           {Object.keys(ultima.por_fonte ?? {}).length > 0 && ` (${Object.entries(ultima.por_fonte)
             .map(([k, v]) => `${v} do ${NOME_FONTE[k] ?? k}`).join(', ')})`}
           {ultima.pulados ? `, ${ultima.pulados} sem vídeo` : ''}
-          {' '}· {ultima.quem === 'ia' ? 'escolhidos pela IA' : 'escolhidos pela regra'}
+          {' '}· {ultima.quem === 'ia'
+            ? `escolhidos pela IA${ultima.ia_olhou ? ', olhando os vídeos' : ''}`
+            : 'escolhidos pela regra'}
+          {ultima.tema ? ` · assunto lido: “${ultima.tema}”` : ''}
           {ultima.aviso ? ` · ${ultima.aviso}` : ''}
         </p>
       )}

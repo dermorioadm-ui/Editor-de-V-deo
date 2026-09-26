@@ -138,6 +138,10 @@ def _item_pexels(v: dict) -> dict | None:
         "duracao": float(v.get("duration") or 0),
         "largura": int(v.get("width") or 0), "altura": int(v.get("height") or 0),
         "miniatura": str(v.get("image") or (fotos[0].get("picture") if fotos else "")),
+        # um quadro PEQUENO do meio do vídeo, para a IA olhar (a "image" do
+        # Pexels é a capa em tamanho grande)
+        "quadro": str((fotos[len(fotos) // 2].get("picture") if fotos else "")
+                      or v.get("image") or ""),
         "autor": str(usuario.get("name") or ""),
         "autor_url": str(usuario.get("url") or ""),
         "pagina": str(v.get("url") or ""),
@@ -159,7 +163,11 @@ def _item_pixabay(h: dict) -> dict | None:
     if not arquivos:
         return None
     maior = max(arquivos, key=lambda a: a["largura"] * a["altura"])
+    pequeno = next((str(((h.get("videos") or {}).get(n) or {}).get("thumbnail") or "")
+                    for n in ("tiny", "small", "medium", "large")
+                    if ((h.get("videos") or {}).get(n) or {}).get("thumbnail")), "")
     return {
+        "quadro": pequeno or miniatura,
         "id": f"pixabay:{h.get('id')}", "fonte": "pixabay",
         "duracao": float(h.get("duration") or 0),
         "largura": maior["largura"], "altura": maior["altura"],
@@ -345,6 +353,29 @@ def escolher_arquivo(item: dict, alvo_w: int, alvo_h: int) -> dict:
     return max(conhecidos, key=lambda a: a["largura"] * a["altura"])
 
 
+TETO_QUADRO = 1_500_000
+
+
+def quadro_bytes(item: dict) -> bytes | None:
+    """O quadro (JPG) de um resultado, para a IA olhar antes de escolher.
+
+    Só de dentro do próprio banco, e pequeno: é uma espiada, não download.
+    """
+    import httpx
+
+    url = str(item.get("quadro") or item.get("miniatura") or "")
+    if not url or not _host_permitido(item.get("fonte", ""), url):
+        return None
+    try:
+        with _cliente() as cli:
+            r = cli.get(url, timeout=10.0)
+        if r.status_code >= 400 or len(r.content) > TETO_QUADRO or not r.content:
+            return None
+        return r.content
+    except httpx.HTTPError:
+        return None
+
+
 def _host_permitido(fonte: str, url: str) -> bool:
     try:
         u = urlparse(url)
@@ -352,6 +383,8 @@ def _host_permitido(fonte: str, url: str) -> bool:
         return False
     host = (u.hostname or "").lower()
     if u.scheme != "https" and not host.startswith("127."):
+        return False
+    if fonte not in HOSTS:
         return False
     base_teste = urlparse(URL_PEXELS if fonte == "pexels" else URL_PIXABAY).hostname
     return (host == base_teste
@@ -587,6 +620,14 @@ tem tinha tenho temos está esta estão estou fica ficar muito muita muitos
 muitas mais menos bem mal so só tambem também ainda sempre nunca todo toda
 todos todas cada qual quais quem coisa coisas tipo gente agora hoje depois
 comigo contigo conosco consigo nisso nisto naquilo disso disto daquilo
+esses essas estes estas aqueles aquelas desse dessa deste desta desses dessas
+destes destas nesse nessa neste nesta nesses nessas nestes nestas daquele
+daquela naquele naquela outro outra outros outras mesmo mesma mesmos mesmas
+algum alguma alguns algumas nenhum nenhuma tanto tanta tantos tantas pouco
+pouca poucos poucas qualquer quaisquer certo certa certos certas vários
+várias varios varias seja sejam sendo sido tudo nada algo alguem alguém
+ninguem ninguém lugar forma jeito maneira parte vida mundo ponto caso fato
+vocês voces
 antes então aí ai né ne olha olhe veja vc voce você pode posso poder quer
 quero querer sabe saber vai vem dia dias vez vezes ano anos
 """.split())

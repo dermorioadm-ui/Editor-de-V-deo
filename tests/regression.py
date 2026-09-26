@@ -6796,6 +6796,15 @@ def _banco_falso(pasta: Path, clipe: Path) -> tuple[str, dict]:
                 if q.get("id"):
                     hits = [x for x in hits if str(x["id"]) == q["id"]]
                 return self._json({"total": 2, "totalHits": 2, "hits": hits})
+            if u.path.startswith("/mini/"):
+                registro["quadros"] = registro.get("quadros", 0) + 1
+                corpo = registro["_jpg"]
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(corpo)))
+                self.end_headers()
+                self.wfile.write(corpo)
+                return
             if u.path.startswith("/arquivos/"):
                 registro["downloads"] += 1
                 corpo = clipe.read_bytes()
@@ -6807,6 +6816,13 @@ def _banco_falso(pasta: Path, clipe: Path) -> tuple[str, dict]:
                 return
             self._json({"erro": "rota"}, 404)
 
+    import subprocess as _sp
+
+    from editor.config import FFMPEG as _FF
+    jpg = pasta / "quadro_falso.jpg"
+    _sp.run([_FF, "-y", "-v", "error", "-i", str(clipe), "-frames:v", "1",
+             "-vf", "scale=64:-2", str(jpg)], check=True)
+    registro["_jpg"] = jpg.read_bytes()
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     base_holder["base"] = f"http://127.0.0.1:{srv.server_address[1]}"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -7323,7 +7339,7 @@ def testar_broll_automatico() -> None:
                 {"inicio": 10.0, "fim": 20.0, "busca": "cadeado"},       # longo demais
                 {"inicio": 14.0, "fim": 16.0, "busca": ""},              # sem busca
             ]}
-            got = broll_auto.pela_ia("x", "", falas, 21.0, "muito")
+            got = broll_auto.pela_ia("x", "", falas, 21.0, "muito")["slots"]
         finally:
             gemini.chave_guardada, gemini.escolher_modelo, gemini.gerar_json = real
         check(all(g["inicio"] >= 2.0 for g in got)
@@ -7425,6 +7441,128 @@ def testar_broll_automatico() -> None:
               and primeira["params"].get("locale") == "en-US",
               f"com a IA, o banco é buscado EM INGLÊS primeiro, que é onde ele acha mais "
               f"({primeira.get('params')})")
+
+
+        # ---- O PEDIDO AO GEMINI no formato que ele aceita ------------------------
+        # os tipos em minúsculas ("object", "string") eram a diferença entre o
+        # b-roll e o resto do programa, que funciona com a chave dele: o pedido
+        # era recusado e o b-roll caía, calado, na busca por palavra solta
+        validos = {"OBJECT", "ARRAY", "STRING", "NUMBER", "INTEGER", "BOOLEAN"}
+
+        def _tipos(esq):
+            if isinstance(esq, dict):
+                if "type" in esq:
+                    yield esq["type"]
+                for v in esq.values():
+                    yield from _tipos(v)
+            elif isinstance(esq, list):
+                for v in esq:
+                    yield from _tipos(v)
+        tipos = set(_tipos(broll_auto.ESQUEMA)) | set(_tipos(broll_auto.ESQUEMA_ESCOLHA))
+        check(tipos <= validos,
+              f"o esquema do b-roll usa os tipos do Gemini em MAIÚSCULAS, como o resto "
+              f"do programa ({sorted(tipos)})")
+
+        # ---- a IA com o CONTEXTO do vídeo e escolhendo OLHANDO -------------------
+        chamadas: list = []
+        vistos: list = []
+        real_cand = broll_auto.candidatos_do_banco
+
+        def _cand(*a, **k):
+            r = real_cand(*a, **k)
+            vistos.append([x["id"] for x in r])
+            return r
+
+        def _gemini_falso(chave, modelo, instrucao, pedido, esquema, imagens=None, **k):
+            chamadas.append({"instrucao": instrucao, "pedido": pedido,
+                             "imagens": list(imagens or [])})
+            if instrucao == broll_auto.INSTRUCAO_ESCOLHA:
+                return {"escolhas": [{"broll": 0, "opcao": 1, "porque": "mostra a porta"},
+                                     {"broll": 1, "opcao": -1, "porque": "nada a ver"}]}
+            return {"tema": "segurança de imóvel de temporada no Airbnb",
+                    "cenario": "apartamento de temporada, anfitrião, fechadura",
+                    "brolls": [
+                        {"inicio": 3.0, "fim": 6.0, "cena": "anfitrião abrindo a porta",
+                         "buscas_en": ["airbnb host opening door", "vacation rental door"],
+                         "busca": "anfitrião abrindo porta"},
+                        {"inicio": 9.0, "fim": 12.0, "cena": "ladrão entrando no apartamento",
+                         "buscas_en": ["burglar entering apartment"],
+                         "busca": "ladrão entrando"}]}
+
+        real = (gemini.escolher_modelo, gemini.gerar_json, broll_auto.candidatos_do_banco)
+        db.set_setting("gemini_api_key", "chave-gemini-falsa")
+        c.post(f"/api/projects/{pid}/params",
+               json={"broll": {"assunto": "segurança de Airbnb", "fonte": "banco"}})
+        try:
+            gemini.escolher_modelo = lambda chave, m: {"id": "falso", "saida": 4096}
+            gemini.gerar_json = _gemini_falso
+            broll_auto.candidatos_do_banco = _cand
+            banco._cache_busca.clear()
+            r_olho = broll_auto.aplicar(svc.load(pid), Ctx(quiet=True), "muito")
+        finally:
+            gemini.escolher_modelo, gemini.gerar_json, broll_auto.candidatos_do_banco = real
+            db.set_setting("gemini_api_key", "")
+        plano_ia = next((x for x in chamadas if x["instrucao"] == broll_auto.INSTRUCAO), {})
+        olhar = next((x for x in chamadas if x["instrucao"] == broll_auto.INSTRUCAO_ESCOLHA), {})
+        check("segurança de Airbnb" in plano_ia.get("pedido", "")
+              and "A fala inteira" in plano_ia.get("pedido", ""),
+              "a IA recebe a fala INTEIRA e o assunto que ele escreveu, antes de decidir "
+              "qualquer busca")
+        check(bool(olhar.get("imagens"))
+              and all(isinstance(im, tuple) and im[0].startswith("B-ROLL")
+                      for im in olhar["imagens"]),
+              f"a IA recebe o QUADRO de cada candidato, com o nome da opção "
+              f"({len(olhar.get('imagens') or [])} quadros) — escolhe olhando")
+        nomes = {m["id"]: m["path"] for m in svc.list_media(pid)}
+        posto0 = next((x for x in r_olho["postos"] if abs(x["out_start"] - 3.0) < 0.05), None)
+        esperado = vistos[0][1] if vistos and len(vistos[0]) > 1 else None
+        check(posto0 is not None and esperado
+              and Path(nomes[posto0["media_id"]]).name.startswith(banco._nome_seguro(esperado)),
+              f"entra o vídeo que a IA ESCOLHEU olhando (a opção 1: {esperado}), não o "
+              f"primeiro da busca")
+        check(any(abs(x["inicio"] - 9.0) < 0.05 and "nenhum mostrava" in x["motivo"]
+                  for x in r_olho["pulados"]),
+              "quando nenhum vídeo achado combina, a IA recusa e o ponto fica SEM b-roll "
+              "— melhor que um vídeo sem nada a ver")
+        check(r_olho["tema"].startswith("segurança") and r_olho["ia_olhou"],
+              f"o resultado diz o assunto que a IA leu ({r_olho['tema']!r})")
+        check(reg.get("quadros", 0) > 0,
+              "os quadros vêm do próprio banco (Pexels/Pixabay), não de fora")
+
+        # a IA não consegue olhar: fica o primeiro de cada busca, com aviso
+        def _falha_olhar(chave, modelo, instrucao, *a, **k):
+            if instrucao == broll_auto.INSTRUCAO_ESCOLHA:
+                raise gemini.ErroDaIA("imagem recusada")
+            return _gemini_falso(chave, modelo, instrucao, *a, **k)
+        db.set_setting("gemini_api_key", "chave-gemini-falsa")
+        try:
+            gemini.escolher_modelo = lambda chave, m: {"id": "falso", "saida": 4096}
+            gemini.gerar_json = _falha_olhar
+            banco._cache_busca.clear()
+            r_sem = broll_auto.aplicar(svc.load(pid), Ctx(quiet=True), "muito")
+        finally:
+            gemini.escolher_modelo, gemini.gerar_json = real[0], real[1]
+            db.set_setting("gemini_api_key", "")
+        check(r_sem["postos"] and "não conseguiu olhar" in r_sem["aviso"],
+              "se a IA não consegue olhar, o b-roll entra mesmo assim e o aviso diz por quê")
+
+        # ---- sem a IA: nada de palavra vazia, e o assunto dá o contexto ----------
+        check("essas" not in banco.sugerir_termos("essas pessoas invadiram o airbnb")
+              and "esses" not in banco.sugerir_termos("esses hóspedes deixaram tudo"),
+              "'essas', 'esses' e companhia nunca viram busca")
+        banco._cache_busca.clear()
+        antes = len(reg["pedidos"])
+        r_regra = broll_auto.aplicar(svc.load(pid), Ctx(quiet=True), "muito")
+        primeira_regra = next((x for x in reg["pedidos"][antes:]
+                               if x["caminho"] == "/videos/search"), {})
+        check(r_regra["quem"] == "regra"
+              and primeira_regra.get("params", {}).get("query", "").endswith("segurança de Airbnb"),
+              f"sem a IA, a busca leva o assunto junto — a palavra solta ganha contexto "
+              f"({primeira_regra.get('params', {}).get('query')!r})")
+        check("sem a chave do Gemini" in r_regra["aviso"],
+              "e o resultado avisa que, com a chave do Gemini, a busca teria o contexto "
+              "do vídeo inteiro")
+        c.post(f"/api/projects/{pid}/params", json={"broll": {"assunto": ""}})
 
         # ---- "minha biblioteca primeiro" -----------------------------------------
         c.post(f"/api/projects/{pid}/params", json={"broll": {"fonte": "biblioteca"}})
