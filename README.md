@@ -1567,8 +1567,19 @@ enxerga as ferramentas do Sharkcut, e as que exportariam, abririam outro
 projeto ou refariam o clique único ficam de fora. Ninguém precisa responder
 nada durante a edição.
 
-**Precisa:** o Claude Code instalado e logado uma vez (abra um terminal, rode
-`claude` e faça login). O botão **testar o Claude** confere as duas coisas.
+**Precisa:** o Claude Code nesta máquina, com login feito uma vez. **Quem usa
+o app Claude (a janela, com a aba Code) já tem:** o app guarda o Claude Code
+dele numa pasta própria (`%APPDATA%\Claude\claude-code\<versão>\claude.exe`,
+ou a pasta equivalente da versão da Microsoft Store), e o Sharkcut acha e usa
+esse — sem terminal, sem npm. Se a primeira tela disser que falta entrar na
+conta, aperte **entrar na conta**: abre o navegador na página do Claude, você
+entra com a mesma conta do app, e a tela percebe sozinha quando terminou. O
+botão **testar o Claude** confere tudo.
+
+O Sharkcut nunca roda o `Claude.exe` que o app põe no PATH
+(`WindowsApps\Claude.exe`): esse abre a janela do app, não responde. E se o
+Claude Code instalado pelo npm estiver quebrado (o programa dele faltando, ou
+um `&` no nome da pasta do usuário), ele usa o do app no lugar.
 Se ele não estiver instalado, sem login ou no limite da assinatura, o vídeo
 sai do mesmo jeito — pela regra — e a tela diz o motivo; depois é só apertar
 **tentar de novo com o Claude** no editor.

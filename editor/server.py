@@ -2537,6 +2537,20 @@ def api_claude_testar() -> dict:
     return claude_editor.testar(str(db.get_setting("claude_modelo", "") or ""))
 
 
+@app.post("/api/claude/entrar")
+def api_claude_entrar(request: Request) -> dict:
+    """Abre a janela de login do Claude Code nesta máquina (uma vez só).
+
+    Só a partir DESTE computador: com o iniciar-rede.bat as rotas alcançam a
+    rede local, e ninguém do celular (ou de outra máquina) abre janela aqui."""
+    from . import claude_editor
+
+    if request.client and request.client.host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "o login do Claude abre uma janela neste computador: "
+                                 "aperte o botão nele mesmo, não pelo celular")
+    return claude_editor.entrar()
+
+
 @app.get("/api/recorte/estado")
 def api_recorte_estado() -> dict:
     return _recorte_estado()

@@ -334,6 +334,8 @@ export const api = {
                           pos_padrao?: boolean }) =>
     post<any>('/api/claude/config', dados),
   claudeTestar: () => post<any>('/api/claude/testar', {}),
+  /** abre o login do Claude Code numa janela (o navegador faz o resto) */
+  claudeEntrar: () => post<any>('/api/claude/entrar', {}),
   /** pedir ao Claude de dentro do editor ("agora aumenta a legenda") */
   claudePedir: (id: string, pedido: string, modo: '' | 'pos' = '') =>
     post<Job>(`/api/projects/${id}/claude`, { pedido, modo }),

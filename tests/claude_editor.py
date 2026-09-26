@@ -65,7 +65,13 @@ if "--version" in args:
 if "--help" in args:
     print("  --tools <tools...>  Use \"\" to disable all tools\n"
           "  --permission-mode <mode>  (choices: \"acceptEdits\", \"dontAsk\")\n"
-          "  --disallowedTools <tools...>")
+          "  --disallowedTools <tools...>\n"
+          "Commands:\n"
+          "  auth                                  Manage authentication")
+    sys.exit(0)
+if args[:2] == ["auth", "status"]:
+    print(json.dumps({"loggedIn": os.environ.get("CLAUDE_FALSO_LOGADO", "sim") == "sim",
+                      "authMethod": "claude.ai"}, indent=2))
     sys.exit(0)
 modo = os.environ.get("CLAUDE_FALSO_MODO", "ok")
 prompt = sys.stdin.read()
@@ -295,9 +301,90 @@ def testar_atalho_do_windows(tmp: Path) -> None:
     check("'&'" in msg and "instalador" in msg and "install.ps1" in msg,
           "se só sobrar o atalho e o nome da pasta o quebra, a tela diz o porquê e o "
           "que fazer", msg[:120])
+    check("incompleto" in C._nao_respondeu(
+              str(atalho3), "[@anthropic-ai/claude-code] Failed to execute native binary at "
+              + str(nativo) + "\n  spawnSync " + str(nativo) + " ENOENT")
+          and "app Claude" in C._nao_respondeu(str(atalho3), "Failed to execute native binary"),
+          "o npm com o programa faltando: a tela diz que a instalação está incompleta e "
+          "aponta o Claude Code do app")
+    testar_app_claude(tmp)
     check(C._texto("n\u00e3o \u00e9 reconhecido".encode("latin-1")).startswith("n")
           and "\ufffd" not in C._texto("ok".encode()),
           "mensagem do Windows fora do UTF-8 não vira lixo nem derruba")
+
+
+def testar_app_claude(tmp: Path) -> None:
+    """Quem usa o app Claude (a janela, com a aba Code) já tem o Claude Code:
+    o app guarda o motor em %APPDATA%\\Claude\\claude-code\\<versão>\\claude.exe.
+    E o atalho que o app põe no PATH (WindowsApps\\Claude.exe) abre a JANELA —
+    esse o Sharkcut nunca roda."""
+    from editor import claude_editor as C
+
+    print("\n-- o Claude Code que vem com o app Claude")
+    casa = tmp / "casa do app"
+    appdata = casa / "AppData" / "Roaming"
+    local = casa / "AppData" / "Local"
+    motor = appdata / "Claude" / "claude-code"
+    for versao, conteudo in (("2.1.142", b"MZ\x90"), ("2.1.283", b"MZ\x90"),
+                             ("2.1.9", b"MZ\x90"), ("2.2.0", b"texto")):
+        (motor / versao).mkdir(parents=True)
+        (motor / versao / "claude.exe").write_bytes(conteudo)
+    janela = local / "Microsoft" / "WindowsApps"
+    janela.mkdir(parents=True)
+    npm = appdata / "npm"
+    npm.mkdir(parents=True)
+    for pasta in (janela, npm):
+        (pasta / "claude").write_text("#!/bin/sh\nexit 9\n", encoding="utf-8")
+        (pasta / "claude").chmod(0o755)
+    antes = {k: os.environ.get(k) for k in ("APPDATA", "LOCALAPPDATA", "PATH", "HOME")}
+    get_real = C.db.get_setting
+    os.environ.update(APPDATA=str(appdata), LOCALAPPDATA=str(local), HOME=str(casa),
+                      PATH=os.pathsep.join([str(janela), str(npm)]))
+    C.db.get_setting = lambda k, d=None: d
+    C.EH_WINDOWS = True
+    try:
+        check(C._do_app_claude()[0] == motor / "2.1.283" / "claude.exe"
+              and all(x.parent.name != "2.2.0" for x in C._do_app_claude()),
+              "acha o motor do app, na versão mais nova que é programa de verdade "
+              "(a pasta velha que a atualização deixa não ganha pela ordem alfabética)",
+              str(C._do_app_claude()[:1]))
+        check(C.achar() == str(motor / "2.1.283" / "claude.exe") and C._origem(C.achar()) == "app",
+              "com o app instalado, o Sharkcut usa o Claude Code dele — antes do atalho "
+              "quebrado do npm")
+        loja = (local / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming"
+                / "Claude" / "claude-code" / "2.1.300")
+        loja.mkdir(parents=True)
+        (loja / "claude.exe").write_bytes(b"MZ\x90")
+        check(C.achar() == str(loja / "claude.exe"),
+              "o app da Microsoft Store (pasta virtual em Packages) também é achado")
+        for v in [*motor.iterdir(), loja]:
+            (v / "claude.exe").unlink()
+        check(C.achar() == str(npm / "claude"),
+              "sem o app, o PATH pula o Claude.exe da JANELA (WindowsApps) e acha o de "
+              "verdade", C.achar())
+    finally:
+        C.EH_WINDOWS = os.name == "nt"
+        C.db.get_setting = get_real
+        for k, v in antes.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    janelas = [r"C:\Users\R&C\AppData\Local\Microsoft\WindowsApps\Claude.exe",
+               r"C:\Users\R&C\AppData\Local\AnthropicClaude\claude.exe",
+               r"C:\Program Files\WindowsApps\Claude_1.0.0_x64__pzs8sxrjxfjjc\app\claude.exe",
+               "/Applications/Claude.app/Contents/MacOS/Claude"]
+    motores = [r"C:\Users\R&C\AppData\Roaming\Claude\claude-code\2.1.283\claude.exe",
+               r"C:\Users\R&C\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache"
+               r"\Roaming\Claude\claude-code\2.1.283\claude.exe",
+               r"C:\Users\R&C\.local\bin\claude.exe",
+               r"C:\Users\R&C\AppData\Roaming\npm\claude.cmd"]
+    check(C._origem(motores[0]) == "app" and C._origem(motores[1]) == "app"
+          and C._origem(r"C:\\U\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe") == "npm",
+          "diz de onde o Claude Code veio (o do app, ou o do npm)")
+    check(all(C._eh_a_janela(j) for j in janelas)
+          and not any(C._eh_a_janela(m) for m in motores),
+          "sabe a diferença entre a janela do app e o Claude Code")
 
 
 def main() -> int:
@@ -337,6 +424,18 @@ def main() -> int:
         check(e["instalado"] and "falso" in e["versao"] and e["editor_padrao"] == "claude",
               "o Sharkcut acha o Claude Code, lê a versão e lembra quem edita",
               e.get("versao", ""))
+        check(e["logado"] is True, "e sabe que ele entrou na conta (claude auth status)")
+        os.environ["CLAUDE_FALSO_LOGADO"] = "nao"
+        e = http("GET", "/api/claude/estado?forcar=true", base=base)
+        entrar = http("POST", "/api/claude/entrar", {}, base=base)
+        os.environ.pop("CLAUDE_FALSO_LOGADO")
+        check(e["instalado"] and e["logado"] is False and "entrar na conta" in e["motivo"],
+              "sem login, a primeira tela diz o que falta: entrar na conta", e["motivo"])
+        check(entrar["ok"] is False and "auth login" in entrar["motivo"]
+              if os.name != "nt" else entrar["ok"],
+              "o botão de entrar abre o login do Claude Code (fora do Windows, diz o "
+              "comando)", str(entrar)[:160])
+        http("GET", "/api/claude/estado?forcar=true", base=base)
 
         print("\n-- clique único com o Claude como editor")
         p = http("POST", "/api/projects", {"source_path": str(fonte), "name": "claude",

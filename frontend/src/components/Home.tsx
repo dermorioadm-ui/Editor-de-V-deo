@@ -72,6 +72,7 @@ export default function Home() {
   const [pedidoClaude, setPedidoClaude] = useState('')
   const [claudeCaminho, setClaudeCaminho] = useState('')
   const [testandoClaude, setTestandoClaude] = useState(false)
+  const [entrandoClaude, setEntrandoClaude] = useState(false)
   // A PÓS-EDIÇÃO DO CLAUDE: entregar finalizado (com títulos, telas,
   // transições, camadas) ou só a edição. null = o que ficou lembrado
   const [posClaude, setPosClaude] = useState<boolean | null>(null)
@@ -234,6 +235,35 @@ export default function Home() {
     } catch (e: any) {
       toast('warn', 'Não deu para testar', String(e.message ?? e))
     } finally { setTestandoClaude(false) }
+  }
+
+  // O LOGIN, uma vez só: o Sharkcut abre a janela do Claude Code, o navegador
+  // abre na página do Claude, ele entra com a conta dele — e esta tela percebe
+  // sozinha quando terminou (pergunta ao Claude Code a cada poucos segundos).
+  async function entrarClaude() {
+    setEntrandoClaude(true)
+    try {
+      const r = await api.claudeEntrar()
+      if (r.ja_estava) {
+        toast('ok', 'O Claude Code já está na sua conta', 'pronto para editar')
+        setClaude(await api.claudeEstado(true))
+        return
+      }
+      if (!r.ok) { toast('warn', 'Não deu para abrir o login', r.motivo); return }
+      toast('info', 'Abri o login do Claude Code',
+        'Entre com a sua conta do Claude no navegador. Esta tela percebe sozinha quando terminar.')
+      for (let i = 0; i < 60; i++) {
+        await new Promise((ok) => setTimeout(ok, 4000))
+        const e = await api.claudeEstado(true).catch(() => null)
+        if (e) setClaude(e)
+        if (e?.logado) {
+          toast('ok', 'Pronto: o Claude Code entrou na sua conta', 'já dá para editar com o Claude')
+          return
+        }
+      }
+    } catch (e: any) {
+      toast('warn', 'Não deu para abrir o login', String(e.message ?? e))
+    } finally { setEntrandoClaude(false) }
   }
 
   function receita() {
@@ -489,20 +519,35 @@ export default function Home() {
           </div>
           {editorDaVez === 'claude' && (
             <div className="space-y-2">
-              {claude?.instalado ? (
+              {claude?.instalado && claude.logado !== false ? (
                 <p className="text-[11px] text-emerald-300">
-                  ✓ Claude Code {claude.versao} nesta máquina. O sistema faz o mecânico (silêncio,
+                  ✓ Claude Code {claude.versao}
+                  {claude.origem === 'app' ? ' (o que vem com o app Claude)' : ''} nesta
+                  máquina. O sistema faz o mecânico (silêncio,
                   aceleração, câmera, legenda, filtro, música); o Claude faz a REVISÃO da fala —
                   tira redundância, repetição, muleta e enrolação — e o que você pedir aqui. O
                   Gemini fica fora.
                 </p>
+              ) : claude?.instalado ? (
+                <div className="flex items-center gap-2" data-claude-sem-login="1">
+                  <p className="text-[11px] text-amber-300 flex-1">
+                    Achei o Claude Code {claude.versao}
+                    {claude.origem === 'app' ? ' que vem com o app Claude' : ''}, mas ele ainda
+                    não entrou na sua conta. Aperte entrar: abre o navegador na página do
+                    Claude, você entra com a sua conta e pronto — uma vez só.
+                  </p>
+                  <button className="btn btn-xs btn-primary" data-acao="entrar-claude"
+                          disabled={entrandoClaude} onClick={entrarClaude}>
+                    {entrandoClaude ? 'esperando o login…' : 'entrar na conta'}
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <p className="text-[11px] text-amber-300 flex-1">
                       {claude?.caminho
                         ? 'Achei o Claude Code, mas ele não respondeu.'
-                        : 'Não achei o Claude Code aqui. Instale e faça login uma vez (abra um terminal e rode claude).'}
+                        : 'Não achei o Claude Code aqui. Se você usa o app Claude, abra a aba Code dele uma vez (é ela que instala o Claude Code) e aperte testar.'}
                       {' '}Se ele está num lugar diferente, cole o caminho do executável e
                       aperte testar:
                     </p>

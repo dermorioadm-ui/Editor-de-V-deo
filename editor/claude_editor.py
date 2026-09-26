@@ -73,21 +73,96 @@ def _candidatos() -> list[Path]:
 
 def achar() -> str:
     """O executável do Claude Code: o que ele apontou, o instalador nativo, o
-    do PATH, os de praxe. O nativo (claude.exe) vem ANTES do PATH: o PATH do
-    Windows costuma achar primeiro o atalho claude.cmd do npm, e um .exe roda
-    direto, sem o cmd.exe no meio."""
+    que vem com o app Claude, o do PATH, os de praxe. Os .exe vêm ANTES do
+    PATH: o PATH do Windows costuma achar primeiro o atalho claude.cmd do
+    npm — ou o Claude.exe da JANELA do app —, e um .exe roda direto."""
     guardado = str(db.get_setting("claude_caminho", "") or "").strip().strip('"')
-    if guardado and Path(guardado).is_file():
+    if guardado and Path(guardado).is_file() and not _eh_a_janela(guardado):
         return guardado
     nativo = Path.home() / ".local" / "bin" / "claude.exe"
     if nativo.is_file():
         return str(nativo)
-    achado = shutil.which("claude")
+    do_app = _do_app_claude()
+    if do_app:
+        return str(do_app[0])
+    achado = _no_path()
     if achado:
         return achado
     for c in _candidatos():
-        if c.is_file():
+        if c.is_file() and not _eh_a_janela(str(c)):
             return str(c)
+    return ""
+
+
+# O APP CLAUDE (a janela, com a aba Code). Ele já traz o Claude Code: o app
+# guarda o motor numa pasta dele, uma subpasta por versão —
+# %APPDATA%\Claude\claude-code\2.1.283\claude.exe; na versão da Microsoft
+# Store, a mesma pasta fica em %LOCALAPPDATA%\Packages\Claude_...\LocalCache\
+# Roaming. É o mesmo programa da linha de comando, assinado pela Anthropic, e
+# o Sharkcut roda ESSE direto. Uma atualização do app pode deixar a pasta da
+# versão velha para trás: vale a mais nova.
+def _versao_da_pasta(nome: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", nome)[:4])
+
+
+def _do_app_claude() -> list[Path]:
+    """O Claude Code que o app Claude instalou, do mais novo ao mais velho."""
+    raizes: list[Path] = []
+    if os.environ.get("APPDATA"):
+        raizes.append(Path(os.environ["APPDATA"]) / "Claude")
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        try:
+            raizes += [p / "LocalCache" / "Roaming" / "Claude"
+                       for p in sorted((Path(local) / "Packages").glob("Claude_*"))]
+        except OSError:
+            pass
+        raizes.append(Path(local) / "Claude-3p")
+    raizes.append(Path.home() / "Library" / "Application Support" / "Claude")
+    achados: list[tuple[tuple, Path]] = []
+    for raiz in raizes:
+        try:
+            versoes = [v for v in (raiz / "claude-code").iterdir() if v.is_dir()]
+        except OSError:
+            continue
+        for v in versoes:
+            for nome in ("claude.exe", "claude"):
+                if _binario_de_verdade(v / nome):
+                    achados.append((_versao_da_pasta(v.name), v / nome))
+                    break
+    achados.sort(key=lambda x: x[0], reverse=True)
+    return [exe for _, exe in achados]
+
+
+def _eh_a_janela(caminho: str) -> bool:
+    """O Claude.exe do APP (a janela), não o Claude Code. O instalador do app
+    põe um atalho em WindowsApps que fica na frente no PATH; rodá-lo abre a
+    janela do app em vez de responder — e a primeira tela ficaria abrindo o
+    app a cada teste."""
+    partes = [x.lower() for x in re.split(r"[\\/]", caminho) if x]
+    if "claude-code" in partes:
+        return False            # o motor que o app guarda: esse serve
+    return any(x in ("windowsapps", "anthropicclaude", "claude.app") for x in partes)
+
+
+def _no_path() -> str:
+    """O "claude" do PATH, pasta por pasta, pulando o atalho da janela do app."""
+    for pasta in os.environ.get("PATH", "").split(os.pathsep):
+        if not pasta.strip():
+            continue
+        achado = shutil.which("claude", path=pasta)
+        if achado and not _eh_a_janela(achado):
+            return achado
+    return ""
+
+
+def _origem(caminho: str) -> str:
+    """De onde veio: "app" (o app Claude), "npm", ou "" (outro)."""
+    partes = [x.lower() for x in re.split(r"[\\/]", caminho) if x]
+    if len(partes) >= 4 and partes[-3] == "claude-code" and partes[-4] in ("claude", "claude-3p"):
+        return "app"
+    if "npm" in partes or "node_modules" in partes:
+        return "npm"
     return ""
 
 
@@ -243,32 +318,96 @@ def _rodar(args: list[str], timeout: float = 20.0,
 
 
 def estado(forcar: bool = False) -> dict:
-    """Instalado? Qual versão? (Barato: não gasta nada da assinatura.)"""
+    """Instalado? Qual versão? Logado? (Barato: não gasta nada da assinatura.)"""
     agora = time.time()
     if not forcar and _cache.get("estado") and agora - _cache["estado_t"] < 60:
         return _cache["estado"]
     caminho = achar()
-    info = {"instalado": False, "caminho": caminho, "versao": "",
-            "modelo": str(db.get_setting("claude_modelo", "") or ""),
+    info = {"instalado": False, "caminho": caminho, "versao": "", "origem": _origem(caminho),
+            "logado": None, "modelo": str(db.get_setting("claude_modelo", "") or ""),
             "motivo": ""}
+    guardado = str(db.get_setting("claude_caminho", "") or "").strip().strip('"')
     if not caminho:
-        info["motivo"] = ("não achei o Claude Code nesta máquina — instale "
-                          "(claude.ai/code) e faça login uma vez")
+        info["motivo"] = ("não achei o Claude Code nesta máquina. Se você usa o app Claude, "
+                          "abra a aba Code dele uma vez (é ela que instala o Claude Code) "
+                          "e aperte testar")
     else:
         try:
             r = _rodar([caminho, "--version"])
             if r.returncode == 0 and r.stdout.strip():
                 info["instalado"] = True
-                info["versao"] = r.stdout.strip().splitlines()[0][:80]
+                info["versao"] = re.sub(r"\s*\(Claude Code\)\s*$", "",
+                                        r.stdout.strip().splitlines()[0])[:80]
+                info["logado"] = _logado(caminho)
+                if info["logado"] is False:
+                    info["motivo"] = ("o Claude Code está aqui, mas ainda não entrou na sua "
+                                      "conta — aperte \"entrar na conta\" (uma vez só)")
             else:
-                info["motivo"] = (f"achei em {caminho}, mas ele não respondeu: "
-                                  + (r.stderr or r.stdout or "sem mensagem").strip())[:400]
+                info["motivo"] = _nao_respondeu(caminho, r.stderr or r.stdout)
         except AtalhoQuebrado as exc:
             info["motivo"] = str(exc)[:600]
         except (OSError, subprocess.SubprocessError) as exc:
             info["motivo"] = f"não consegui rodar o Claude Code: {exc}"[:300]
+    if guardado and _eh_a_janela(guardado):
+        info["motivo"] = (f"o caminho colado ({guardado}) é o do app Claude — a janela —, "
+                          "não o do Claude Code. Deixe o campo vazio: o Sharkcut acha o "
+                          "Claude Code que vem com o app. " + info["motivo"]).strip()
     _cache["estado"], _cache["estado_t"] = info, agora
     return info
+
+
+def _nao_respondeu(caminho: str, bruto: str) -> str:
+    b = (bruto or "").lower()
+    if "native binary" in b:
+        # o pacote do npm é uma casca: o programa de verdade (claude.exe) é
+        # baixado à parte, e aqui ele não abre — faltou, ou o antivírus tirou
+        return ("o Claude Code instalado pelo npm está incompleto: o programa dele "
+                "(claude.exe) não abre — a instalação parou no meio, ou o antivírus o "
+                "bloqueou. Se você usa o app Claude, abra a aba Code dele uma vez e aperte "
+                "testar: o Sharkcut usa o Claude Code que vem com o app. Ou instale o "
+                "nativo (no PowerShell: irm https://claude.ai/install.ps1 | iex)")
+    return (f"achei em {caminho}, mas ele não respondeu: "
+            + ((bruto or "").strip() or "sem mensagem"))[:400]
+
+
+def _logado(caminho: str) -> bool | None:
+    """Entrou na conta? (``claude auth status``: local, não gasta nada.)
+    None = esta versão não sabe dizer — o teste de verdade responde."""
+    if not re.search(r"^\s+auth\b", _ajuda(caminho), re.M):
+        return None
+    try:
+        r = _rodar([caminho, "auth", "status", "--json"])
+        dados = json.loads(r.stdout.strip() or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    v = dados.get("loggedIn") if isinstance(dados, dict) else None
+    return v if isinstance(v, bool) else None
+
+
+def entrar() -> dict:
+    """Abre o login do Claude Code numa janela: o navegador abre na página da
+    Anthropic, ele entra com a conta dele, e acabou — uma vez só. O login fica
+    com o Claude Code (na pasta .claude dele), não com o Sharkcut."""
+    est = estado(forcar=True)
+    if not est["instalado"]:
+        return {"ok": False, "motivo": est["motivo"]}
+    if est["logado"]:
+        return {"ok": True, "ja_estava": True}
+    base = _base(est["caminho"])
+    if base is None:
+        return {"ok": False, "motivo": "o Claude Code daqui só roda pelo atalho do npm, "
+                                       "que não abre uma janela de login"}
+    tem_auth = bool(re.search(r"^\s+auth\b", _ajuda(est["caminho"]), re.M))
+    if not EH_WINDOWS:
+        comando = subprocess.list2cmdline([est["caminho"], *(["auth", "login"] if tem_auth else [])])
+        return {"ok": False, "motivo": f"abra o Terminal e rode: {comando}"}
+    # sem "auth login" (versão velha), abre o Claude Code na janela e o
+    # próprio primeiro uso pede o login
+    subprocess.Popen([*base, *(["auth", "login"] if tem_auth else [])],
+                     creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                     close_fds=True)
+    _cache.pop("estado", None)
+    return {"ok": True, "janela": True}
 
 
 def _ajuda(caminho: str) -> str:
@@ -714,8 +853,8 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
 def _explicar(bruto: str) -> str:
     b = bruto.lower()
     if "login" in b or "not logged" in b or "authenticat" in b or "401" in b:
-        return ("o Claude Code não está logado nesta máquina: abra um terminal, "
-                "rode 'claude' e faça login uma vez")
+        return ("falta o login do Claude Code na sua conta do Claude: na primeira "
+                "tela, aperte \"entrar na conta\" (abre o navegador, uma vez só)")
     if "limit" in b and ("usage" in b or "rate" in b):
         return "o limite de uso da sua assinatura do Claude foi atingido — tente mais tarde"
     return bruto.strip().splitlines()[-1][:300] if bruto.strip() else "o Claude Code falhou"
