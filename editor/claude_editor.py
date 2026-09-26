@@ -98,28 +98,91 @@ def achar() -> str:
 # as aspas e quebrava no espaço — "'C:\Users\Renato' não é reconhecido como
 # um comando interno ou externo" (visto na máquina dele). Então o atalho é
 # LIDO, e o programa que ele chama (node + cli.js, ou um .exe) roda direto.
+EH_WINDOWS = os.name == "nt"
+
+
+def _binario_de_verdade(p: Path) -> bool:
+    """Um .exe que é programa mesmo. O pacote do npm deixa um "claude.exe" de
+    mentira (um texto de erro) até o pós-instalação trocar pelo nativo."""
+    try:
+        if not p.is_file():
+            return False
+        if not EH_WINDOWS:
+            return True
+        with open(p, "rb") as f:
+            return f.read(2) == b"MZ"
+    except OSError:
+        return False
+
+
+def _nativos_do_npm(pasta: Path) -> list[Path]:
+    """Onde o npm põe o Claude Code NATIVO (versões novas: um .exe de verdade)."""
+    base = pasta / "node_modules" / "@anthropic-ai"
+    out = [base / "claude-code" / "bin" / "claude.exe"]
+    for arq in ("win32-x64", "win32-arm64"):
+        out += [base / f"claude-code-{arq}" / "claude.exe",
+                base / "claude-code" / "node_modules" / "@anthropic-ai"
+                / f"claude-code-{arq}" / "claude.exe"]
+    return out
+
+
+def _achar_node(pasta: Path) -> str:
+    """O node.exe: ao lado do atalho, no PATH, ou nas pastas de praxe do Windows."""
+    candidatos = [pasta / "node.exe"]
+    achado = shutil.which("node")
+    if achado:
+        candidatos.append(Path(achado))
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        if os.environ.get(var):
+            candidatos.append(Path(os.environ[var]) / "nodejs" / "node.exe")
+    if os.environ.get("LOCALAPPDATA"):
+        candidatos.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "nodejs" / "node.exe")
+    if os.environ.get("NVM_SYMLINK"):
+        candidatos.append(Path(os.environ["NVM_SYMLINK"]) / "node.exe")
+    for c in candidatos:
+        if c.is_file():
+            return str(c)
+    return ""
+
+
 def _alvo_do_atalho(atalho: Path) -> list[str] | None:
-    """O programa por trás de um claude.cmd, sem o cmd.exe. None = não achei."""
+    """O programa por trás de um claude.cmd, sem o cmd.exe. None = não achei.
+
+    Por ordem: o que o próprio atalho chama (lido do arquivo); o Claude nativo
+    onde o npm o instala; o cli.js com o node. Um usuário com "&" no nome
+    ("Renato&Cibele") não pode depender do atalho: o próprio claude.cmd do npm
+    faz SET dp0=%~dp0 sem aspas, e o & corta o caminho ali — o atalho quebra
+    até no terminal dele (visto na máquina dele).
+    """
     try:
         texto = atalho.read_text(encoding="utf-8", errors="replace")
     except OSError:
         texto = ""
+    pasta = atalho.parent
     relativos = re.findall(r'"%~?dp0%?\\?([^"%]+?\.(?:js|cjs|mjs|exe))"', texto, re.I)
-    relativos.append(r"node_modules\@anthropic-ai\claude-code\cli.js")
+    alvos: list[Path] = []
     for rel in relativos:
         partes = [x for x in re.split(r"[\\/]", rel) if x]
-        if not partes or partes[-1].lower() == "node.exe":
-            continue            # o atalho cita o node.exe dele — não é o Claude
-        alvo = atalho.parent.joinpath(*partes)
-        if not alvo.is_file():
-            continue
+        if partes and partes[-1].lower() != "node.exe":   # o node dele não é o Claude
+            alvos.append(pasta.joinpath(*partes))
+    alvos += _nativos_do_npm(pasta)
+    js = pasta / "node_modules" / "@anthropic-ai" / "claude-code"
+    alvos += [js / "cli.js", js / "cli-wrapper.cjs"]
+    for alvo in alvos:
         if alvo.suffix.lower() == ".exe":
-            return [str(alvo)]
-        node = atalho.parent / "node.exe"
-        node_s = str(node) if node.is_file() else (shutil.which("node") or "")
-        if node_s:
-            return [node_s, str(alvo)]
+            if _binario_de_verdade(alvo):
+                return [str(alvo)]
+            continue
+        if alvo.is_file():
+            node = _achar_node(pasta)
+            if node:
+                return [node, str(alvo)]
     return None
+
+
+# o que o cmd.exe interpreta mesmo dentro de um .cmd — com isso no caminho, o
+# atalho do npm não tem como funcionar, com aspas ou sem
+_ESPECIAIS_DO_CMD = set("&^%!()")
 
 
 def _base(caminho: str) -> list[str] | None:
@@ -127,6 +190,10 @@ def _base(caminho: str) -> list[str] | None:
     if Path(caminho).suffix.lower() in (".cmd", ".bat"):
         return _alvo_do_atalho(Path(caminho))
     return [caminho]
+
+
+class AtalhoQuebrado(OSError):
+    """O único caminho é o claude.cmd, e o nome da pasta o quebra no cmd.exe."""
 
 
 def _linha_do_cmd(cmd: list[str]) -> str:
@@ -143,6 +210,13 @@ def _abrir(cmd: list[str], **kw) -> subprocess.Popen:
     base = _base(cmd[0])
     if base is not None:
         return subprocess.Popen([*base, *cmd[1:]], **kw)
+    if _ESPECIAIS_DO_CMD & set(cmd[0]):
+        raise AtalhoQuebrado(
+            f"o Claude Code está instalado pelo npm em {Path(cmd[0]).parent}, e o "
+            f"'{''.join(sorted(_ESPECIAIS_DO_CMD & set(cmd[0])))}' no nome da pasta quebra "
+            f"o atalho claude.cmd no Windows. Instale o Claude Code pelo instalador "
+            f"nativo (no PowerShell: irm https://claude.ai/install.ps1 | iex) e aperte "
+            f"testar de novo — ou cole aqui o caminho de um claude.exe")
     return subprocess.Popen(_linha_do_cmd(cmd), **kw)
 
 
@@ -189,8 +263,10 @@ def estado(forcar: bool = False) -> dict:
             else:
                 info["motivo"] = (f"achei em {caminho}, mas ele não respondeu: "
                                   + (r.stderr or r.stdout or "sem mensagem").strip())[:400]
+        except AtalhoQuebrado as exc:
+            info["motivo"] = str(exc)[:600]
         except (OSError, subprocess.SubprocessError) as exc:
-            info["motivo"] = f"não consegui rodar o Claude Code: {exc}"[:200]
+            info["motivo"] = f"não consegui rodar o Claude Code: {exc}"[:300]
     _cache["estado"], _cache["estado_t"] = info, agora
     return info
 

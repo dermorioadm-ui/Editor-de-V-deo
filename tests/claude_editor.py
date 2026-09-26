@@ -234,6 +234,67 @@ def testar_atalho_do_windows(tmp: Path) -> None:
           and f'"{vazio}"' in linha and linha.endswith('opus"'),
           "sem alvo legível, vai pelo cmd.exe com /s — que só tira as aspas de fora",
           linha)
+    # ---- a máquina dele de verdade: "Renato&Cibele", Claude Code novo do npm
+    npm2 = tmp / "Renato&Cibele" / "AppData" / "Roaming" / "npm"
+    pacote = npm2 / "node_modules" / "@anthropic-ai" / "claude-code"
+    (pacote / "bin").mkdir(parents=True)
+    atalho3 = npm2 / "claude.CMD"
+    atalho3.write_text('@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\n'
+                       'SETLOCAL\nCALL :find_dp0\n'
+                       '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\n',
+                       encoding="utf-8")
+    stub = pacote / "bin" / "claude.exe"
+    stub.write_text('echo "Error: claude native binary not installed." >&2\nexit 1\n')
+    nativo = npm2 / "node_modules" / "@anthropic-ai" / "claude-code-win32-x64" / "claude.exe"
+    nativo.parent.mkdir(parents=True)
+    nativo.write_bytes(b"MZ\x90\x00")
+    C.EH_WINDOWS = True         # só aqui: o teste do "MZ" é coisa de Windows
+    try:
+        base = C._base(str(atalho3))
+    finally:
+        C.EH_WINDOWS = os.name == "nt"
+    check(base == [str(nativo)],
+          "com '&' no nome da pasta e o claude.exe do npm ainda de mentira, acha o "
+          "nativo que o npm baixou — sem passar pelo atalho", str(base))
+    stub.write_bytes(b"MZ\x90\x00")
+    check(C._base(str(atalho3)) == [str(stub)],
+          "com o pós-instalação feito, roda o bin\\claude.exe do pacote direto")
+
+    # o pacote antigo (cli.js) com o node fora do PATH, na pasta padrão
+    npm3 = tmp / "Renato&Cibele2" / "npm"
+    js = npm3 / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+    js.parent.mkdir(parents=True)
+    js.write_text("//", encoding="utf-8")
+    (npm3 / "claude.cmd").write_text(SHIM_DO_NPM, encoding="utf-8")
+    pf = tmp / "Program Files"
+    (pf / "nodejs").mkdir(parents=True)
+    (pf / "nodejs" / "node.exe").write_bytes(b"MZ")
+    which_real, pf_real = C.shutil.which, os.environ.get("ProgramFiles")
+    C.shutil.which = lambda *_a, **_k: None
+    os.environ["ProgramFiles"] = str(pf)
+    try:
+        base = C._base(str(npm3 / "claude.cmd"))
+    finally:
+        C.shutil.which = which_real
+        if pf_real is None:
+            os.environ.pop("ProgramFiles", None)
+        else:
+            os.environ["ProgramFiles"] = pf_real
+    check(base == [str(pf / "nodejs" / "node.exe"), str(js)],
+          "sem node no PATH, acha o node na pasta padrão do Windows", str(base))
+
+    # nada por trás do atalho e '&' no caminho: explica em vez de quebrar
+    npm4 = tmp / "Renato&Cibele3" / "npm"
+    npm4.mkdir(parents=True)
+    (npm4 / "claude.cmd").write_text("@echo off\n", encoding="utf-8")
+    try:
+        C._abrir([str(npm4 / "claude.cmd"), "--version"])
+        msg = ""
+    except C.AtalhoQuebrado as exc:
+        msg = str(exc)
+    check("'&'" in msg and "instalador" in msg and "install.ps1" in msg,
+          "se só sobrar o atalho e o nome da pasta o quebra, a tela diz o porquê e o "
+          "que fazer", msg[:120])
     check(C._texto("n\u00e3o \u00e9 reconhecido".encode("latin-1")).startswith("n")
           and "\ufffd" not in C._texto("ok".encode()),
           "mensagem do Windows fora do UTF-8 não vira lixo nem derruba")
