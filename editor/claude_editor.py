@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,10 +72,16 @@ def _candidatos() -> list[Path]:
 
 
 def achar() -> str:
-    """O executável do Claude Code: o que ele apontou, o do PATH, os de praxe."""
-    guardado = str(db.get_setting("claude_caminho", "") or "").strip()
+    """O executável do Claude Code: o que ele apontou, o instalador nativo, o
+    do PATH, os de praxe. O nativo (claude.exe) vem ANTES do PATH: o PATH do
+    Windows costuma achar primeiro o atalho claude.cmd do npm, e um .exe roda
+    direto, sem o cmd.exe no meio."""
+    guardado = str(db.get_setting("claude_caminho", "") or "").strip().strip('"')
     if guardado and Path(guardado).is_file():
         return guardado
+    nativo = Path.home() / ".local" / "bin" / "claude.exe"
+    if nativo.is_file():
+        return str(nativo)
     achado = shutil.which("claude")
     if achado:
         return achado
@@ -84,10 +91,81 @@ def achar() -> str:
     return ""
 
 
-def _rodar(args: list[str], timeout: float = 20.0) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout,
-                          encoding="utf-8", errors="replace",
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+# O ATALHO DO NPM. Instalado pelo npm, o Claude Code vira um claude.cmd — um
+# arquivo de lote. Rodar um .cmd passa pelo cmd.exe, e o cmd.exe tem uma regra
+# antiga com aspas: se a linha tem mais de duas, ele tira a PRIMEIRA e a
+# ÚLTIMA. Com o usuário "C:\Users\Renato Fulano", o caminho do atalho perdia
+# as aspas e quebrava no espaço — "'C:\Users\Renato' não é reconhecido como
+# um comando interno ou externo" (visto na máquina dele). Então o atalho é
+# LIDO, e o programa que ele chama (node + cli.js, ou um .exe) roda direto.
+def _alvo_do_atalho(atalho: Path) -> list[str] | None:
+    """O programa por trás de um claude.cmd, sem o cmd.exe. None = não achei."""
+    try:
+        texto = atalho.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        texto = ""
+    relativos = re.findall(r'"%~?dp0%?\\?([^"%]+?\.(?:js|cjs|mjs|exe))"', texto, re.I)
+    relativos.append(r"node_modules\@anthropic-ai\claude-code\cli.js")
+    for rel in relativos:
+        partes = [x for x in re.split(r"[\\/]", rel) if x]
+        if not partes or partes[-1].lower() == "node.exe":
+            continue            # o atalho cita o node.exe dele — não é o Claude
+        alvo = atalho.parent.joinpath(*partes)
+        if not alvo.is_file():
+            continue
+        if alvo.suffix.lower() == ".exe":
+            return [str(alvo)]
+        node = atalho.parent / "node.exe"
+        node_s = str(node) if node.is_file() else (shutil.which("node") or "")
+        if node_s:
+            return [node_s, str(alvo)]
+    return None
+
+
+def _base(caminho: str) -> list[str] | None:
+    """Como chamar este executável sem o cmd.exe. None = só pelo cmd.exe."""
+    if Path(caminho).suffix.lower() in (".cmd", ".bat"):
+        return _alvo_do_atalho(Path(caminho))
+    return [caminho]
+
+
+def _linha_do_cmd(cmd: list[str]) -> str:
+    """A última saída, se o atalho não pôde ser lido: pelo cmd.exe, com /s.
+
+    Com /s o cmd.exe tira só as aspas de FORA da linha, e as de dentro — as
+    do caminho com espaço — sobrevivem.
+    """
+    return 'cmd.exe /d /s /c "' + subprocess.list2cmdline(cmd) + '"'
+
+
+def _abrir(cmd: list[str], **kw) -> subprocess.Popen:
+    kw.setdefault("creationflags", getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    base = _base(cmd[0])
+    if base is not None:
+        return subprocess.Popen([*base, *cmd[1:]], **kw)
+    return subprocess.Popen(_linha_do_cmd(cmd), **kw)
+
+
+def _texto(b: bytes) -> str:
+    """Saída de processo em texto: UTF-8 (o Claude Code) ou a página de código
+    do console (as mensagens do próprio Windows, que saíam "n�o �")."""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("oem" if os.name == "nt" else "latin-1", errors="replace")
+
+
+def _rodar(args: list[str], timeout: float = 20.0,
+           entrada: bytes | None = None) -> subprocess.CompletedProcess:
+    p = _abrir(args, stdin=subprocess.PIPE if entrada is not None else subprocess.DEVNULL,
+               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = p.communicate(entrada, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise
+    return subprocess.CompletedProcess(args, p.returncode, _texto(out), _texto(err))
 
 
 def estado(forcar: bool = False) -> dict:
@@ -109,7 +187,8 @@ def estado(forcar: bool = False) -> dict:
                 info["instalado"] = True
                 info["versao"] = r.stdout.strip().splitlines()[0][:80]
             else:
-                info["motivo"] = (r.stderr or r.stdout or "não respondeu").strip()[:200]
+                info["motivo"] = (f"achei em {caminho}, mas ele não respondeu: "
+                                  + (r.stderr or r.stdout or "sem mensagem").strip())[:400]
         except (OSError, subprocess.SubprocessError) as exc:
             info["motivo"] = f"não consegui rodar o Claude Code: {exc}"[:200]
     _cache["estado"], _cache["estado_t"] = info, agora
@@ -415,10 +494,8 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
     env["PYTHONIOENCODING"] = "utf-8"
     diario = pasta / f"sessao_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
     try:
-        proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd=str(pasta), env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        proc = _abrir(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE, cwd=str(pasta), env=env)
     except OSError as exc:
         saida["erro"] = f"não consegui abrir o Claude Code: {exc}"
         return _gravar(pid, saida, t0)
@@ -515,7 +592,7 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
         saida["relatorio"] = str(resultado.get("result") or ultimo_texto).strip()[:4000]
     else:
         detalhe = str(resultado.get("result") or "") if resultado else ""
-        erro = b"".join(erro_bruto).decode("utf-8", "replace").strip()
+        erro = _texto(b"".join(erro_bruto)).strip()
         if time.time() - t0 > TETO_MINUTOS * 60 - 2:
             detalhe = f"passou de {TETO_MINUTOS} min e foi interrompido"
         saida["erro"] = saida["erro"] or _explicar(detalhe or erro or

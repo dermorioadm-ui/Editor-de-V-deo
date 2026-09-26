@@ -495,14 +495,22 @@ export default function Home() {
                   câmera e a legenda, escolhe o b-roll e faz a pós-edição. O Gemini fica fora.
                 </p>
               ) : (
-                <div className="flex items-center gap-2">
-                  <p className="text-[11px] text-amber-300 flex-1">
-                    Não achei o Claude Code aqui. Instale e faça login uma vez (abra um
-                    terminal e rode <code className="font-mono">claude</code>). Se ele está
-                    num lugar diferente, cole o caminho do executável:
-                  </p>
-                  <input className="field w-64 text-xs font-mono" placeholder="C:\Users\...\claude.exe"
-                         value={claudeCaminho} onChange={(e) => setClaudeCaminho(e.target.value)} />
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[11px] text-amber-300 flex-1">
+                      {claude?.caminho
+                        ? 'Achei o Claude Code, mas ele não respondeu.'
+                        : 'Não achei o Claude Code aqui. Instale e faça login uma vez (abra um terminal e rode claude).'}
+                      {' '}Se ele está num lugar diferente, cole o caminho do executável e
+                      aperte testar:
+                    </p>
+                    <input className="field w-64 text-xs font-mono" placeholder="C:\Users\...\claude.exe"
+                           value={claudeCaminho} onChange={(e) => setClaudeCaminho(e.target.value)} />
+                  </div>
+                  {claude?.motivo && (
+                    <p className="text-[10px] text-slate-500 font-mono break-all" data-motivo-claude="1">
+                      {claude.motivo}</p>
+                  )}
                 </div>
               )}
               <label className="block">

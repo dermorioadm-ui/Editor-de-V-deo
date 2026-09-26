@@ -171,6 +171,74 @@ def esperar(base: str, pid: str, job_id: str, limite: float = 900.0) -> tuple[di
     return {"status": "estourou"}, mensagens
 
 
+SHIM_DO_NPM = r"""@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*
+"""
+
+
+def testar_atalho_do_windows(tmp: Path) -> None:
+    """A máquina dele: usuário "C:\\Users\\Renato Fulano" e o Claude pelo npm.
+
+    Rodar o claude.cmd passava pelo cmd.exe, que tirava a primeira e a última
+    aspas da linha e quebrava o caminho no espaço: "'C:\\Users\\Renato' não é
+    reconhecido como um comando interno ou externo". O atalho agora é LIDO e o
+    programa dele roda direto, sem o cmd.exe.
+    """
+    from editor import claude_editor as C
+
+    print("\n-- o Claude Code instalado pelo npm, numa pasta com espaço")
+    npm = tmp / "Renato Fulano" / "AppData" / "Roaming" / "npm"
+    cli = npm / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("// cli", encoding="utf-8")
+    atalho = npm / "claude.cmd"
+    atalho.write_text(SHIM_DO_NPM, encoding="utf-8")
+    base = C._base(str(atalho))
+    check(base is not None and base[-1] == str(cli) and len(base) == 2
+          and Path(base[0]).name.lower().startswith("node"),
+          "o claude.cmd do npm vira node + cli.js — sem o cmd.exe no meio",
+          str(base))
+    (npm / "node.exe").write_bytes(b"MZ")
+    base = C._base(str(atalho))
+    check(base == [str(npm / "node.exe"), str(cli)],
+          "com o node.exe ao lado do atalho, é ele que roda (e não é confundido "
+          "com o Claude)")
+    exe = npm / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    atalho2 = npm / "claude2.cmd"
+    atalho2.write_text('@"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*',
+                       encoding="utf-8")
+    check(C._base(str(atalho2)) == [str(exe)],
+          "o atalho que aponta para um claude.exe roda o .exe direto")
+    vazio = tmp / "outro dir" / "claude.cmd"
+    vazio.parent.mkdir(parents=True)
+    vazio.write_text("@echo off\nnada aqui", encoding="utf-8")
+    linha = C._linha_do_cmd([str(vazio), "-p", "--tools", "", "--model", "opus"])
+    check(C._base(str(vazio)) is None and linha.startswith('cmd.exe /d /s /c ""')
+          and f'"{vazio}"' in linha and linha.endswith('opus"'),
+          "sem alvo legível, vai pelo cmd.exe com /s — que só tira as aspas de fora",
+          linha)
+    check(C._texto("n\u00e3o \u00e9 reconhecido".encode("latin-1")).startswith("n")
+          and "\ufffd" not in C._texto("ok".encode()),
+          "mensagem do Windows fora do UTF-8 não vira lixo nem derruba")
+
+
 def main() -> int:
     import uvicorn
 
@@ -193,6 +261,8 @@ def main() -> int:
             break
         except OSError:
             time.sleep(0.1)
+
+    testar_atalho_do_windows(tmp)
 
     falso = tmp / "claude_falso.py"
     falso.write_text(CLAUDE_FALSO.replace("__PY__", sys.executable), encoding="utf-8")
