@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Clip, Envelope, TimelineView } from '../types'
 import { SECTIONS } from '../types'
 import { clamp, timecode } from '../lib/format'
-import { cuesOnSource, outputToSource, sourceToOutput, sourceToOutputNearest } from '../lib/timeline'
+import { doEixo, eixoParaSaida, eixoParaSaidaPerto, montarEixo, paraEixo, saidaParaEixo,
+         saidaParaEixoPerto } from '../lib/eixo'
 import { getPlayhead, setPlayhead, setState, subscribePlayhead, useStore }
   from '../state/store'
 
@@ -12,11 +13,13 @@ interface Props {
   sourceDuration: number
   onDeleteSelection: () => void
   onDeleteClip: (clipId: string) => void
-  onRestore: (start: number, end: number) => void
+  /** start/end no tempo DA GRAVAÇÃO `source` */
+  onRestore: (start: number, end: number, source: string) => void
   onToggleTake: (id: string, restored: boolean) => void
   onToggleClap: (id: string, enabled: boolean) => void
   onSubtitleEdge: (cueId: string, side: 'start' | 'end', outTime: number) => void
-  onResizeRemoved: (start: number, end: number, ns: number, ne: number) => void
+  onResizeRemoved: (start: number, end: number, ns: number, ne: number,
+                    source: string) => void
   onMoveItem: (kind: string, id: string, side: 'move' | 'start' | 'end',
                delta: number, ripple?: boolean) => void
   onDeleteItem: (kind: string, id: string, ripple?: boolean) => void
@@ -48,6 +51,19 @@ function speedColor(speed: number): string {
 
 export default function Timeline(props: Props) {
   const { view, envelope, sourceDuration } = props
+  // O EIXO: as gravações em sequência (uma só = o arquivo, como sempre foi)
+  const eixo = useMemo(() => montarEixo(view, sourceDuration),
+                       [view.montagem, view.source_duration, sourceDuration])  // eslint-disable-line react-hooks/exhaustive-deps
+  // os cortes no EIXO. start/end de cada corte são tempo dentro da gravação
+  // dele; aqui viram posição na linha do tempo, e `src*` guarda o original
+  // para devolver ao servidor
+  const cortes = useMemo(() => (view.removed ?? []).flatMap((r) => {
+    const fonte = r.source || 'main'
+    const o = eixo.offset[fonte]
+    if (o == null) return []
+    return [{ ...r, source: fonte, start: o + r.start, end: o + r.end }]
+  }), [view.removed, eixo])
+  const noArquivo = (fonte: string, x: number) => x - (eixo.offset[fonte] ?? 0)
   const base = useRef<HTMLCanvasElement>(null)     // onda, blocos, legendas
   const over = useRef<HTMLCanvasElement>(null)     // playhead, seleção, cursor
   const wrap = useRef<HTMLDivElement>(null)
@@ -60,15 +76,17 @@ export default function Timeline(props: Props) {
   // ou afastam o corte da fala em passos de 80 ms. É o retoque leve que o
   // usuário pediu — "cliquei no que a IA (ou o programa) tirou e resolvo" —
   // sem precisar achar a alça de 3 px na borda.
-  const [selRemoved, setSelRemoved] = useState<{ start: number; end: number } | null>(null)
+  // no EIXO (start/end) e de qual gravação — é o que o servidor precisa
+  const [selRemoved, setSelRemoved] = useState<
+    { start: number; end: number; source: string } | null>(null)
   useEffect(() => {
     // o trecho mudou de forma (ou voltou ao vídeo): a seleção não descreve
     // mais nada
     if (!selRemoved) return
-    const existe = (view.removed ?? []).some((r) =>
+    const existe = cortes.some((r) =>
       Math.abs(r.start - selRemoved.start) < 0.02 && Math.abs(r.end - selRemoved.end) < 0.02)
     if (!existe) setSelRemoved(null)
-  }, [view.removed, selRemoved])
+  }, [cortes, selRemoved])
   const drag = useRef<{ mode: string; t0: number; x0: number; s0: number
                         cueId?: string } | null>(null)
   const [subDrag, setSubDrag] = useState<
@@ -76,7 +94,8 @@ export default function Timeline(props: Props) {
   // arrasto da borda de um trecho JÁ removido: cresce tirando mais vídeo,
   // encolhe devolvendo
   const [redDrag, setRedDrag] = useState<
-    { start: number; end: number; side: 'start' | 'end'; t: number } | null>(null)
+    { start: number; end: number; side: 'start' | 'end'; t: number
+      source: string } | null>(null)
   // arrasto de um item de trilho (sobreposição, desfoque, trilha)
   const [itemDrag, setItemDrag] = useState<
     { id: string; kind: string; delta: number
@@ -89,7 +108,7 @@ export default function Timeline(props: Props) {
   const selection = useStore((s) => s.selection)
   const selectedClip = useStore((s) => s.selectedClip)
 
-  const total = sourceDuration || envelope?.duration || 1
+  const total = eixo.total || envelope?.duration || 1
   // trilhos extras (sobreposição, desfoque, trilha) ficam abaixo das legendas,
   // no eixo de SAÍDA — é onde os itens de cada camada vivem
   // useMemo de propósito: `extras` está nos deps do efeito que desenha a
@@ -124,48 +143,46 @@ export default function Timeline(props: Props) {
   const toX = useCallback((t: number) => (t - start) / span * size.w, [start, span, size.w])
   const toT = useCallback((x: number) => start + x / size.w * span, [start, span, size.w])
 
-  // itens de trilho vivem no tempo de SAÍDA; a régua está no da FONTE
-  const outputToSourceT = useCallback((t: number) => {
-    const pos = outputToSource(t, view.blocks)
-    return pos && pos.source === 'main' ? pos.time : null
-  }, [view.blocks])
-  // a borda de um item de trilho pode cair EXATAMENTE no fim de um bloco (a
+  // itens de trilho vivem no tempo de SAÍDA; a régua está no EIXO das
+  // gravações. A borda de um item pode cair EXATAMENTE no fim de um bloco (a
   // janela termina onde o corte começa) ou passar do fim do vídeo: aí o
   // mapeamento estrito devolve nulo e o item sumia da trilha / não pegava
-  const itemSourceEdge = useCallback((t: number) => {
-    const direto = outputToSourceT(t)
-    if (direto != null) return direto
-    let melhor: { d: number; src: number } | null = null
-    for (const b of view.blocks) {
-      if (b.source !== 'main') continue
-      const s = b.out_start ?? 0; const e = b.out_end ?? 0
-      const d = t < s ? s - t : t > e ? t - e : 0
-      const src = t < s ? b.src_start : b.src_end
-      if (!melhor || d < melhor.d) melhor = { d, src }
-    }
-    return melhor ? melhor.src : null
-  }, [view.blocks, outputToSourceT])
+  const outputToSourceT = useCallback((t: number) =>
+    saidaParaEixo(t, view.blocks, eixo), [view.blocks, eixo])
+  const itemSourceEdge = useCallback((t: number) =>
+    saidaParaEixoPerto(t, view.blocks, eixo), [view.blocks, eixo])
 
-  const subsOnSource = useMemo(
-    () => cuesOnSource(view.subtitles, view.blocks), [view.subtitles, view.blocks])
+  // as legendas no eixo: cada uma no pedaço da gravação de onde ela veio.
+  // Antes todas iam para o eixo da primeira gravação, e as da segunda e da
+  // terceira eram desenhadas umas por cima das outras no começo
+  const subsOnSource = useMemo(() => view.subtitles.flatMap((c) => {
+    const a = saidaParaEixo(c.start, view.blocks, eixo)
+    const b = saidaParaEixo(Math.max(c.start + 0.01, c.end - 0.01), view.blocks, eixo)
+    return a == null || b == null ? [] : [{ cue: c, start: a, end: b }]
+  }), [view.subtitles, view.blocks, eixo])
+
+  // os blocos de fala no eixo (inserto e foto não moram nele)
+  const blocosNoEixo = useMemo(() => view.blocks.flatMap((b) => {
+    const x0 = paraEixo(eixo, b.source, b.src_start)
+    return x0 == null ? [] : [{ b, x0, x1: x0 + (b.src_end - b.src_start) }]
+  }), [view.blocks, eixo])
 
   // Blocos vizinhos da mesma seção viram UMA faixa com o nome escrito. Com 45
   // blocos num vídeo de 12 minutos, 45 retângulos iguais não dizem nada; 4
   // faixas nomeadas dizem onde está o gancho e onde está a oferta.
   const bands = useMemo(() => {
     const out: { section: string; start: number; end: number; blocks: number }[] = []
-    for (const b of view.blocks) {
-      if (b.source !== 'main') continue
+    for (const { b, x0, x1 } of blocosNoEixo) {
       const last = out[out.length - 1]
-      if (last && last.section === b.section && b.src_start - last.end < 0.35) {
-        last.end = b.src_end
+      if (last && last.section === b.section && x0 - last.end < 0.35 && x0 >= last.end - 0.01) {
+        last.end = x1
         last.blocks += 1
       } else {
-        out.push({ section: b.section, start: b.src_start, end: b.src_end, blocks: 1 })
+        out.push({ section: b.section, start: x0, end: x1, blocks: 1 })
       }
     }
     return out
-  }, [view.blocks])
+  }, [blocosNoEixo])
 
   // Pico por coluna de pixel. O código antigo pegava UM ponto de envelope a
   // cada pixel: com 12 min na tela isso jogava fora 149 de cada 150 amostras
@@ -221,7 +238,32 @@ export default function Timeline(props: Props) {
       g.strokeStyle = '#1a2030'
       g.beginPath(); g.moveTo(x, yMarks); g.lineTo(x, ySubs + ROW.subs); g.stroke()
       g.fillStyle = '#4b5563'
-      g.fillText(timecode(t), x + 3, yRuler + 11)
+      g.fillText(timecode(eixo.multiplo ? doEixo(eixo, t).time : t), x + 3, yRuler + 11)
+    }
+    // A EMENDA entre duas gravações: uma linha forte do topo ao fim, e o
+    // nome de cada uma no começo do pedaço dela
+    if (eixo.multiplo) {
+      for (const tr of eixo.trechos) {
+        const x = Math.round(toX(tr.offset)) + 0.5
+        if (x < -200 || x > size.w) continue
+        if (tr.offset > 0) {
+          g.strokeStyle = '#f59e0b'; g.lineWidth = 2
+          g.beginPath(); g.moveTo(x, yRuler); g.lineTo(x, height - 2); g.stroke()
+          g.lineWidth = 1
+        }
+        const rotulo = `▸ vídeo ${tr.ordem}${tr.nome ? ' · ' + tr.nome : ''}`
+        g.font = 'bold 10px system-ui'
+        const w = Math.min(g.measureText(rotulo).width + 8, Math.max(0, toX(tr.offset + tr.duracao) - x - 4))
+        if (w > 30) {
+          g.fillStyle = 'rgba(245,158,11,0.9)'
+          g.fillRect(Math.max(0, x + 1), yRuler + 1, w, 13)
+          g.fillStyle = '#0f1218'
+          g.save(); g.beginPath(); g.rect(Math.max(0, x + 1), yRuler, w, 15); g.clip()
+          g.fillText(rotulo, Math.max(0, x + 1) + 4, yRuler + 11)
+          g.restore()
+        }
+        g.font = '10px ui-monospace, monospace'
+      }
     }
 
     // onda
@@ -289,7 +331,7 @@ export default function Timeline(props: Props) {
     // no rodapé da onda. Cento e cinquenta hachuras de 1 px em cima da onda
     // é o que fazia a trilha virar um borrão vermelho.
     const CUT_BAR = 5
-    for (const r of view.removed ?? []) {
+    for (const r of cortes) {
       const vivo = redDrag && Math.abs(redDrag.start - r.start) < 0.005
         && Math.abs(redDrag.end - r.end) < 0.005
       const rs = vivo && redDrag.side === 'start' ? redDrag.t : r.start
@@ -349,9 +391,9 @@ export default function Timeline(props: Props) {
     }
 
     // blocos, coloridos pela VELOCIDADE
-    for (const b of view.blocks) {
-      if (b.source !== 'main') continue
-      const x0 = toX(b.src_start); const x1 = toX(b.src_end)
+    for (const nb of blocosNoEixo) {
+      const b = nb.b
+      const x0 = toX(nb.x0); const x1 = toX(nb.x1)
       if (x1 < 0 || x0 > size.w) continue
       const w = Math.max(1, x1 - x0)
       const sel = b.id === selectedClip
@@ -375,7 +417,9 @@ export default function Timeline(props: Props) {
 
     // enquadramentos: blocos vizinhos com o mesmo zoom formam UMA cena
     for (const cena of view.zoom_scenes ?? []) {
-      const x0 = toX(cena.start); const x1 = toX(cena.end)
+      const c0 = paraEixo(eixo, cena.source, cena.start)
+      if (c0 == null) continue
+      const x0 = toX(c0); const x1 = toX(c0 + (cena.end - cena.start))
       if (x1 < 0 || x0 > size.w) continue
       const w = Math.max(1, x1 - x0)
       const fechado = cena.zoom > 1.001
@@ -505,7 +549,7 @@ export default function Timeline(props: Props) {
     }
   }, [size, height, start, span, envelope, wavePeaks, view, selectedClip, selRemoved,
       subsOnSource, subDrag, redDrag, itemDrag, dropAlvo, bands, extras, toX,
-      outputToSourceT, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
+      outputToSourceT, itemSourceEdge, cortes, blocosNoEixo, eixo, yRuler, yMarks, yWave, ySections, yBlocks, yScenes,
       ySubs, yTracks])
 
   // onde a agulha está em pixels, para poder pegá-la com o mouse
@@ -537,18 +581,8 @@ export default function Timeline(props: Props) {
       g.stroke()
     }
 
-    // playhead: do tempo de SAÍDA para o eixo da fonte
-    const t = getPlayhead()
-    let src: number | null = null
-    for (const b of view.blocks) {
-      if (b.source !== 'main') continue
-      const s = b.out_start ?? 0; const e = b.out_end ?? 0
-      if (t >= s - 1e-6 && t <= e + 1e-6) {
-        const scale = (e - s) / Math.max(b.src_duration, 1e-9)
-        src = b.src_start + (t - s) / (scale || 1)
-        break
-      }
-    }
+    // playhead: do tempo de SAÍDA para o eixo das gravações
+    const src = saidaParaEixo(getPlayhead(), view.blocks, eixo)
     if (src != null) {
       const x = Math.round(toX(src)) + 0.5
       // a agulha atravessa TODAS as camadas: é ela que diz onde você está
@@ -567,7 +601,7 @@ export default function Timeline(props: Props) {
       playheadRef.current = null
       setPlayheadX(null)
     }
-  }, [size, height, selection, view.blocks, toX, yMarks, yWave, yBlocks, ySubs])
+  }, [size, height, selection, view.blocks, eixo, toX, yMarks, yWave, yBlocks, ySubs])
 
   useEffect(() => {
     drawOverlay()
@@ -648,7 +682,7 @@ export default function Timeline(props: Props) {
     // a agulha: pegar em cima dela arrasta por toda a timeline
     if (playheadX != null && Math.abs(x - playheadX) <= 6) {
       drag.current = { mode: 'head', t0: t, x0: x, s0: start }
-      const out = sourceToOutput(t, view.blocks)
+      const out = eixoParaSaida(t, view.blocks, eixo)
       if (out != null) setPlayhead(out)
       return
     }
@@ -675,7 +709,7 @@ export default function Timeline(props: Props) {
     // alça de um trecho removido (só na faixa da onda)
     if (y >= yWave && y < yWave + ROW.wave && !e.altKey) {
       let melhor: { r: any; side: 'start' | 'end'; d: number } | null = null
-      for (const r of view.removed ?? []) {
+      for (const r of cortes) {
         if (r.reason === 'palma') continue
         for (const [side, tt] of [['start', r.start], ['end', r.end]] as const) {
           const d = Math.abs(toX(tt) - x)
@@ -685,21 +719,21 @@ export default function Timeline(props: Props) {
       if (melhor) {
         drag.current = { mode: 'red', t0: t, x0: x, s0: start }
         setRedDrag({ start: melhor.r.start, end: melhor.r.end,
-                     side: melhor.side, t })
+                     side: melhor.side, t, source: melhor.r.source })
         return
       }
       // dentro do vermelho: seleciona o corte. Corte estreito (1 px na régua
       // de baixo) ganha 4 px de folga de cada lado, senão não há como clicar.
-      const dentro = (view.removed ?? []).find((r) => {
+      const dentro = cortes.find((r) => {
         if (r.reason === 'palma') return false
         const a = toX(r.start); const b = toX(r.end)
         const folga = b - a < 8 ? 4 : 0
         return x >= a - folga && x <= b + folga
       })
       if (dentro) {
-        setSelRemoved({ start: dentro.start, end: dentro.end })
+        setSelRemoved({ start: dentro.start, end: dentro.end, source: dentro.source })
         setState({ selection: null, selectedClip: null })
-        const out = sourceToOutput(dentro.start, view.blocks)
+        const out = eixoParaSaidaPerto(dentro.start, view.blocks, eixo)
         if (out != null) setPlayhead(out)
         return
       }
@@ -723,12 +757,11 @@ export default function Timeline(props: Props) {
       return
     }
     if (y >= ySections && y < yBlocks + ROW.blocks) {
-      const block = view.blocks.find((b) =>
-        b.source === 'main' && t >= b.src_start && t <= b.src_end)
+      const block = blocosNoEixo.find((nb) => t >= nb.x0 && t <= nb.x1)?.b
       setSelRemoved(null)
       setState({ selectedClip: block?.id ?? null })
       if (block) {
-        const out = sourceToOutput(t, view.blocks)
+        const out = eixoParaSaida(t, view.blocks, eixo)
         if (out != null) setPlayhead(out)
       }
       return
@@ -743,7 +776,7 @@ export default function Timeline(props: Props) {
     const t = toT(x)
     setHover({ x, t })
     const naAlca = y >= yWave && y < yWave + ROW.wave
-      && (view.removed ?? []).some((r) => r.reason !== 'palma'
+      && cortes.some((r) => r.reason !== 'palma'
         && (Math.abs(toX(r.start) - x) <= 6 || Math.abs(toX(r.end) - x) <= 6))
     const naAgulha = playheadX != null && Math.abs(x - playheadX) <= 6
     const noItem = itemNear(x, y)
@@ -763,7 +796,7 @@ export default function Timeline(props: Props) {
     } else if (d.mode === 'red') {
       setRedDrag((prev) => (prev ? { ...prev, t } : prev))
     } else if (d.mode === 'head') {
-      const out = sourceToOutput(t, view.blocks)
+      const out = eixoParaSaida(t, view.blocks, eixo)
       if (out != null) setPlayhead(out)
     } else if (d.mode === 'item') {
       setItemDrag((prev) => (prev ? { ...prev, delta: x - d.x0 } : prev))
@@ -776,8 +809,13 @@ export default function Timeline(props: Props) {
     const ne = redDrag.side === 'end' ? redDrag.t : redDrag.end
     setRedDrag(null)
     if (Math.abs(ns - redDrag.start) > 0.01 || Math.abs(ne - redDrag.end) > 0.01) {
-      props.onResizeRemoved(redDrag.start, redDrag.end,
-                            Math.min(ns, ne), Math.max(ns, ne))
+      const f = redDrag.source
+      const tr = eixo.trechos.find((x) => x.source === f)
+      // a borda não atravessa a emenda: ela é da gravação do corte
+      const lim = (x: number) => tr ? clamp(x, tr.offset, tr.offset + tr.duracao) : x
+      props.onResizeRemoved(noArquivo(f, redDrag.start), noArquivo(f, redDrag.end),
+                            noArquivo(f, lim(Math.min(ns, ne))),
+                            noArquivo(f, lim(Math.max(ns, ne))), f)
     }
   }
 
@@ -798,7 +836,7 @@ export default function Timeline(props: Props) {
     const bordaSrc = itemSourceEdge(bordaOut)
     if (bordaSrc == null) return
     const alvoSrc = Math.max(0, toT(toX(bordaSrc) + seg.delta))
-    const alvoOut = sourceToOutputNearest(alvoSrc, view.blocks)
+    const alvoOut = eixoParaSaidaPerto(alvoSrc, view.blocks, eixo)
     if (alvoOut == null) return
     props.onMoveItem(seg.kind, seg.id, seg.side, alvoOut - bordaOut, ripple)
   }
@@ -810,7 +848,7 @@ export default function Timeline(props: Props) {
     if (d?.mode === 'item') { commitItem(); return }
     if (d?.mode === 'red') { commitRed(); return }
     if (d?.mode === 'sub' && subDrag) {
-      const out = sourceToOutput(subDrag.t, view.blocks)
+      const out = eixoParaSaida(subDrag.t, view.blocks, eixo)
       if (out != null) props.onSubtitleEdge(subDrag.id, subDrag.side, out)
       setSubDrag(null)
       return
@@ -819,7 +857,7 @@ export default function Timeline(props: Props) {
       const { x } = pos(e)
       if (Math.abs(x - d.x0) < 3) {
         setState({ selection: null })
-        const out = sourceToOutput(toT(x), view.blocks)
+        const out = eixoParaSaidaPerto(toT(x), view.blocks, eixo)
         if (out != null) setPlayhead(out)
       }
     }
@@ -838,7 +876,8 @@ export default function Timeline(props: Props) {
         // Delete em cima de um corte DEVOLVE o trecho: apagar o que foi
         // apagado é trazer de volta
         e.preventDefault()
-        props.onRestore(selRemoved.start, selRemoved.end)
+        props.onRestore(noArquivo(selRemoved.source, selRemoved.start),
+                        noArquivo(selRemoved.source, selRemoved.end), selRemoved.source)
         setSelRemoved(null)
       } else if (selectedClip) {
         // sem área marcada, Delete apaga o BLOCO clicado — é o gesto do CapCut
@@ -851,13 +890,14 @@ export default function Timeline(props: Props) {
   }, [selection, selectedClip, selRemoved, props])
 
   const hoveredRemoved = hover
-    ? (view.removed ?? []).find((r) => hover.t >= r.start && hover.t <= r.end)
+    ? cortes.find((r) => hover.t >= r.start && hover.t <= r.end)
     : null
   const hoveredTake = hover
     ? (view.takes ?? []).find((t) => !t.restored && hover.t >= t.start && hover.t <= t.end)
     : null
-  const cuts = view.blocks.filter((b) => b.source === 'main').length
-  const fast = view.blocks.filter((b) => b.source === 'main' && b.speed > 1.25).length
+  const cuts = blocosNoEixo.length
+  const fast = blocosNoEixo.filter((nb) => nb.b.speed > 1.25).length
+  const sobMouse = hover ? doEixo(eixo, hover.t) : null
 
   return (
     <div className="border-t border-line bg-ink-800">
@@ -896,7 +936,11 @@ mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
           {cuts} blocos{fast ? ` · ${fast} acima de 1,25x` : ''}
         </span>
         <span className="ml-auto font-mono">
-          {hover ? `fonte ${timecode(hover.t, true)}` : ''}
+          {sobMouse
+            ? (eixo.multiplo
+              ? `vídeo ${sobMouse.trecho.ordem} · ${timecode(sobMouse.time, true)}`
+              : `fonte ${timecode(sobMouse.time, true)}`)
+            : ''}
         </span>
         {hoveredTake && (
           <button className="btn btn-xs"
@@ -912,7 +956,9 @@ mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
             <button className="btn btn-xs btn-primary"
                     title="devolve este trecho ao vídeo (Delete)"
                     onClick={() => {
-                      props.onRestore(selRemoved.start, selRemoved.end)
+                      props.onRestore(noArquivo(selRemoved.source, selRemoved.start),
+                                      noArquivo(selRemoved.source, selRemoved.end),
+                                      selRemoved.source)
                       setSelRemoved(null)
                     }}>devolver</button>
             <button className="btn btn-xs"
@@ -920,17 +966,23 @@ mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
                     onClick={() => {
                       const d = Math.min(0.08, (selRemoved.end - selRemoved.start - 0.05) / 2)
                       if (d <= 0.005) return
-                      props.onResizeRemoved(selRemoved.start, selRemoved.end,
-                                            selRemoved.start + d, selRemoved.end - d)
-                      setSelRemoved({ start: selRemoved.start + d, end: selRemoved.end - d })
+                      const f = selRemoved.source
+                      props.onResizeRemoved(noArquivo(f, selRemoved.start), noArquivo(f, selRemoved.end),
+                                            noArquivo(f, selRemoved.start + d),
+                                            noArquivo(f, selRemoved.end - d), f)
+                      setSelRemoved({ ...selRemoved, start: selRemoved.start + d, end: selRemoved.end - d })
                     }}>◂ respira</button>
             <button className="btn btn-xs"
                     title="cola o corte 80 ms mais perto da fala, dos dois lados (o corte cresce)"
                     onClick={() => {
-                      const a = Math.max(0, selRemoved.start - 0.08)
-                      const b = selRemoved.end + 0.08
-                      props.onResizeRemoved(selRemoved.start, selRemoved.end, a, b)
-                      setSelRemoved({ start: a, end: b })
+                      const f = selRemoved.source
+                      const o = eixo.offset[f] ?? 0
+                      const tr = eixo.trechos.find((x) => x.source === f)
+                      const a = Math.max(o, selRemoved.start - 0.08)
+                      const b = Math.min(tr ? o + tr.duracao : Infinity, selRemoved.end + 0.08)
+                      props.onResizeRemoved(noArquivo(f, selRemoved.start), noArquivo(f, selRemoved.end),
+                                            noArquivo(f, a), noArquivo(f, b), f)
+                      setSelRemoved({ ...selRemoved, start: a, end: b })
                     }}>cola ▸</button>
             <button className="btn btn-xs" title="desmarcar (Esc)"
                     onClick={() => setSelRemoved(null)}>×</button>
@@ -938,7 +990,9 @@ mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
         )}
         {hoveredRemoved && !hoveredTake && !selRemoved && hoveredRemoved.reason !== 'palma' && (
           <button className="btn btn-xs"
-                  onClick={() => props.onRestore(hoveredRemoved.start, hoveredRemoved.end)}>
+                  onClick={() => props.onRestore(
+                    noArquivo(hoveredRemoved.source, hoveredRemoved.start),
+                    noArquivo(hoveredRemoved.source, hoveredRemoved.end), hoveredRemoved.source)}>
             recuperar trecho
           </button>
         )}
@@ -978,7 +1032,7 @@ mesma faixa, e apagar um fecha o buraco puxando o resto para trás">
                   if (drag.current?.mode === 'sub' && subDrag) {
                     // o mouse escapou do canvas no meio do arrasto: comita o
                     // ajuste em vez de descartá-lo em silêncio
-                    const out = sourceToOutput(subDrag.t, view.blocks)
+                    const out = eixoParaSaida(subDrag.t, view.blocks, eixo)
                     if (out != null) props.onSubtitleEdge(subDrag.id, subDrag.side, out)
                     setSubDrag(null)
                   }

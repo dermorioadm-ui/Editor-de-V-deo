@@ -2532,6 +2532,119 @@ def termos_no_cursor(project: Project, t: float, janela: float = 4.0) -> dict:
     return {"texto": texto, "termos": banco.sugerir_termos(texto)}
 
 
+def _cenas_da_montagem(blocks: list[dict]) -> list[dict]:
+    """Enquadramentos de TODAS as gravações, para a linha do tempo desenhar.
+
+    ``zoom_cenas`` olha só o arquivo principal (é o que a auditoria de zoom
+    usa); aqui cada cena diz de qual gravação é, e uma cena nunca atravessa a
+    emenda entre duas gravações.
+    """
+    out: list[dict] = []
+    for b in blocks:
+        if b.get("kind") in ("photo", "insert") or not b.get("enabled", True):
+            continue
+        zoom = float(b.get("zoom") or 1.0)
+        ultimo = out[-1] if out else None
+        if (ultimo and ultimo["source"] == b.get("source")
+                and abs(ultimo["zoom"] - zoom) < 1e-6
+                and abs(ultimo["out_end"] - float(b["out_start"])) < 0.05):
+            ultimo["end"] = b["src_end"]
+            ultimo["out_end"] = float(b["out_end"])
+            ultimo["clip_ids"].append(b["id"])
+            ultimo["locked"] = ultimo["locked"] or bool(b.get("zoom_locked"))
+        else:
+            out.append({"zoom": round(zoom, 4), "source": b.get("source", "main"),
+                        "start": b["src_start"], "end": b["src_end"],
+                        "out_start": float(b["out_start"]),
+                        "out_end": float(b["out_end"]),
+                        "clip_ids": [b["id"]], "locked": bool(b.get("zoom_locked"))})
+    for cena in out:
+        cena["duration"] = round(cena["out_end"] - cena["out_start"], 3)
+        for k in ("start", "end", "out_start", "out_end"):
+            cena[k] = round(float(cena[k]), 3)
+    return out
+
+
+def montagem(project: Project) -> list[dict]:
+    """As gravações com fala EM SEQUÊNCIA: o eixo da linha do tempo.
+
+    A linha do tempo desenha a gravação inteira (o que ficou e o que saiu,
+    em vermelho). Com uma gravação só, o eixo é o arquivo. Com três, são os
+    três arquivos um depois do outro, na ordem da montagem — antes o eixo
+    era só o primeiro, e os blocos, cortes e legendas das outras gravações
+    ou sumiam ou eram desenhados por cima dele.
+
+    A duração de cada uma é a do ENVELOPE quando existe: é o que faz a onda
+    desenhada casar amostra por amostra com o eixo.
+    """
+    saida: list[dict] = []
+    offset = 0.0
+    for k, src in enumerate(project.fontes_com_fala()):
+        env = project.envelope(src)
+        if env is not None and env.duration > 0:
+            dur = float(env.duration)
+        else:
+            dur = float(project.analise_de(src).get("duration")
+                        or (project.info.duration if src == "main" and project.info
+                            else 0.0) or 0.0)
+        if dur <= 0:
+            continue
+        if src == "main":
+            nome = Path(project.source_path).name
+        else:
+            nome = str((project.fontes.get(src) or {}).get("name") or "gravação")
+        saida.append({"source": src, "nome": nome, "ordem": k + 1,
+                      "offset": round(offset, 4), "duracao": round(dur, 4)})
+        offset += dur
+    return saida
+
+
+def envelope_da_montagem(project: Project,
+                         trechos: list[dict] | None = None) -> Envelope | None:
+    """Os envelopes das gravações emendados, no mesmo passo, sem folga.
+
+    Cada pedaço tem exatamente duração/passo amostras: é isso que garante que
+    a onda de cada gravação comece no mesmo pixel em que o eixo diz que ela
+    começa.
+    """
+    trechos = trechos if trechos is not None else montagem(project)
+    if not trechos:
+        return None
+    partes: list[np.ndarray] = []
+    hop = None
+    taxa = 16000
+    for tr in trechos:
+        env = project.envelope(tr["source"])
+        if hop is None:
+            hop = env.hop if env is not None else 0.010
+        n = max(1, int(round(float(tr["duracao"]) / hop)))
+        if env is None or not len(env.db):
+            arr = np.full(n, -90.0, dtype=np.float32)
+        else:
+            taxa = env.sample_rate
+            arr = env.db
+            if abs(env.hop - hop) > 1e-9:
+                arr = np.interp(np.arange(n) * hop,
+                                np.arange(len(env.db)) * env.hop, env.db)
+            arr = np.asarray(arr[:n], dtype=np.float32)
+            if len(arr) < n:
+                arr = np.concatenate([arr, np.full(n - len(arr), arr[-1],
+                                                   dtype=np.float32)])
+        partes.append(arr)
+    return Envelope(np.concatenate(partes), hop or 0.010, taxa)
+
+
+def fonte_da_palavra(project: Project, i: int) -> tuple[str, int]:
+    """(gravação, base) de uma palavra pelo número global dela."""
+    faixa = (int(i) // BASE_POR_FONTE) * BASE_POR_FONTE
+    if faixa == 0:
+        return "main", 0
+    for mid, d in project.fontes.items():
+        if int(d.get("base_i") or 0) == faixa:
+            return mid, faixa
+    return "", faixa
+
+
 def timeline_summary(project: Project) -> dict:
     plan = project.plan
     tl = Timeline(plan.active_clips, project.info.fps if project.info else None)
@@ -2543,9 +2656,17 @@ def timeline_summary(project: Project) -> dict:
             "out_start": round(placed.out_start, 4),
             "out_end": round(placed.out_end, 4),
         })
+    trechos = montagem(project)
     return {
         "duration": round(tl.duration, 3),
         "source_duration": round(project.analysis.get("duration", 0.0), 3),
+        # o eixo da linha do tempo: as gravações em sequência
+        "montagem": trechos,
+        # o total GRAVADO, de todas as gravações. "3:16 de 0:18 (-951% mais
+        # curto)" era o vídeo montado de três gravações comparado só com a
+        # primeira
+        "duracao_gravada": round(sum(t["duracao"] for t in trechos)
+                                 or project.analysis.get("duration", 0.0), 3),
         "blocks": blocks,
         "tracks": build_tracks(project, blocks, round(tl.duration, 3)),
         "removed": [r.to_dict() for r in plan.removed],
@@ -2556,7 +2677,7 @@ def timeline_summary(project: Project) -> dict:
         "audit": plan.audit,
         "audit_fixed": plan.audit_fixed,
         "repeats": plan.repeats,
-        "zoom_scenes": zoom_cenas(plan.clips),
+        "zoom_scenes": _cenas_da_montagem(blocks),
         "zoom_audit": plan.zoom_audit,
         "look": plan.look,
         "look_vignette": plan.look_vignette,

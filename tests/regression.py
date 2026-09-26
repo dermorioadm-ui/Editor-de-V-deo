@@ -345,6 +345,7 @@ def main() -> int:
     testar_broll_depois_da_edicao()
     testar_trocar_a_musica()
     testar_banco_de_broll()
+    testar_linha_do_tempo_com_varias_gravacoes()
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
@@ -7044,6 +7045,178 @@ def testar_banco_de_broll() -> None:
           "a tela manda IDs para baixar, nunca uma URL")
     check("Pexels" in tela and "Pixabay" in tela and "autor" in tela,
           "e mostra de onde vem e de quem é cada vídeo")
+
+
+def testar_linha_do_tempo_com_varias_gravacoes() -> None:
+    """Três gravações: todas aparecem e todas se editam na linha do tempo.
+
+    O relato: "tem três vídeos nesse editor, só dá para editar o primeiro; os
+    dois últimos não aparecem na timeline, mas eles geram". A linha do tempo
+    desenhava o eixo do primeiro arquivo só. E por baixo dela as rotas de
+    corte também só conheciam o primeiro: cortar no segundo encaixava a
+    borda no envelope do primeiro (vale errado, em cima de palavra),
+    arrastar a borda de um corte apagava o vermelho dos outros vídeos, e
+    remover uma palavra do segundo vídeo dava erro 500.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="eixo_"))
+    pid = None
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    try:
+        frases = [["primeira tomada aqui", "com mais uma frase"],
+                  ["segunda tomada agora", "e outra frase dela"],
+                  ["terceira e ultima", "fechando o video"]]
+        install([f for grupo in frases for f in grupo])
+        tomadas = []
+        for k, grupo in enumerate(frases):
+            amostras, _m, dur = build_track([(f, 0.9) for f in grupo], seed=k + 3)
+            tomadas.append(make_video(tmp / f"t{k}.mp4", amostras, dur, 320, 180, 30))
+        p = svc.create(str(tomadas[0]), "eixo", "VSL")
+        pid = p.id
+        extras = [svc.add_media(pid, str(t), "video", papel="fonte")["id"]
+                  for t in tomadas[1:]]
+        svc.one_click(svc.load(pid), Ctx(quiet=True), fontes_extras=extras)
+        c = TestClient(app)
+
+        # ---- o eixo -------------------------------------------------------
+        tl = c.get(f"/api/projects/{pid}").json()["timeline"]
+        mont = tl.get("montagem") or []
+        check([t["source"] for t in mont] == ["main", *extras],
+              f"a linha do tempo tem as TRÊS gravações, na ordem da montagem "
+              f"({len(mont)})")
+        continuo = all(abs(mont[k + 1]["offset"] - (mont[k]["offset"] + mont[k]["duracao"]))
+                       < 1e-3 for k in range(len(mont) - 1))
+        check(continuo and mont[0]["offset"] == 0,
+              "uma depois da outra, sem buraco nem sobreposição")
+        total = sum(t["duracao"] for t in mont)
+        check(abs(tl["duracao_gravada"] - total) < 0.01
+              and tl["duracao_gravada"] > tl["source_duration"] + 1,
+              f"o total gravado é a soma das três ({tl['duracao_gravada']:.1f} s), "
+              f"não só a primeira ({tl['source_duration']:.1f} s) — era isso que "
+              f"dava '-951% mais curto'")
+        env = c.get(f"/api/projects/{pid}/envelope").json()
+        check(len(env.get("trechos") or []) == 3
+              and abs(env["duration"] - total) < 0.05,
+              f"a onda é das três gravações emendadas ({env['duration']:.2f} s "
+              f"de {total:.2f} s)")
+        cenas_fontes = {z.get("source") for z in tl["zoom_scenes"]}
+        check(set(extras) <= cenas_fontes,
+              "os enquadramentos das outras gravações também vão para a linha do tempo")
+
+        def blocos(tl_, fonte):
+            return [b for b in tl_["blocks"] if b["source"] == fonte]
+
+        def ordem(tl_):
+            vistas: list[str] = []
+            for b in tl_["blocks"]:
+                if not vistas or vistas[-1] != b["source"]:
+                    vistas.append(b["source"])
+            return vistas
+
+        # ---- cortar DENTRO da segunda gravação ------------------------------
+        b2 = blocos(tl, extras[0])
+        alvo = max(b2, key=lambda b: b["out_end"] - b["out_start"])
+        meio = (alvo["out_start"] + alvo["out_end"]) / 2
+        cortes_c_antes = [r for r in tl["removed"] if r.get("source") == extras[1]]
+        r = c.post(f"/api/projects/{pid}/ops/delete-range",
+                   json={"start": meio - 0.15, "end": meio + 0.15})
+        corpo = r.json()
+        check(r.status_code == 200 and corpo.get("source") == extras[0],
+              f"cortar no segundo vídeo corta o SEGUNDO vídeo ({r.status_code})")
+        novos = [x for x in corpo["timeline"]["removed"]
+                 if x.get("source") == extras[0] and x.get("reason") == "manual"]
+        check(len(novos) == 1, "e o vermelho do corte diz de qual gravação é")
+        # o encaixe foi no envelope DELE: a borda cai num ponto de silêncio
+        # daquele áudio (ou numa borda de palavra dele), nunca dentro de uma
+        # palavra dele
+        palavras_b = svc.load(pid).words_de(extras[0])
+        dentro = [w["text"] for w in palavras_b
+                  for borda in (novos[0]["start"], novos[0]["end"])
+                  if w["start"] + 0.02 < borda < w["end"] - 0.02]
+        check(not dentro, f"a borda do corte não cai no meio de palavra do "
+                          f"segundo vídeo ({dentro})")
+        check(ordem(corpo["timeline"]) == ["main", *extras],
+              "e a ordem das gravações continua a mesma")
+
+        # ---- arrastar a borda de um corte não apaga o vermelho dos outros ----
+        reg = novos[0]
+        r = c.post(f"/api/projects/{pid}/ops/resize-removed",
+                   json={"start": reg["start"], "end": reg["end"],
+                         "new_start": reg["start"] - 0.05, "new_end": reg["end"],
+                         "source": extras[0]})
+        tl2 = r.json().get("timeline") or {}
+        cortes_c_depois = [x for x in tl2.get("removed", [])
+                           if x.get("source") == extras[1]]
+        check(r.status_code == 200 and len(cortes_c_depois) == len(cortes_c_antes),
+              f"arrastar a borda de um corte no vídeo 2 mantém os cortes do vídeo 3 "
+              f"({len(cortes_c_depois)} de {len(cortes_c_antes)})")
+        principais = [x for x in tl2.get("removed", []) if x.get("source", "main") == "main"]
+        check(len(principais) >= 1, "e os do vídeo 1 também")
+
+        # ---- devolver o trecho ----------------------------------------------
+        reg2 = next(x for x in tl2["removed"] if x.get("source") == extras[0]
+                    and abs(x["end"] - reg["end"]) < 0.05)
+        r = c.post(f"/api/projects/{pid}/ops/restore-range",
+                   json={"start": reg2["start"], "end": reg2["end"],
+                         "source": extras[0]})
+        check(r.status_code == 200 and not any(
+            x.get("source") == extras[0] and abs(x["end"] - reg["end"]) < 0.05
+            for x in r.json()["timeline"]["removed"]),
+            "devolver o trecho devolve NO vídeo 2")
+
+        # ---- seleção atravessando a emenda ----------------------------------
+        tl3 = r.json()["timeline"]
+        fim_1 = max(b["out_end"] for b in blocos(tl3, "main"))
+        r = c.post(f"/api/projects/{pid}/ops/delete-range",
+                   json={"start": fim_1 - 0.25, "end": fim_1 + 0.25})
+        partes = r.json().get("partes") or []
+        check(r.status_code == 200
+              and [x["source"] for x in partes] == ["main", extras[0]],
+              f"uma seleção que atravessa a emenda corta um pedaço de CADA vídeo "
+              f"({[x['source'] for x in partes]})")
+
+        # ---- remover uma palavra do terceiro vídeo pelo texto ----------------
+        q = svc.load(pid)
+        tirado = set(q.analysis.get("removed_word_ids", []))
+        w3 = next(w for w in q.words_de(extras[1]) if w["i"] not in tirado)
+        r = c.post(f"/api/projects/{pid}/ops/remove-words", json={"word_ids": [w3["i"]]})
+        check(r.status_code == 200 and r.json().get("ok"),
+              f"apagar uma palavra do vídeo 3 pelo texto funciona "
+              f"(antes: erro 500) ({r.status_code})")
+        check(any(x.get("source") == extras[1] and x.get("reason") == "texto"
+                  for x in r.json()["timeline"]["removed"]),
+              "e o corte é no vídeo 3")
+        r = c.post(f"/api/projects/{pid}/ops/restore-words", json={"word_ids": [w3["i"]]})
+        check(r.status_code == 200
+              and w3["i"] not in svc.load(pid).analysis.get("removed_word_ids", []),
+              "e recuperar a palavra também")
+        check(ordem(r.json()["timeline"]) == ["main", *extras],
+              "depois de tudo isso, as três gravações seguem na mesma ordem")
+    finally:
+        svc.previa_da_edicao = previa_real
+        if pid:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- a tela -----------------------------------------------------------
+    frente = Path("frontend/src")
+    tl_tsx = (frente / "components/Timeline.tsx").read_text(encoding="utf-8")
+    texto = (frente / "components/TextEditor.tsx").read_text(encoding="utf-8")
+    check("montarEixo(view" in tl_tsx and "b.source !== 'main'" not in tl_tsx,
+          "a linha do tempo desenha no eixo das gravações, sem filtrar só o vídeo 1")
+    check("palavrasDaMontagem" in (frente / "components/Editor.tsx").read_text(encoding="utf-8")
+          and "words.slice(Math.min(a, b)" in texto,
+          "o painel Texto tem as palavras das três gravações e seleciona por posição")
 
 if __name__ == "__main__":
     install(["frase %d" % i for i in range(20)])

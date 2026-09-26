@@ -89,33 +89,31 @@ def _clone(clip: Clip, src_start: float, src_end: float) -> Clip:
     return new
 
 
-def delete_output_range(plan, env: Envelope, out_start: float, out_end: float,
-                        params: CutParams, words: list[dict] | None = None,
-                        fps: float | None = None) -> dict:
-    """Deleta o trecho selecionado na timeline, encaixando as bordas no vale.
+def _cortar_na_fonte(plan, env: Envelope | None, words: list[dict],
+                     source: str, src_a: float, src_b: float,
+                     params: CutParams, detalhe: str = "deletado na timeline") -> dict:
+    """Corta [src_a, src_b] de UMA gravação, encaixando no vale DELA.
 
-    ``fps`` tem que ser o MESMO usado para desenhar a timeline na interface:
-    a linha quantizada em quadros e a linha crua divergem alguns milissegundos
-    por bloco, e isso acumula — num vídeo longo a seleção erraria o alvo.
+    O envelope e as palavras têm que ser da gravação que está sendo cortada.
+    Com os do arquivo principal, a borda do segundo vídeo caía num vale que
+    não existe naquele áudio — em cima de palavra — e o encaixe ainda
+    explicava o vale errado. Sem envelope (um inserto sem análise) o corte é
+    exato onde foi pedido.
     """
-    timeline = Timeline(plan.active_clips, fps)
-    a = timeline.to_source(out_start)
-    b = timeline.to_source(max(out_end, out_start + 0.01))
-    if not a or not b:
-        return {"ok": False, "reason": "seleção fora da linha do tempo"}
-    source, src_a = a
-    _src_source, src_b = b
     if src_b <= src_a:
         src_a, src_b = src_b, src_a
-
-    words = words or []
     prev_word = _word_before(words, src_a)
     next_word = _word_after(words, src_b)
-
-    left = snap_end(env, src_a, guard=params.snap_neighbor_guard)
-    right = snap_start(env, src_b, guard=params.snap_neighbor_guard)
-    lo = round(left.time, 4)
-    hi = round(right.time, 4)
+    if env is not None:
+        left = snap_end(env, src_a, guard=params.snap_neighbor_guard)
+        right = snap_start(env, src_b, guard=params.snap_neighbor_guard)
+        lo, hi = round(left.time, 4), round(right.time, 4)
+        snap_in, snap_out = left.to_dict(), right.to_dict()
+        razao_a, razao_b = left.reason, right.reason
+    else:
+        lo, hi = round(src_a, 4), round(src_b, 4)
+        snap_in = snap_out = None
+        razao_a = razao_b = "sem análise de áudio: corte exato"
     # o encaixe não pode comer as palavras preservadas dos dois lados
     if prev_word is not None:
         lo = max(lo, round(float(prev_word["end"]), 4))
@@ -125,20 +123,90 @@ def delete_output_range(plan, env: Envelope, out_start: float, out_end: float,
         hi = lo + 0.02
     plan.clips, _ = cut_source_range(plan.clips, lo, hi, source)
     plan.removed.append(RemovedRegion(start=lo, end=hi, reason="manual",
-                                      detail="deletado na timeline"))
+                                      detail=detalhe, source=source))
     return {
-        "ok": True, "source": source, "start": lo, "end": hi,
-        "snap_in": left.to_dict(), "snap_out": right.to_dict(),
+        "source": source, "start": lo, "end": hi,
+        "snap_in": snap_in, "snap_out": snap_out,
         "explain": [
-            f"borda esquerda: {src_a:.3f} s → {lo:.3f} s ({left.reason})",
-            f"borda direita: {src_b:.3f} s → {hi:.3f} s ({right.reason})",
+            f"borda esquerda: {src_a:.3f} s → {lo:.3f} s ({razao_a})",
+            f"borda direita: {src_b:.3f} s → {hi:.3f} s ({razao_b})",
         ],
     }
 
 
+def delete_output_range(plan, env: Envelope, out_start: float, out_end: float,
+                        params: CutParams, words: list[dict] | None = None,
+                        fps: float | None = None, env_de=None,
+                        words_de=None) -> dict:
+    """Deleta o trecho selecionado na timeline, encaixando as bordas no vale.
+
+    ``fps`` tem que ser o MESMO usado para desenhar a timeline na interface:
+    a linha quantizada em quadros e a linha crua divergem alguns milissegundos
+    por bloco, e isso acumula — num vídeo longo a seleção erraria o alvo.
+
+    ``env_de``/``words_de`` dão o envelope e as palavras de CADA gravação.
+    Sem eles, só o arquivo principal tem envelope (o comportamento antigo).
+    Uma seleção que atravessa a emenda entre duas gravações vira um corte em
+    cada uma, cada qual encaixado no próprio áudio.
+    """
+    timeline = Timeline(plan.active_clips, fps)
+    a = timeline.to_source(out_start)
+    b = timeline.to_source(max(out_end, out_start + 0.01))
+    if not a or not b:
+        return {"ok": False, "reason": "seleção fora da linha do tempo"}
+
+    def _env(src: str):
+        if env_de is not None:
+            return env_de(src)
+        return env if src in ("", "main") else None
+
+    def _words(src: str) -> list[dict]:
+        if words_de is not None:
+            return words_de(src) or []
+        return (words or []) if src in ("", "main") else []
+
+    if a[0] == b[0]:
+        source, src_a = a
+        src_b = b[1]
+        r = _cortar_na_fonte(plan, _env(source), _words(source), source,
+                             src_a, src_b, params)
+        return {"ok": True, **r}
+
+    # A SELEÇÃO ATRAVESSA A EMENDA entre duas gravações: um corte por
+    # gravação, na ordem da montagem. Cortar só a primeira (o que acontecia)
+    # deixava a outra metade da seleção no vídeo sem aviso.
+    trechos: list[list] = []
+    for p in timeline:
+        if p.out_end <= out_start + 1e-6 or p.out_start >= out_end - 1e-6:
+            continue
+        if p.clip.kind == "photo":
+            continue
+        escala = p.scale or 1.0
+        ta, tb = max(out_start, p.out_start), min(out_end, p.out_end)
+        sa = p.clip.src_start + (ta - p.out_start) / escala
+        sb = p.clip.src_start + (tb - p.out_start) / escala
+        if trechos and trechos[-1][0] == p.clip.source:
+            trechos[-1][1] = min(trechos[-1][1], sa)
+            trechos[-1][2] = max(trechos[-1][2], sb)
+        else:
+            trechos.append([p.clip.source, sa, sb])
+    partes = [_cortar_na_fonte(plan, _env(src), _words(src), src, sa, sb, params)
+              for src, sa, sb in trechos if sb - sa > 0.01]
+    if not partes:
+        return {"ok": False, "reason": "seleção fora da linha do tempo"}
+    return {"ok": True, "source": partes[0]["source"], "start": partes[0]["start"],
+            "end": partes[0]["end"], "partes": partes,
+            "explain": [linha for p in partes for linha in p["explain"]]}
+
+
 def remove_words(plan, env: Envelope, words: list[dict], word_ids: list[int],
-                 params: CutParams) -> dict:
-    """Apaga o vídeo correspondente às palavras selecionadas (Parte 6.3)."""
+                 params: CutParams, source: str = "main", base: int = 0) -> dict:
+    """Apaga o vídeo correspondente às palavras selecionadas (Parte 6.3).
+
+    ``words`` é a lista de UMA gravação, na ordem dela, e ``base`` é a faixa
+    de números dela (0 no arquivo principal; 100000, 200000... nas
+    acrescentadas): a palavra 100007 é a posição 7 da lista da gravação 1.
+    """
     ids = sorted(set(int(i) for i in word_ids))
     if not ids:
         return {"ok": False, "reason": "nenhuma palavra selecionada"}
@@ -151,7 +219,11 @@ def remove_words(plan, env: Envelope, words: list[dict], word_ids: list[int],
 
     applied = []
     for group in groups:
-        first, last = group[0], group[-1]
+        first, last = group[0] - base, group[-1] - base
+        if first < 0 or last >= len(words):
+            applied.append({"words": group, "ok": False,
+                            "reason": "palavra fora desta gravação"})
+            continue
         prev_word = words[first - 1] if first > 0 else None
         next_word = words[last + 1] if last + 1 < len(words) else None
         left = snap_end(env, words[first]["start"] - 0.001,
@@ -169,10 +241,12 @@ def remove_words(plan, env: Envelope, words: list[dict], word_ids: list[int],
                             "reason": "não sobra espaço entre as palavras vizinhas "
                                       "— remover aqui quebraria a vizinha"})
             continue
-        plan.clips, _ = cut_source_range(plan.clips, round(lo, 4), round(hi, 4))
+        plan.clips, _ = cut_source_range(plan.clips, round(lo, 4), round(hi, 4),
+                                         source)
         plan.removed.append(RemovedRegion(
             start=round(lo, 4), end=round(hi, 4), reason="texto",
-            detail=" ".join(words[i]["text"] for i in group)))
+            detail=" ".join(words[i - base]["text"] for i in group),
+            source=source))
         applied.append({"words": group, "ok": True,
                         "start": round(lo, 4), "end": round(hi, 4),
                         "explain": f"{left.reason}; {right.reason}"})
@@ -199,8 +273,10 @@ def restore_range(plan, start: float, end: float, source: str = "main",
                 section=neighbour.section if neighbour else section)
     keep.append(clip)
     plan.clips = _sorted(keep)
+    # só o vermelho DESTA gravação: o "de 3 a 5 s" de outra é outro lugar
     plan.removed = [r for r in plan.removed
-                    if not (r.start >= start - 0.01 and r.end <= end + 0.01)]
+                    if not (getattr(r, "source", "main") == source
+                            and r.start >= start - 0.01 and r.end <= end + 0.01)]
     return {"ok": True, "clip": clip.to_dict()}
 
 

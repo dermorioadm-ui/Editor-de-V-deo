@@ -7,6 +7,7 @@ import { estiloDaMascara, filtroDosEfeitos, temAnimacao, temChroma,
          tremorEm, valorEm } from '../lib/animacao'
 import { timecode } from '../lib/format'
 import { blockAtOutput, cueAt, outputToSource } from '../lib/timeline'
+import { montarEixo, saidaParaEixo } from '../lib/eixo'
 import { api } from '../lib/api'
 import PipVideo from './PipVideo'
 import TrilhaPreview from './TrilhaPreview'
@@ -544,9 +545,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // "cortar" e a faixa vermelha na timeline enxergam a mesma coisa.
   const selection = useStore((st) => st.selection)
   const marcar = useCallback((qual: 'inicio' | 'fim') => {
-    const pos = outputToSource(playhead, blocks)
-    if (!pos) return
-    const t = pos.time
+    // a seleção mora no EIXO DAS GRAVAÇÕES, o mesmo da linha do tempo
+    const t = saidaParaEixo(playhead, blocks, montarEixo(getState().timeline))
+    if (t == null) return
     const atual = getState().selection
     if (qual === 'inicio') {
       setState({ selection: { start: t, end: Math.max(t + 0.05, atual?.end ?? t + 0.05) } })

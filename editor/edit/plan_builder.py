@@ -570,20 +570,28 @@ def removed_regions(spans: list[Span], duration: float,
     return regions
 
 
-def resync_removed(clips: list, previous: list, duration: float) -> list:
+def resync_removed(clips: list, previous: list, duration: float,
+                   source: str = "main") -> list:
     """Refaz as regiões removidas a partir das bordas ATUAIS dos clipes.
 
     Mover (ou desfazer) uma borda muda o que sai do vídeo. Sem isto o vermelho
     da timeline — e o botão "recuperar trecho" — continuavam descrevendo o
     corte antigo. O motivo de cada região é herdado da região que ocupava
     aquele lugar antes.
+
+    Refaz UMA gravação (``source``, com a ``duration`` dela) e devolve as das
+    outras intactas. Antes só existia o arquivo principal aqui, e o resultado
+    era só ele: arrastar a borda de um corte apagava todo o vermelho das
+    outras gravações — e com ele o "recuperar trecho" de cada uma.
     """
-    main = sorted([c for c in clips if c.enabled and c.source == "main"],
-                  key=lambda c: c.src_start)
+    main = sorted([c for c in clips if c.enabled and c.source == source
+                   and c.kind != "photo"], key=lambda c: c.src_start)
+    outras = [r for r in previous if getattr(r, "source", "main") != source]
+    daqui = [r for r in previous if getattr(r, "source", "main") == source]
 
     def carry(a: float, b: float) -> tuple[str, str]:
         mid = (a + b) / 2.0
-        for r in previous:
+        for r in daqui:
             if r.start - 0.02 <= mid <= r.end + 0.02:
                 return r.reason, r.detail
         return "silencio", "pausa acima do limiar do preset"
@@ -595,13 +603,13 @@ def resync_removed(clips: list, previous: list, duration: float) -> list:
             reason, detail = carry(cursor, clip.src_start)
             out.append(RemovedRegion(start=round(cursor, 4),
                                      end=round(clip.src_start, 4),
-                                     reason=reason, detail=detail))
+                                     reason=reason, detail=detail, source=source))
         cursor = max(cursor, clip.src_end)
     if duration - cursor > 0.02:
         reason, detail = carry(cursor, duration)
         out.append(RemovedRegion(start=round(cursor, 4), end=round(duration, 4),
-                                 reason=reason, detail=detail))
-    return out
+                                 reason=reason, detail=detail, source=source))
+    return out + outras
 
 
 def words_removed_by_takes(words: list[dict], takes: list[dict]) -> set[int]:

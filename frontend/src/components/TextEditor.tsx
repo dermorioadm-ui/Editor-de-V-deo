@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { sourceToOutput } from '../lib/timeline'
@@ -17,8 +17,21 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
   const removedIds = useStore((s) => s.removedWordIds)
   const fillers = useStore((s) => s.fillers)
   const view = useStore((s) => s.timeline)
+  // POSIÇÕES na lista de palavras, não números de palavra: as da segunda
+  // gravação são 100000 e pouco, e "de 5 a 100003" varria cem mil números
+  // que não existem
   const [range, setRange] = useState<[number, number] | null>(null)
   const [anchor, setAnchor] = useState<number | null>(null)
+  const posicao = useMemo(() => {
+    const m = new Map<number, number>()
+    words.forEach((w: any, k: number) => m.set(w.i, k))
+    return m
+  }, [words])
+  const nomesDasGravacoes = useMemo(() => {
+    const m = new Map<string, { ordem: number; nome: string }>()
+    for (const t of view?.montagem ?? []) m.set(t.source, { ordem: t.ordem, nome: t.nome })
+    return m
+  }, [view?.montagem])
   const [showRemoved, setShowRemoved] = useState(true)
   const [busy, setBusy] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -39,9 +52,9 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
     if (!view) return [] as { i: number; a: number; b: number }[]
     const out: { i: number; a: number; b: number }[] = []
     for (const w of words) {
-      const a = sourceToOutput(w.start, view.blocks)
+      const a = sourceToOutput(w.start, view.blocks, w.source || 'main')
       if (a == null) continue
-      const bEnd = sourceToOutput(w.end, view.blocks)
+      const bEnd = sourceToOutput(w.end, view.blocks, w.source || 'main')
       out.push({ i: w.i, a, b: bEnd ?? a + (w.end - w.start) })
     }
     out.sort((x, y) => x.a - y.a)
@@ -83,10 +96,8 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
   const selectedIds = useMemo(() => {
     if (!range) return []
     const [a, b] = range
-    const out: number[] = []
-    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(i)
-    return out
-  }, [range])
+    return words.slice(Math.min(a, b), Math.max(a, b) + 1).map((w: any) => w.i)
+  }, [range, words])
 
   const remove = useCallback(async () => {
     if (!project || !selectedIds.length) return
@@ -143,11 +154,13 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
   }, [selectedIds, remove])
 
   const click = (i: number, shift: boolean) => {
-    if (shift && anchor != null) setRange([anchor, i])
-    else { setAnchor(i); setRange([i, i]) }
-    const w = words[i]
+    const k = posicao.get(i)
+    if (k == null) return
+    if (shift && anchor != null) setRange([anchor, k])
+    else { setAnchor(k); setRange([k, k]) }
+    const w = words[k]
     if (view) {
-      const out = sourceToOutput(w.start, view.blocks)
+      const out = sourceToOutput(w.start, view.blocks, w.source || 'main')
       if (out != null) setPlayhead(out)
     }
   }
@@ -174,7 +187,8 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
           <span className="text-slate-300">
             {selectedIds.length} palavra(s):{' '}
             <b className="text-slate-100">
-              {selectedIds.map((i) => words[i]?.text).filter(Boolean).join(' ').slice(0, 90)}
+              {selectedIds.map((i) => words[posicao.get(i) ?? -1]?.text).filter(Boolean)
+                .join(' ').slice(0, 90)}
             </b>
           </span>
           {unsafeSelected && (
@@ -195,13 +209,25 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
       )}
 
       <div ref={listRef} className="card p-4 leading-[2] text-[15px]">
-        {words.map((w: any) => {
+        {words.map((w: any, k: number) => {
           const isRemoved = removed.has(w.i)
-          if (isRemoved && !showRemoved) return null
+          // o começo de cada gravação ganha um título: com três vídeos, o
+          // texto é o dos três, na ordem da montagem
+          const fonte = w.source || 'main'
+          const novaGravacao = nomesDasGravacoes.size > 1
+            && (k === 0 || (words[k - 1].source || 'main') !== fonte)
+          const g = nomesDasGravacoes.get(fonte)
+          const titulo = novaGravacao ? (
+            <span key={`t_${fonte}`} className="block mt-3 first:mt-0 mb-1 text-[11px]
+                  font-semibold uppercase tracking-wide text-amber-400">
+              ▸ vídeo {g?.ordem ?? '?'}{g?.nome ? ` · ${g.nome}` : ''}
+            </span>
+          ) : null
+          if (isRemoved && !showRemoved) return titulo
           const filler = fillerMap.get(w.i)
           const selected = selectedSet.has(w.i)
           return (
-            <span key={w.i}
+            <Fragment key={w.i}>{titulo}<span
                   data-w={w.i}
                   onClick={(e) => click(w.i, e.shiftKey)}
                   title={filler
@@ -220,7 +246,7 @@ export default function TextEditor({ onChanged, snapshot }: Props) {
                     w.prob < 0.5 && !isRemoved ? 'text-slate-400' : '',
                   ].join(' ')}>
               {w.text}{' '}
-            </span>
+            </span></Fragment>
           )
         })}
       </div>

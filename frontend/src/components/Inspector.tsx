@@ -713,14 +713,16 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
           <span className="font-mono">{timecode(view.duration, true)}</span>
         </div>
         <div className="flex justify-between">
-          <span>fonte</span>
-          <span className="font-mono">{timecode(view.source_duration, true)}</span>
+          <span>{(view.montagem?.length ?? 1) > 1
+            ? `gravado (${view.montagem!.length} vídeos)` : 'fonte'}</span>
+          <span className="font-mono">
+            {timecode(view.duracao_gravada || view.source_duration, true)}</span>
         </div>
         <div className="flex justify-between">
           <span>economia</span>
           <span className="font-mono">
-            {view.source_duration
-              ? `${((1 - view.duration / view.source_duration) * 100).toFixed(0)}%`
+            {(view.duracao_gravada || view.source_duration)
+              ? `${((1 - view.duration / (view.duracao_gravada || view.source_duration)) * 100).toFixed(0)}%`
               : '—'}
           </span>
         </div>

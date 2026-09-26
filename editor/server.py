@@ -290,9 +290,21 @@ def api_download(pid: str, name: str, request: Request):
 
 @app.get("/api/projects/{pid}/envelope")
 def api_envelope(pid: str, points: int = 4000) -> dict:
+    """A onda da linha do tempo — de TODAS as gravações, emendadas.
+
+    Com uma gravação só é o envelope dela, como sempre foi. ``trechos`` diz
+    onde cada gravação começa no eixo, e é o mesmo que /projects devolve em
+    timeline.montagem.
+    """
     project = _project(pid)
-    env = _env_or_404(project)
-    return env.to_dict(points)
+    trechos = svc.montagem(project)
+    if len(trechos) <= 1:
+        env = _env_or_404(project)
+        return {**env.to_dict(points), "trechos": trechos}
+    env = svc.envelope_da_montagem(project, trechos)
+    if env is None:
+        raise HTTPException(404, "sem envelope — rode a análise")
+    return {**env.to_dict(min(16000, points * len(trechos))), "trechos": trechos}
 
 
 # --------------------------------------------------------------------- jobs
@@ -815,9 +827,12 @@ def _after_edit(project: svc.Project, rebuild: bool = True) -> dict:
 def api_delete_range(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     env = _env_or_404(project)
+    # cada gravação com o PRÓPRIO envelope e as PRÓPRIAS palavras: é isso
+    # que mantém o corte no vale de silêncio do áudio certo
     res = _remapping(project, lambda: ops.delete_output_range(
         project.plan, env, float(payload["start"]), float(payload["end"]),
-        project.plan.cut, project.words, fps=_fps(project)))
+        project.plan.cut, project.words, fps=_fps(project),
+        env_de=project.envelope, words_de=project.words_de))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não foi possível deletar"))
     return {**res, "timeline": _after_edit(project)}
@@ -826,10 +841,28 @@ def api_delete_range(pid: str, payload: dict = Body(...)) -> dict:
 @app.post("/api/projects/{pid}/ops/remove-words")
 def api_remove_words(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
-    env = _env_or_404(project)
-    res = _remapping(project, lambda: ops.remove_words(
-        project.plan, env, project.words, payload.get("word_ids", []),
-        project.plan.cut))
+    _env_or_404(project)
+    # As palavras de cada gravação vão para a gravação delas. O número diz
+    # de qual é (100007 = gravação 1, palavra 7); antes todas iam para a
+    # lista do arquivo principal, e a frase do segundo vídeo dava erro.
+    por_fonte: dict[tuple[str, int], list[int]] = {}
+    for i in payload.get("word_ids", []):
+        por_fonte.setdefault(svc.fonte_da_palavra(project, int(i)), []).append(int(i))
+
+    def cortar() -> dict:
+        aplicados: list[dict] = []
+        for (fonte, base), ids in por_fonte.items():
+            env_f = project.envelope(fonte) if fonte else None
+            if env_f is None:
+                aplicados += [{"words": [i], "ok": False,
+                               "reason": "gravação sem análise"} for i in ids]
+                continue
+            r = ops.remove_words(project.plan, env_f, project.words_de(fonte), ids,
+                                 project.plan.cut, source=fonte, base=base)
+            aplicados += r.get("applied", [])
+        return {"ok": any(a.get("ok") for a in aplicados), "applied": aplicados}
+
+    res = _remapping(project, cortar)
     removed = set(project.analysis.get("removed_word_ids", []))
     manual = set(project.analysis.get("manual_removed_word_ids", []))
     for group in res.get("applied", []):
@@ -848,13 +881,27 @@ def api_remove_words(pid: str, payload: dict = Body(...)) -> dict:
 def api_restore_words(pid: str, payload: dict = Body(...)) -> dict:
     project = _project(pid)
     ids = [int(i) for i in payload.get("word_ids", [])]
-    words = project.words
     if not ids:
         raise HTTPException(400, "nenhuma palavra informada")
-    start = min(words[i]["start"] for i in ids) - 0.12
-    end = max(words[i]["end"] for i in ids) + 0.12
-    res = _remapping(project,
-                     lambda: ops.restore_range(project.plan, max(0.0, start), end))
+    # uma volta por gravação: as palavras de gravações diferentes vivem em
+    # arquivos diferentes, e "de 3 a 5 s" só faz sentido dentro de um deles
+    por_fonte: dict[tuple[str, int], list[int]] = {}
+    for i in ids:
+        por_fonte.setdefault(svc.fonte_da_palavra(project, i), []).append(i)
+
+    def devolver() -> dict:
+        ultimo: dict = {"ok": False, "reason": "palavra desconhecida"}
+        for (fonte, base), grupo in por_fonte.items():
+            words = project.words_de(fonte) if fonte else []
+            pos = [i - base for i in grupo if 0 <= i - base < len(words)]
+            if not pos:
+                continue
+            start = min(words[k]["start"] for k in pos) - 0.12
+            end = max(words[k]["end"] for k in pos) + 0.12
+            ultimo = ops.restore_range(project.plan, max(0.0, start), end, fonte)
+        return ultimo
+
+    res = _remapping(project, devolver)
     removed = set(project.analysis.get("removed_word_ids", [])) - set(ids)
     manual = set(project.analysis.get("manual_removed_word_ids", [])) - set(ids)
     project.analysis["removed_word_ids"] = sorted(removed)
@@ -990,17 +1037,21 @@ def api_music_ajuste(pid: str, payload: dict = Body(...)) -> dict:
 def api_resize_removed(pid: str, payload: dict = Body(...)) -> dict:
     """Arrasta a borda de um trecho já removido, na trilha."""
     project = _project(pid)
-    env = _env_or_404(project)
+    fonte = str(payload.get("source") or "main")
+    env = project.envelope(fonte)
+    if env is None:
+        raise HTTPException(404, "sem envelope — rode a análise")
     res = _remapping(project, lambda: ops.resize_removed(
         project.plan,
         float(payload["start"]), float(payload["end"]),
-        float(payload["new_start"]), float(payload["new_end"])))
+        float(payload["new_start"]), float(payload["new_end"]), fonte))
     if not res.get("ok"):
         raise HTTPException(400, res.get("reason", "não deu"))
     from .edit.plan_builder import resync_removed
 
     project.plan.removed = resync_removed(project.plan.clips,
-                                          project.plan.removed, env.duration)
+                                          project.plan.removed, env.duration,
+                                          fonte)
     return {**res, "timeline": _after_edit(project)}
 
 

@@ -20,6 +20,8 @@ export interface SnapResult {
 export interface RemovedRegion {
   id: string; start: number; end: number; reason: string
   restorable: boolean; detail: string
+  /** de qual gravação (start/end são tempo DENTRO dela) */
+  source?: string
 }
 
 export interface Clap {
@@ -67,7 +69,7 @@ export interface Track {
 }
 
 export interface ZoomScene {
-  zoom: number; start: number; end: number
+  zoom: number; start: number; end: number; source?: string
   out_start: number; out_end: number; duration: number
   clip_ids: string[]; locked: boolean
 }
@@ -96,10 +98,19 @@ export interface Envelope {
   hop: number; duration: number; noise_floor: number
   silence_threshold: number; speech_threshold: number
   audit_threshold: number; points: number[]
+  /** as gravações emendadas nesta onda */
+  trechos?: TrechoDoEixo[]
+}
+
+/** Uma gravação no eixo da linha do tempo: começa em `offset` e dura
+ *  `duracao`. Com três gravações o eixo é as três, uma depois da outra. */
+export interface TrechoDoEixo {
+  source: string; nome: string; ordem: number; offset: number; duracao: number
 }
 
 export interface TimelineView {
   duration: number; source_duration: number
+  montagem?: TrechoDoEixo[]; duracao_gravada?: number
   blocks: Clip[]; removed: RemovedRegion[]; takes: Take[]; claps: Clap[]
   whistles?: Whistle[]
   subtitles: SubtitleCue[]; audit: AuditIssue[]; audit_fixed?: AuditFixed[]

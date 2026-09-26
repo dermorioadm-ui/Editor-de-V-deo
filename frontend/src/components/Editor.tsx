@@ -12,7 +12,7 @@ import ProcessingView from './ProcessingView'
 import ExportPanel from './ExportPanel'
 import JobBar from './JobBar'
 import { api } from '../lib/api'
-import { sourceToOutput } from '../lib/timeline'
+import { eixoParaSaida, montarEixo, palavrasDaMontagem } from '../lib/eixo'
 import { bytes, timecode } from '../lib/format'
 import { getPlayhead, getState, pushHistory, setPlayhead, setState, toast, useStore }
   from '../state/store'
@@ -91,11 +91,17 @@ export default function Editor() {
     setState({
       project: fresh,
       timeline: fresh.timeline ?? null,
-      words: fresh.analysis?.words ?? [],
+      words: palavrasDaMontagem(fresh.analysis),
       removedWordIds: fresh.analysis?.removed_word_ids ?? [],
       fillers: fresh.analysis?.fillers ?? [],
     })
-    if (!getState().envelope && fresh.analysis?.words?.length) {
+    // a onda é de TODAS as gravações: quando entra (ou sai) uma, a onda
+    // guardada descreve outro eixo e tem que ser buscada de novo
+    const env0 = getState().envelope
+    const nTrechos = fresh.timeline?.montagem?.length || 1
+    const outroEixo = !!env0 && ((env0.trechos?.length || 1) !== nTrechos
+      || Math.abs(env0.duration - (fresh.timeline?.duracao_gravada ?? env0.duration)) > 0.5)
+    if ((!env0 || outroEixo) && fresh.analysis?.words?.length) {
       const env = await api.envelope(fresh.id).catch(() => null)
       if (env) setState({ envelope: env })
     }
@@ -300,12 +306,13 @@ export default function Editor() {
 
   const deleteSelection = useCallback(async () => {
     if (!project || !selection || !timeline) return
-    // a seleção vem no eixo da FONTE PRINCIPAL; blocos de inserto/foto têm
-    // src_start no eixo da própria mídia e casariam com o tempo errado
-    const a = sourceToOutput(Math.min(selection.start, selection.end),
-                             timeline.blocks, 'main')
-    const b = sourceToOutput(Math.max(selection.start, selection.end),
-                             timeline.blocks, 'main')
+    // a seleção vem no EIXO DAS GRAVAÇÕES (a linha do tempo); blocos de
+    // inserto/foto não moram nele e nunca casam com o tempo errado
+    const eixo = montarEixo(timeline, project.info?.duration ?? 0)
+    const a = eixoParaSaida(Math.min(selection.start, selection.end),
+                            timeline.blocks, eixo)
+    const b = eixoParaSaida(Math.max(selection.start, selection.end),
+                            timeline.blocks, eixo)
     if (a == null || b == null) {
       toast('warn', 'Seleção fora de um bloco',
         'A seleção precisa cair sobre um trecho que ainda existe na linha do tempo.')
@@ -360,10 +367,10 @@ export default function Editor() {
     }
   }, [project, refresh, snapshot])
 
-  const restore = useCallback(async (start: number, end: number) => {
+  const restore = useCallback(async (start: number, end: number, source = 'main') => {
     if (!project) return
     snapshot()
-    await api.restoreRange(project.id, start, end)
+    await api.restoreRange(project.id, start, end, source)
     await refresh()
     toast('ok', 'Trecho recuperado', `${timecode(start, true)} → ${timecode(end, true)}`)
   }, [project, refresh, snapshot])
@@ -614,8 +621,11 @@ export default function Editor() {
         const auto = (view.takes ?? []).filter((t) => !t.restored).length
           + (view.repeats ?? []).filter((r) => !r.restored).length
         const zoom = view.blocks.filter((b) => (b.zoom ?? 1) > 1.001).length
-        const econ = view.source_duration > 0
-          ? Math.round((1 - view.duration / view.source_duration) * 100) : 0
+        // contra o total GRAVADO (todas as gravações): contra só a primeira,
+        // três tomadas davam "3:16 de 0:18 (-951% mais curto)"
+        const gravado = view.duracao_gravada || view.source_duration
+        const econ = gravado > 0
+          ? Math.round((1 - view.duration / gravado) * 100) : 0
         if (pend === 0) {
           return (
             <div className="flex items-center gap-3 px-4 py-2 text-xs border-b
@@ -624,7 +634,7 @@ export default function Editor() {
               {/* TUDO O QUE FOI APLICADO, numa linha só. Ele pediu para ver
                   o que o programa fez sem ter que abrir aba por aba. */}
               <span className="text-slate-400">
-                {timecode(view.duration)} de {timecode(view.source_duration)}{' '}
+                {timecode(view.duration)} de {timecode(gravado)}{' '}
                 ({econ}% mais curto) · {view.blocks.length} blocos ·{' '}
                 {view.subtitles.length} legendas
                 {auto > 0 && ` · ${auto} trecho(s) ruim(ns) fora`}
@@ -1034,10 +1044,10 @@ export default function Editor() {
                       setTab('midia')
                     }
                   }}
-                  onResizeRemoved={async (a, b, na, nb) => {
+                  onResizeRemoved={async (a, b, na, nb, fonte) => {
                     snapshot()
                     try {
-                      const r = await api.resizeRemoved(project.id, a, b, na, nb)
+                      const r = await api.resizeRemoved(project.id, a, b, na, nb, fonte)
                       await refresh()
                       toast('ok', 'Trecho removido ajustado',
                         (r.explain ?? []).join('\n'))

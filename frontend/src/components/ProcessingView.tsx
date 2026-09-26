@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { palavrasDaMontagem } from '../lib/eixo'
 import { api } from '../lib/api'
 import { setState, useStore } from '../state/store'
 
@@ -74,7 +75,7 @@ export default function ProcessingView() {
         if (p.analysis?.words?.length) {
           setState({
             project: p, timeline: p.timeline ?? null,
-            words: p.analysis?.words ?? [],
+            words: palavrasDaMontagem(p.analysis),
             removedWordIds: p.analysis?.removed_word_ids ?? [],
             fillers: p.analysis?.fillers ?? [],
             activeJob: null,

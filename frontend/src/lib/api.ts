@@ -92,8 +92,8 @@ export const api = {
     post<any>(`/api/projects/${id}/ops/remove-words`, { word_ids }),
   restoreWords: (id: string, word_ids: number[]) =>
     post<any>(`/api/projects/${id}/ops/restore-words`, { word_ids }),
-  restoreRange: (id: string, start: number, end: number) =>
-    post<any>(`/api/projects/${id}/ops/restore-range`, { start, end }),
+  restoreRange: (id: string, start: number, end: number, source = 'main') =>
+    post<any>(`/api/projects/${id}/ops/restore-range`, { start, end, source }),
   splitClip: (id: string, clip_id: string, time: number) =>
     post<any>(`/api/projects/${id}/ops/split`, { clip_id, time }),
   mergeClips: (id: string, clip_ids: string[]) =>
@@ -109,9 +109,9 @@ export const api = {
   setTake: (id: string, take_id: string, restored: boolean) =>
     post<any>(`/api/projects/${id}/ops/take`, { take_id, restored }),
   resizeRemoved: (id: string, start: number, end: number,
-                  new_start: number, new_end: number) =>
+                  new_start: number, new_end: number, source = 'main') =>
     post<any>(`/api/projects/${id}/ops/resize-removed`,
-              { start, end, new_start, new_end }),
+              { start, end, new_start, new_end, source }),
 
   moveItem: (id: string, kind: string, item: string, delta: number,
              ripple = false) =>

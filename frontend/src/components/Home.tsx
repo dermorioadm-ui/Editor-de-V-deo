@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import FileBrowser from './FileBrowser'
 import Gravar from './Gravar'
+import { palavrasDaMontagem } from '../lib/eixo'
 import { api } from '../lib/api'
 import { bytes, timecode } from '../lib/format'
 import { setState, toast, useStore } from '../state/store'
@@ -157,7 +158,7 @@ export default function Home() {
       setState({
         view: 'editor', project, envelope: env,
         timeline: project.timeline ?? null,
-        words: project.analysis?.words ?? [],
+        words: palavrasDaMontagem(project.analysis),
         removedWordIds: project.analysis?.removed_word_ids ?? [],
         fillers: project.analysis?.fillers ?? [],
         history: [], future: [], selection: null, selectedClip: null,
