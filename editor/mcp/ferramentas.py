@@ -158,6 +158,10 @@ def abrir_video(c: Cliente, a: dict) -> str:
                              "description": "segundos que o vídeo tem que caber; a IA escolhe o que sai (opcional)"},
             "corte": {"type": "number",
                       "description": "0 a 1: 0 aproxima as falas, 1 deixa respiro (opcional)"},
+            "sem_gemini": {"type": "boolean",
+                           "description": "true = VOCÊ (Claude) é o editor: o Gemini não "
+                                          "decide cortes nem b-roll; o corte sai pela regra "
+                                          "do programa e você revisa e faz a pós-edição"},
         },
         "required": ["projeto"],
     },
@@ -165,6 +169,8 @@ def abrir_video(c: Cliente, a: dict) -> str:
 def editar_sozinho(c: Cliente, a: dict) -> str:
     pid = str(a.get("projeto") or "")
     receita: dict = {}
+    if a.get("sem_gemini") is not None:
+        receita["editor"] = "claude" if a.get("sem_gemini") else ""
     if a.get("formato"):
         receita["aspect"] = str(a["formato"])
     if a.get("resumir_para"):
@@ -865,8 +871,316 @@ def gravacoes(c: Cliente, _a: dict) -> str:
         for g in gs[:20])
 
 
-def chamar(c: Cliente, nome: str, argumentos: dict) -> str:
-    """Executa uma ferramenta e SEMPRE devolve texto.
+# ------------------------------------------------------------- pós-edição
+# O Claude como editor: lê o roteiro com os tempos do vídeo FINAL, olha os
+# quadros de verdade, sabe onde a pessoa está, e põe por cima o que o corte
+# automático não entrega — títulos, telas de tópico, listas, números,
+# transições, fundo desfocado, texto atrás da pessoa.
+
+def _itens_da_pos(d: dict) -> list[str]:
+    linhas = []
+    for g in d.get("graficos") or []:
+        linhas.append(f"  gráfico {g['id']}: {g['tipo']} {_seg(g['out_start'])}–"
+                      f"{_seg(g['out_end'])} \"{(g.get('texto') or '')[:40]}\" "
+                      f"({g['estilo']}, entra {g['entrada']}"
+                      f"{', ATRÁS da pessoa' if g.get('camada') == 'atras' else ''})")
+    for x in d.get("camadas") or []:
+        linhas.append(f"  camada {x['id']}: {x['efeito']} {_seg(x['out_start'])}–"
+                      f"{_seg(x['out_end'])} força {x['forca']}")
+    for t in d.get("transicoes") or []:
+        linhas.append(f"  transição {t['id']}: {t['tipo']} {t['duracao']} s "
+                      f"na entrada do bloco {t['clip_id']}")
+    return linhas
+
+
+@ferramenta(
+    "pos_contexto",
+    "O ROTEIRO DA PÓS-EDIÇÃO: o que é dito em cada segundo do vídeo FINAL "
+    "(frases com início e fim), os blocos e onde ficam as emendas (é nelas que "
+    "entram transições), o formato do quadro, a faixa da legenda (onde gráfico "
+    "não deve entrar), os b-rolls e o que já foi posto na pós. Leia isto antes "
+    "de pôr qualquer gráfico — os tempos das outras ferramentas de pós são "
+    "estes.",
+    {"properties": {"projeto": {"type": "string"},
+                    "de": {"type": "number", "description": "segundo inicial (opcional)"},
+                    "ate": {"type": "number", "description": "segundo final (opcional)"}},
+     "required": ["projeto"]},
+)
+def pos_contexto(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    d = c.get(f"/api/projects/{pid}/pos/contexto")
+    de = float(a.get("de") or 0.0)
+    ate = float(a.get("ate") if a.get("ate") is not None else 1e9)
+    f = d.get("formato") or {}
+    leg = d.get("legenda")
+    rec = d.get("recorte") or {}
+    linhas = [
+        f"vídeo final: {_seg(d.get('duracao'))}, quadro {f.get('largura')}x{f.get('altura')}"
+        f" ({f.get('proporcao')})",
+        (f"legenda queimada ocupa a faixa y={leg['de']}–{leg['ate']} da altura: "
+         f"não ponha gráfico ali" if leg else "sem legenda queimada"),
+        ("recorte da pessoa: pronto (camadas e gráfico atrás da pessoa funcionam)"
+         if rec.get("pronto") else
+         "recorte da pessoa: " + ("modelo ainda não baixado (baixa sozinho no "
+                                  "primeiro uso)" if rec.get("runtime")
+                                  else "falta o onnxruntime — camadas não saem")),
+        f"editor: {'Claude (Gemini fora)' if d.get('editor') == 'claude' else 'padrão'}",
+        "",
+        "BLOCOS (clip_id — a transição entra na emenda de ENTRADA do bloco):",
+    ]
+    for b in d.get("blocos") or []:
+        if b["fim"] < de or b["inicio"] > ate:
+            continue
+        linhas.append(f"  {b['clip_id']}  {b['inicio']:.2f}–{b['fim']:.2f}  "
+                      f"{b['gravacao']}{'' if b['tipo'] == 'video' else ' (' + b['tipo'] + ')'}")
+    if d.get("brolls"):
+        linhas.append("B-ROLLS (a pessoa não aparece nestes intervalos):")
+        linhas += [f"  {x['inicio']:.2f}–{x['fim']:.2f} {x.get('termo') or ''}"
+                   for x in d["brolls"] if not (x["fim"] < de or x["inicio"] > ate)]
+    linhas.append("FALA (início–fim: frase):")
+    linhas += [f"  {x['inicio']:.2f}–{x['fim']:.2f}: {x['texto']}"
+               for x in d.get("frases") or [] if not (x["fim"] < de or x["inicio"] > ate)]
+    ja = _itens_da_pos(d)
+    linhas.append("JÁ NA PÓS:" if ja else "JÁ NA PÓS: nada ainda")
+    linhas += ja
+    return "\n".join(linhas)
+
+
+@ferramenta(
+    "ver_quadros",
+    "SEUS OLHOS: devolve as IMAGENS do vídeo final nos segundos pedidos — o "
+    "encode de verdade parado naquele quadro, com gráficos, camadas, "
+    "transições, filtro e legenda. Use para conferir cada coisa que puser "
+    "(título legível? cobriu o rosto? a transição ficou boa?) e para ver o "
+    "ambiente antes de decidir. Até 6 instantes por vez.",
+    {"properties": {"projeto": {"type": "string"},
+                    "tempos": {"type": "array", "items": {"type": "number"},
+                               "description": "segundos do vídeo final"},
+                    "lado": {"type": "integer",
+                             "description": "lado menor da imagem em px (padrão 540)"}},
+     "required": ["projeto", "tempos"]},
+)
+def ver_quadros(c: Cliente, a: dict):
+    pid = str(a.get("projeto") or "")
+    tempos = [float(t) for t in (a.get("tempos") or [])][:6]
+    if not tempos:
+        return "diga em que segundos quer ver (tempos)."
+    r = c.post(f"/api/projects/{pid}/pos/quadros",
+               {"tempos": tempos, "lado": int(a.get("lado") or 540)}, timeout=600)
+    conteudo = []
+    for q in r.get("quadros") or []:
+        aviso = ("  (" + "; ".join(q["avisos"]) + ")") if q.get("avisos") else ""
+        conteudo.append({"type": "text", "text": f"quadro em {q['t']:.2f} s{aviso}"})
+        conteudo.append({"type": "image", "data": q["jpeg_b64"], "mimeType": "image/jpeg"})
+    return {"content": conteudo or [{"type": "text", "text": "nenhum quadro saiu"}],
+            "isError": False}
+
+
+@ferramenta(
+    "analisar_cena",
+    "A PROFUNDIDADE do quadro num instante: se há pessoa, onde ela está "
+    "(caixa, centro, topo da cabeça, quanto ocupa em cada terço do quadro), "
+    "que regiões estão LIVRES para gráfico sem cobrir ninguém, a luz, o que "
+    "está sendo dito ali e se é b-roll. Use para decidir a posição (x, y) dos "
+    "gráficos e se vale pôr texto ATRÁS da pessoa (camada=atras).",
+    {"properties": {"projeto": {"type": "string"},
+                    "tempo": {"type": "number", "description": "segundo do vídeo final"}},
+     "required": ["projeto", "tempo"]},
+)
+def analisar_cena(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    d = c.get(f"/api/projects/{pid}/pos/cena", t=float(a.get("tempo") or 0.0))
+    linhas = [f"cena em {d['t']:.2f} s — bloco {d.get('bloco')}"
+              f"{' (b-roll)' if d.get('e_broll') else ''}, luz {d.get('luz')}"]
+    p = d.get("pessoa")
+    if p is None:
+        linhas.append(d.get("aviso") or "sem informação da pessoa")
+    elif not p.get("presente"):
+        linhas.append("sem pessoa no quadro: o quadro inteiro está livre")
+    else:
+        cx0, cy0, cx1, cy1 = p["caixa"]
+        linhas.append(f"pessoa ocupa {int(p['ocupa'] * 100)}% do quadro; caixa "
+                      f"x {cx0}–{cx1}, y {cy0}–{cy1}; centro {p['centro']}; "
+                      f"topo da cabeça em y={p['topo_da_cabeca']}")
+        g = p["grade_3x3"]
+        linhas.append("pessoa por terço (alto/meio/baixo × esquerda/centro/direita): "
+                      + " | ".join(" ".join(f"{v:.2f}" for v in linha) for linha in g))
+    if d.get("livre") is not None:
+        linhas.append("livre para gráfico: " + (", ".join(d["livre"]) or "quase nada — "
+                      "use gráfico pequeno, ou camada=atras"))
+    for f in d.get("fala") or []:
+        linhas.append(f"fala {f['inicio']:.2f}–{f['fim']:.2f}: {f['texto']}")
+    return "\n".join(linhas)
+
+
+_ESQUEMA_GRAFICO = {
+    "projeto": {"type": "string"},
+    "id": {"type": "string", "description": "para MUDAR um gráfico que já existe"},
+    "tipo": {"type": "string",
+             "enum": ["titulo", "tela", "lista", "destaque", "numero", "texto",
+                      "nome", "seta", "circulo", "barra"],
+             "description": "titulo: título com barra de destaque; tela: TELA "
+                            "CHEIA de tópico/capítulo (cobre o vídeo; aceita "
+                            "prefixo 'PARTE 2' e itens); lista: tópicos que "
+                            "entram um a um; destaque: palavra-chave em adesivo; "
+                            "numero: contador que sobe até 'numero' (prefixo "
+                            "'R$ ', sufixo '%'); texto: caixa de texto; nome: "
+                            "lower third (texto=nome, subtexto=função; x,y = "
+                            "borda ESQUERDA); seta: aponta para (x,y) — a PONTA "
+                            "— na direção 'angulo'; circulo: anel em volta de "
+                            "(x,y); barra: progresso ('numero' em %)"},
+    "inicio": {"type": "number", "description": "segundo do vídeo final"},
+    "fim": {"type": "number", "description": "segundo do vídeo final"},
+    "texto": {"type": "string"},
+    "subtexto": {"type": "string"},
+    "itens": {"type": "array", "items": {"type": "string"},
+              "description": "lista/tela: os tópicos (até 6)"},
+    "itens_em": {"type": "array", "items": {"type": "number"},
+                 "description": "opcional: em que segundo (desde o INÍCIO do "
+                                "gráfico) cada item entra — para casar com a fala"},
+    "x": {"type": "number", "description": "0–1, centro na largura"},
+    "y": {"type": "number", "description": "0–1, centro na altura"},
+    "tamanho": {"type": "number", "description": "0.4–2.5 (1 = normal)"},
+    "estilo": {"type": "string", "enum": ["escuro", "claro", "neon", "marca", "limpo"]},
+    "cor": {"type": "string", "description": "#RRGGBB da cor de destaque"},
+    "entrada": {"type": "string", "enum": ["pop", "slide", "subir", "3d", "digitar", "fade"]},
+    "saida": {"type": "string", "enum": ["fade", "slide", "pop", "corte"]},
+    "camada": {"type": "string", "enum": ["frente", "atras"],
+               "description": "atras = o gráfico passa ATRÁS da pessoa (precisa do recorte)"},
+    "numero": {"type": "number"},
+    "prefixo": {"type": "string"},
+    "sufixo": {"type": "string"},
+    "angulo": {"type": "number", "description": "seta: 0 direita, 90 baixo, 180 esquerda, -90 cima"},
+}
+
+
+@ferramenta(
+    "grafico",
+    "Põe (ou muda, com id) um GRÁFICO ANIMADO no vídeo final — o After "
+    "Effects do Sharkcut, desenhado no mesmo encode, sem perda de qualidade. "
+    "Tempos em segundos do vídeo FINAL (os de pos_contexto). Posição e tamanho "
+    "em fração do quadro. Depois de pôr, confira com ver_quadros.",
+    {"properties": _ESQUEMA_GRAFICO, "required": ["projeto"]},
+)
+def grafico(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    gid = str(a.get("id") or "")
+    corpo = {k: a[k] for k in ("tipo", "texto", "subtexto", "x", "y", "tamanho",
+                               "estilo", "cor", "entrada", "saida", "camada",
+                               "numero", "prefixo", "sufixo", "angulo")
+             if a.get(k) is not None}
+    if a.get("inicio") is not None:
+        corpo["out_start"] = float(a["inicio"])
+    if a.get("fim") is not None:
+        corpo["out_end"] = float(a["fim"])
+    if a.get("itens") is not None:
+        em = list(a.get("itens_em") or [])
+        corpo["itens"] = [({"texto": t, "em": em[i]} if i < len(em) else t)
+                          for i, t in enumerate(a["itens"])]
+    if not gid:
+        corpo["origem"] = "claude"
+        if "out_start" not in corpo:
+            return "faltou o início (segundo do vídeo final)."
+        r = c.post(f"/api/projects/{pid}/pos/graficos", corpo)
+    else:
+        r = c.put(f"/api/projects/{pid}/pos/graficos/{gid}", corpo)
+    g = r["item"]
+    return (f"gráfico {g['id']} ({g['tipo']}) de {g['out_start']:.2f} a "
+            f"{g['out_end']:.2f} s{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}. "
+            f"Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
+
+
+@ferramenta(
+    "camada",
+    "Separa a PESSOA do FUNDO (recorte por IA, na máquina) num intervalo e "
+    "trata o fundo: desfoque = lente aberta, pessoa nítida; escurecer = "
+    "holofote na pessoa; parallax = a pessoa salta para a frente do fundo "
+    "(efeito 3D); recorte = a pessoa recortada sobre cor lisa com contorno. "
+    "Com id, muda uma camada que já existe.",
+    {"properties": {"projeto": {"type": "string"},
+                    "id": {"type": "string"},
+                    "efeito": {"type": "string",
+                               "enum": ["desfoque", "escurecer", "parallax", "recorte"]},
+                    "inicio": {"type": "number"}, "fim": {"type": "number"},
+                    "forca": {"type": "number", "description": "0–1 (padrão 0.6)"}},
+     "required": ["projeto"]},
+)
+def camada(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    corpo = {k: a[k] for k in ("efeito", "forca") if a.get(k) is not None}
+    if a.get("inicio") is not None:
+        corpo["out_start"] = float(a["inicio"])
+    if a.get("fim") is not None:
+        corpo["out_end"] = float(a["fim"])
+    if a.get("id"):
+        r = c.put(f"/api/projects/{pid}/pos/camadas/{a['id']}", corpo)
+    else:
+        if "out_start" not in corpo:
+            return "faltou o início."
+        corpo["origem"] = "claude"
+        r = c.post(f"/api/projects/{pid}/pos/camadas", corpo)
+    x = r["item"]
+    rec = r.get("recorte") or {}
+    aviso = "" if rec.get("pronto") or rec.get("runtime") else (
+        " ATENÇÃO: falta o onnxruntime nesta máquina — a camada não vai sair "
+        "até ele rodar o instalar.bat de novo.")
+    return (f"camada {x['id']}: {x['efeito']} de {x['out_start']:.2f} a "
+            f"{x['out_end']:.2f} s, força {x['forca']}.{aviso}")
+
+
+@ferramenta(
+    "transicao",
+    "Põe uma TRANSIÇÃO na emenda entre dois blocos: zoom (mergulho), chicote "
+    "(whip pan), flash, glitch, desfoque, luz (light leak) ou giro. Não é "
+    "crossfade: o corte continua seco e a fala intacta; o efeito cresce até a "
+    "emenda e se desfaz depois. Diga o bloco que ENTRA (clip_id) ou um tempo "
+    "perto da emenda. Uma por emenda — a nova substitui a antiga.",
+    {"properties": {"projeto": {"type": "string"},
+                    "id": {"type": "string"},
+                    "bloco": {"type": "string", "description": "clip_id do bloco que entra"},
+                    "tempo": {"type": "number", "description": "ou: um segundo perto da emenda"},
+                    "tipo": {"type": "string",
+                             "enum": ["zoom", "chicote", "flash", "glitch",
+                                      "desfoque", "luz", "giro"]},
+                    "duracao": {"type": "number", "description": "0.1–1.2 s (padrão 0.4)"}},
+     "required": ["projeto"]},
+)
+def transicao(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    corpo = {k: a[k] for k in ("tipo", "duracao", "tempo") if a.get(k) is not None}
+    if a.get("bloco"):
+        corpo["clip_id"] = str(a["bloco"])
+    if a.get("id"):
+        r = c.put(f"/api/projects/{pid}/pos/transicoes/{a['id']}", corpo)
+    else:
+        if "clip_id" not in corpo and "tempo" not in corpo:
+            return "diga o bloco que entra (bloco) ou um tempo perto da emenda (tempo)."
+        corpo["origem"] = "claude"
+        r = c.post(f"/api/projects/{pid}/pos/transicoes", corpo)
+    x = r["item"]
+    return (f"transição {x['id']}: {x['tipo']} de {x['duracao']} s na entrada do "
+            f"bloco {x['clip_id']}.")
+
+
+@ferramenta(
+    "tirar_da_pos",
+    "Tira itens da pós-edição (gráficos, camadas, transições) pelos ids — ou "
+    "todos os que VOCÊ pôs (tudo=true), sem mexer no que ele pôs à mão.",
+    {"properties": {"projeto": {"type": "string"},
+                    "ids": {"type": "array", "items": {"type": "string"}},
+                    "tudo": {"type": "boolean"}},
+     "required": ["projeto"]},
+)
+def tirar_da_pos(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    r = c.post(f"/api/projects/{pid}/pos/tirar",
+               {"ids": list(a.get("ids") or []), "tudo": bool(a.get("tudo")),
+                "origem": "claude" if a.get("tudo") else ""})
+    return f"{r.get('tirados', 0)} item(ns) tirado(s) da pós."
+
+
+def chamar(c: Cliente, nome: str, argumentos: dict):
+    """Executa uma ferramenta e SEMPRE devolve texto (ou conteúdo com imagem).
 
     O "sempre" é o ponto. Quem está do outro lado é um modelo: um texto dizendo
     "esse projeto não existe, veja listar_projetos" ele lê e conserta; uma

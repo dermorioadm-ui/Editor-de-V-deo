@@ -514,6 +514,9 @@ def aplicar_receita(project, payload: dict) -> None:
             if "levels" in current:
                 current["levels"] = tuple(float(x) for x in current["levels"])
             setattr(plan, attr, cls(**current))
+    if "editor" in payload:
+        # "claude": o Claude edita pelo MCP e o Gemini não decide nada
+        plan.editor = "claude" if payload.get("editor") == "claude" else ""
     if "alvo_duracao" in payload:
         try:
             plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
@@ -1085,7 +1088,8 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
     plan = project.plan
 
     colecoes = {"cutaway": plan.cutaways, "overlay": plan.overlays,
-                "blur": plan.blurs}
+                "blur": plan.blurs, "grafico": plan.graficos,
+                "camada": plan.camadas, "transicao": plan.transicoes}
     alvo = None
     if kind == "music":
         if not plan.music:
@@ -1098,6 +1102,9 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
                 break
     if alvo is None:
         raise HTTPException(404, f"item {kind}/{iid} não encontrado")
+    if kind == "transicao" and acao != "delete":
+        raise HTTPException(400, "a transição fica presa na emenda dos blocos: "
+                                 "troque o tipo dela ou apague")
 
     def ler(obj, campo, padrao=0.0):
         return float(obj.get(campo, padrao) if isinstance(obj, dict)
@@ -2213,6 +2220,170 @@ def api_whistle_uncalibrate(pid: str) -> dict:
     project.plan.whistle_freq = None
     project.save_plan()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- pós-edição
+# Gráficos animados, camadas de profundidade e transições — a pós-edição que
+# o Claude faz pelo MCP e que a tela mostra e deixa mexer. Mudar um item só
+# grava o plano: o vídeo sai com ele no próximo encode (a prévia e o arquivo
+# final), e os trechos que ele não toca continuam no cache.
+def _pos(project) -> dict:
+    plan = project.plan
+    return {"graficos": [g.to_dict() for g in plan.graficos],
+            "camadas": [c.to_dict() for c in plan.camadas],
+            "transicoes": [x.to_dict() for x in plan.transicoes],
+            "recorte": _recorte_estado(),
+            "editor": getattr(plan, "editor", "")}
+
+
+def _recorte_estado() -> dict:
+    from .render import recorte
+
+    return recorte.estado()
+
+
+def _pos_mudar(pid: str, fn) -> dict:
+    from . import pos_edicao
+
+    project = _project(pid)
+    try:
+        item = fn(pos_edicao, project)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc).strip("'\"")) from exc
+    project.save_plan()
+    return {"ok": True, "item": item.to_dict() if hasattr(item, "to_dict") else item,
+            **_pos(project)}
+
+
+@app.get("/api/projects/{pid}/pos")
+def api_pos(pid: str) -> dict:
+    return _pos(_project(pid))
+
+
+@app.get("/api/projects/{pid}/pos/contexto")
+def api_pos_contexto(pid: str) -> dict:
+    from . import pos_edicao
+
+    return pos_edicao.contexto(_project(pid))
+
+
+@app.post("/api/projects/{pid}/pos/graficos")
+def api_pos_grafico(pid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_grafico(p, payload))
+
+
+@app.put("/api/projects/{pid}/pos/graficos/{gid}")
+def api_pos_grafico_mudar(pid: str, gid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_grafico(p, payload, gid))
+
+
+@app.post("/api/projects/{pid}/pos/camadas")
+def api_pos_camada(pid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_camada(p, payload))
+
+
+@app.put("/api/projects/{pid}/pos/camadas/{cid}")
+def api_pos_camada_mudar(pid: str, cid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_camada(p, payload, cid))
+
+
+@app.post("/api/projects/{pid}/pos/transicoes")
+def api_pos_transicao(pid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_transicao(p, payload))
+
+
+@app.put("/api/projects/{pid}/pos/transicoes/{xid}")
+def api_pos_transicao_mudar(pid: str, xid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_transicao(p, payload, xid))
+
+
+@app.post("/api/projects/{pid}/pos/tirar")
+def api_pos_tirar(pid: str, payload: dict = Body(...)) -> dict:
+    from . import pos_edicao
+
+    project = _project(pid)
+    n = pos_edicao.tirar(project, [str(i) for i in payload.get("ids") or []],
+                         bool(payload.get("tudo")), str(payload.get("origem") or ""))
+    project.save_plan()
+    return {"ok": True, "tirados": n, **_pos(project)}
+
+
+@app.delete("/api/projects/{pid}/pos/{iid}")
+def api_pos_apagar(pid: str, iid: str) -> dict:
+    from . import pos_edicao
+
+    project = _project(pid)
+    n = pos_edicao.tirar(project, [iid])
+    if not n:
+        raise HTTPException(404, "item da pós-edição não encontrado")
+    project.save_plan()
+    return {"ok": True, **_pos(project)}
+
+
+def _lado(v) -> int:
+    try:
+        return max(240, min(1080, int(v)))
+    except (TypeError, ValueError):
+        return 720
+
+
+@app.get("/api/projects/{pid}/pos/quadro.jpg")
+def api_pos_quadro(pid: str, t: float = 0.0, lado: int = 720) -> Response:
+    """O quadro EXATO do vídeo final em ``t`` (o encode de verdade, parado)."""
+    from . import pos_edicao
+
+    try:
+        q = pos_edicao.quadros(_project(pid), [t], _lado(lado))[0]
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(content=q["jpeg"], media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/projects/{pid}/pos/quadros")
+def api_pos_quadros(pid: str, payload: dict = Body(...)) -> dict:
+    from . import pos_edicao
+
+    try:
+        tempos = [float(x) for x in (payload.get("tempos") or [])][:pos_edicao.MAX_QUADROS]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "tempos precisa ser uma lista de segundos") from exc
+    if not tempos:
+        raise HTTPException(400, "diga em que segundos quer ver o vídeo")
+    try:
+        return {"quadros": pos_edicao.quadros_b64(_project(pid), tempos,
+                                                  _lado(payload.get("lado", 720)))}
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/projects/{pid}/pos/cena")
+def api_pos_cena(pid: str, t: float = 0.0) -> dict:
+    from . import pos_edicao
+
+    try:
+        return pos_edicao.cena(_project(pid), t)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/recorte/estado")
+def api_recorte_estado() -> dict:
+    return _recorte_estado()
+
+
+@app.post("/api/recorte/baixar")
+def api_recorte_baixar() -> dict:
+    """Baixa o modelo de recorte da pessoa (15 MB, do GitHub oficial, uma vez)."""
+    from .render import recorte
+
+    if not recorte.tem_runtime():
+        raise HTTPException(400, "falta o onnxruntime: rode o instalar.bat de novo")
+    try:
+        recorte.baixar_modelo()
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return recorte.estado()
 
 
 # ------------------------------------------------------------------------- IA

@@ -493,7 +493,10 @@ export default function Timeline(props: Props) {
         if (x1 < 0 || x0 > size.w) continue
         const w = Math.max(3, x1 - x0)
         const cor = track.kind === 'audio' ? '#34d399'
-          : track.kind === 'blur' ? '#94a3b8' : '#c084fc'
+          : track.kind === 'blur' ? '#94a3b8'
+          : item.kind === 'grafico' ? '#f59e0b'
+          : item.kind === 'transicao' ? '#f472b6'
+          : item.kind === 'camada' ? '#22d3ee' : '#c084fc'
         g.fillStyle = cor + (vivo ? 'ee' : '99')
         g.fillRect(x0, y + 2, w, ROW.track - 4)
         g.fillStyle = '#0b1220'

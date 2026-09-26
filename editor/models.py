@@ -225,6 +225,92 @@ class BlurRegion:
 
 
 @dataclass
+class Grafico:
+    """Um gráfico animado da PÓS-EDIÇÃO: título, tela de tópico, lista, destaque…
+
+    Desenhado pelo libass no MESMO passe da legenda (uma geração de encode),
+    em cima do vídeo — ou ATRÁS da pessoa (``camada="atras"``), usando o
+    recorte dela. Posição e tamanho são frações do quadro, para servir a
+    qualquer formato. Os campos de cada tipo estão em editor/render/motion.py.
+    """
+
+    id: str = field(default_factory=lambda: new_id("g_"))
+    tipo: str = "texto"             # titulo | lista | destaque | numero | texto
+    #                                 nome | seta | circulo | barra | tela
+    out_start: float = 0.0          # linha do tempo de SAÍDA
+    out_end: float = 3.0
+    texto: str = ""
+    subtexto: str = ""
+    itens: list = field(default_factory=list)      # lista: os tópicos
+    x: float = 0.5                  # centro, fração da largura (nome: borda
+    y: float = 0.5                  # esquerda; seta: a PONTA) e da altura
+    tamanho: float = 1.0            # multiplica o corpo padrão do tipo
+    estilo: str = "escuro"          # paleta: escuro | claro | neon | marca | limpo
+    cor: str = ""                   # a cor de destaque (#RRGGBB); vazio = do estilo
+    entrada: str = "pop"            # pop | slide | subir | 3d | digitar | fade
+    saida: str = "fade"             # fade | slide | pop | corte
+    camada: str = "frente"          # frente | atras (atrás da pessoa)
+    numero: float = 0.0             # numero: até onde conta
+    prefixo: str = ""               # numero: "R$ " ; "+", ...
+    sufixo: str = ""                # numero: "%", " mil", ...
+    angulo: float = 0.0             # seta: para onde aponta, em graus (0 =
+    #                                 direita, 90 = baixo)
+    enabled: bool = True
+    origem: str = ""                # "claude" quando veio da pós-edição pelo MCP
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class Camada:
+    """Um efeito de PROFUNDIDADE: a pessoa separada do fundo.
+
+    O recorte da pessoa vem de um modelo local (Robust Video Matting) rodado
+    no próprio quadro final. Com ele, o fundo desfoca (profundidade de
+    campo), aproxima devagar enquanto a pessoa fica (parallax 2.5D) ou
+    escurece (holofote) — e um gráfico pode ficar ATRÁS da pessoa.
+    """
+
+    id: str = field(default_factory=lambda: new_id("l_"))
+    efeito: str = "desfoque"        # desfoque | parallax | escurecer | recorte
+    out_start: float = 0.0
+    out_end: float = 3.0
+    forca: float = 0.6              # 0..1
+    enabled: bool = True
+    origem: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class Transicao:
+    """Uma TRANSIÇÃO na emenda entre dois blocos, só na imagem.
+
+    A voz não é tocada: cada lado da emenda anima os próprios quadros das
+    pontas (sai com zoom, entra com zoom...), sem sobrepor um bloco no outro
+    — sobrepor encurtaria o vídeo e comeria a borda da fala. Ancorada no
+    BLOCO que começa depois da emenda (``clip_id``), então acompanha a edição.
+    """
+
+    id: str = field(default_factory=lambda: new_id("x_"))
+    clip_id: str = ""               # o bloco que ENTRA
+    tipo: str = "zoom"              # zoom | chicote | flash | glitch | desfoque | luz | giro
+    duracao: float = 0.4            # total, metade de cada lado da emenda
+    # A ÂNCORA NA FONTE: onde o bloco que entra começa na gravação. Um corte
+    # dentro do bloco (ou "refazer edição") troca os ids dos blocos; com a
+    # âncora, a transição reencontra o bloco que começa no mesmo ponto.
+    fonte: str = ""
+    src_t: float = -1.0
+    enabled: bool = True
+    origem: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class Subtitle:
     id: str = field(default_factory=lambda: new_id("s_"))
     start: float = 0.0              # linha do tempo de SAÍDA
@@ -294,6 +380,14 @@ class EditPlan:
     # B-ROLL AUTOMÁTICO: {"auto": bool, "frequencia": "pouco"|"medio"|"muito",
     # "ultima": resumo da última vez que rodou}. Vazio = nunca pedido.
     broll: dict = field(default_factory=dict)
+    # A PÓS-EDIÇÃO: gráficos animados, camadas de profundidade e transições
+    graficos: list = field(default_factory=list)
+    camadas: list = field(default_factory=list)
+    transicoes: list = field(default_factory=list)
+    # QUEM EDITA: "" (o padrão: a IA do Gemini decide cortes e b-roll quando
+    # há chave) ou "claude" — o Claude edita pelo MCP, e o Gemini sai da
+    # frente: o corte automático fica na regra do programa e o Claude revisa.
+    editor: str = ""
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -333,6 +427,10 @@ class EditPlan:
             "enquadramento": self.enquadramento,
             "alvo_duracao": self.alvo_duracao,
             "broll": self.broll,
+            "graficos": [g.to_dict() for g in self.graficos],
+            "camadas": [c.to_dict() for c in self.camadas],
+            "transicoes": [x.to_dict() for x in self.transicoes],
+            "editor": self.editor,
             "version": self.version,
         }
 
@@ -377,6 +475,13 @@ class EditPlan:
         except (TypeError, ValueError):
             plan.alvo_duracao = 0.0
         plan.broll = dict(data.get("broll") or {})
+        plan.editor = "claude" if data.get("editor") == "claude" else ""
+        plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
+                         if isinstance(g, dict)]
+        plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])
+                        if isinstance(c, dict)]
+        plan.transicoes = [_from_dict(Transicao, x) for x in data.get("transicoes", [])
+                           if isinstance(x, dict)]
         plan.version = int(data.get("version", 1))
         return plan
 

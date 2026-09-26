@@ -437,6 +437,10 @@ def aplicar(project, ctx, frequencia: str = "medio", usar_ia: bool = True,
 
     frequencia = _freq(frequencia)
     fonte = _fonte(fonte or (project.plan.broll or {}).get("fonte"))
+    if getattr(project.plan, "editor", "") == "claude":
+        # com o Claude editando, o Gemini sai da frente também aqui: o
+        # b-roll automático vai pela regra, e o Claude troca pelo MCP
+        usar_ia = False
     tirados = tirar_automaticos(project) if substituir else 0
     ctx.stage("broll", "escolhendo onde entra b-roll")
     plano = planejar(project, frequencia, usar_ia)

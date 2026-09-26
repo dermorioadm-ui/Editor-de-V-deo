@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,9 +35,13 @@ from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
 from . import animacao as A
+from . import camadas as CM
 from . import filters as F
 from . import looks
 from . import mascara as Msk
+from . import motion as MG
+from . import recorte as RC
+from . import transicoes as TR
 
 AUDIO_SR = 48000
 FADE_MS = 12
@@ -59,8 +64,12 @@ class VideoSegment:
     zoom: float = 1.0          # jogo de zoom do corte, aplicado neste encode
     out_start: float = 0.0     # preenchido com a soma das durações MEDIDAS
     t_start: float = 0.0       # posição na linha do tempo das legendas (nominal)
+    # transição na emenda: {"tipo", "dur"} da borda de entrada e da de saída
+    trans_entra: dict | None = None
+    trans_sai: dict | None = None
     measured: float | None = None
     file: str = ""
+    avisos: list = field(default_factory=list)
 
     @property
     def nominal(self) -> float:
@@ -429,13 +438,55 @@ def plan_segments(plan: EditPlan, timeline: Timeline, sources: dict,
                         out_theoretical=out_dur, clip_id=clip.id, info=cinfo,
                         t_start=out_a, fit=cut.fit))
             idx += 1
+    _marcar_transicoes(segs, plan, timeline)
     return segs
+
+
+def _marcar_transicoes(segs: list[VideoSegment], plan: EditPlan,
+                       timeline: Timeline) -> None:
+    """Cada transição vira uma borda nos DOIS trechos que encostam na emenda.
+
+    A transição é ancorada no BLOCO que entra (``clip_id``), não num tempo:
+    cortar antes dela desloca a emenda e a transição vai junto, sem remapear
+    nada; se um corte trocou o id do bloco, ela o reencontra pela âncora na
+    fonte (``transicoes.resolver``). Metade da duração fica de cada lado, e
+    nenhum lado passa de 45% do trecho — um trecho curto não vira só efeito.
+    """
+    trans = [t for t in (getattr(plan, "transicoes", None) or [])
+             if t.enabled and t.tipo in TR.TIPOS]
+    if not trans or not segs:
+        return
+    inicio = {placed.clip.id: placed.out_start for placed in timeline}
+    alvo = TR.resolver(trans, [placed.clip for placed in timeline])
+    for t in trans:
+        emenda = inicio.get(alvo.get(t.id, ""))
+        if emenda is None:
+            continue
+        metade = max(0.1, min(TR.DUR_MAX, float(t.duracao))) / 2
+        for s in segs:
+            if abs(s.t_start - emenda) < 1e-3:
+                s.trans_entra = {"tipo": t.tipo,
+                                 "dur": round(min(metade, s.out_theoretical * 0.45), 4)}
+            elif emenda > 1e-3 and abs(s.t_start + s.out_theoretical - emenda) < 1e-3:
+                s.trans_sai = {"tipo": t.tipo,
+                               "dur": round(min(metade, s.out_theoretical * 0.45), 4)}
 
 
 # ------------------------------------------------------------------ vídeo
 def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                          cues: list[dict], ass_dir: Path,
-                         media_paths: dict, hw: str | None) -> tuple[list[str], list[str]]:
+                         media_paths: dict, hw: str | None,
+                         recorte: dict | None = None,
+                         ate_a_base: tuple[int, int] | None = None,
+                         ) -> tuple[list[str], list[str]]:
+    """O comando ffmpeg do trecho.
+
+    ``recorte``: a máscara da pessoa já calculada ({"path", "centro"}) — liga
+    as camadas e os gráficos atrás da pessoa.
+    ``ate_a_base=(w, h)``: em vez do encode, devolve o comando que solta a
+    IMAGEM BASE do trecho (depois do enquadramento, antes de tudo que vai por
+    cima) em rgb24 w x h no stdout — é dela que o recorte é calculado.
+    """
     width, height = target_size(main, plan.export)
     # RÉGUA DA LEGENDA: o ASS é escrito sempre na resolução da FONTE, nunca na
     # do render. O fontsize, o contorno e as margens do estilo são pixels
@@ -572,6 +623,41 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                     f"crop=w={width}:h={height}:x={-x0}:y={-y0}[__q]")
             cur_tag = "__q"
 
+    if ate_a_base:
+        bw, bh = ate_a_base
+        graph_parts.append(f"[{cur_tag}]scale={bw}:{bh}:flags=bilinear,"
+                           f"format=rgb24[vout]")
+        return ([FFMPEG, "-v", "error", *pre,
+                 "-filter_complex", ";".join(graph_parts), "-map", "[vout]",
+                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], inputs)
+
+    # CAMADAS: com a máscara da pessoa, o fundo e a pessoa se separam aqui —
+    # depois do enquadramento (a máscara foi calculada desta mesma imagem) e
+    # ANTES do desfoque de proteção e do b-roll por cima: o que protege uma
+    # placa ou um rosto continua protegendo, com ou sem camada.
+    graficos = getattr(plan, "graficos", None) or []
+    camadas_da_frente = ("frente", "atras")
+    mascara = ""
+    if recorte and recorte.get("path") and recorte.get("tem_pessoa", True):
+        cam_seg = CM.no_trecho(getattr(plan, "camadas", None) or [],
+                               seg.t_start, seg.nominal)
+        atras = MG.no_trecho(graficos, seg.t_start, seg.nominal, ("atras",))
+        ass_atras = None
+        if atras:
+            ass_atras = ass_dir / f"mga_{seg.index:04d}.ass"
+            if not MG.escrever(ass_atras, graficos, width, height, seg.t_start,
+                               seg.nominal, camadas=("atras",),
+                               fonte=plan.style.font):
+                ass_atras, atras = None, []
+        cam_graph = CM.grafo(cur_tag, "__vc", "§MASCARA§", width, height, fps,
+                             seg.t_start, seg.nominal, cam_seg, ass_atras, atras,
+                             tuple(recorte.get("centro") or (0.5, 0.5)))
+        if cam_graph:
+            graph_parts.append(cam_graph)
+            cur_tag = "__vc"
+            mascara = str(recorte["path"])
+            camadas_da_frente = ("frente",)
+
     blur_graph, has_blur = F.blur_chain(
         plan.blurs, seg.t_start, seg.t_start + seg.nominal,
         width, height, cur_tag, "__vb")
@@ -629,6 +715,16 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                 pre += ["-loop", "1", "-framerate", f"{fps}",
                         "-t", f"{seg.nominal + 1.0:.3f}", "-i", ent["path"]]
 
+    # TRANSIÇÃO: nas bordas do trecho, depois de tudo que é IMAGEM (o b-roll
+    # por cima, o desfoque de proteção) e antes do que é GRÁFICO — o título e
+    # a legenda não mergulham no zoom nem somem no flash.
+    tr = TR.grafo(cur_tag, "__vt", width, height, fps,
+                  max(1, int(round(seg.nominal * fps))),
+                  seg.trans_entra, seg.trans_sai, plan.export.pix_fmt)
+    if tr:
+        graph_parts.append(tr)
+        cur_tag = "__vt"
+
     tail = []
     # Look de cinema: vale para o vídeo inteiro, entra ANTES da legenda —
     # legenda queimada não pode virar sépia junto com a imagem, senão o
@@ -636,6 +732,15 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     lk = looks.look_chain(plan.look, plan.look_vignette)
     if lk:
         tail.append(lk)
+    # GRÁFICOS DA PÓS-EDIÇÃO: depois do look (a cor da marca não é graduada
+    # junto com a imagem) e antes da legenda (a fala fica sempre por cima).
+    # Sem recorte, o gráfico "atrás" sai na frente — aparece, em vez de sumir.
+    if graficos:
+        mg_path = ass_dir / f"mg_{seg.index:04d}.ass"
+        if MG.escrever(mg_path, graficos, width, height, seg.t_start,
+                       seg.nominal, camadas=camadas_da_frente,
+                       fonte=plan.style.font):
+            tail.append(F.subtitle_chain(mg_path))
     if plan.export.burn_subtitles and cues:
         window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
@@ -647,10 +752,15 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     graph_parts.append(f"[{cur_tag}]" + ",".join(tail) + "[vout]")
 
     filtergraph = ";".join(graph_parts)
+    if mascara:
+        # a máscara é a ÚLTIMA entrada: as sobreposições já numeraram as delas
+        idx = sum(1 for a in pre if a == "-i")
+        pre += ["-i", mascara]
+        filtergraph = filtergraph.replace("§MASCARA§", str(idx))
     args = [FFMPEG, "-y", "-v", "error", *pre,
             "-filter_complex", filtergraph, "-map", "[vout]"]
     args += encoder_args(plan.export, main, hw)
-    if overlays:
+    if overlays or mascara:
         # o overlay (framesync) repete o último quadro do principal enquanto a
         # entrada do PNG tiver quadros — sem esta trava, cada trecho com
         # sobreposição saía mais longo que o planejado e a soma inflava o vídeo
@@ -773,7 +883,17 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     seg_overlays = [_relativo(o.to_dict()) for o in plan.overlays
                     if o.enabled and o.out_end > t0
                     and o.out_start < t0 + seg.nominal]
-    positional = bool(seg_cues or seg_blurs or seg_overlays)
+    seg_graficos = [_relativo(g.to_dict())
+                    for g in (getattr(plan, "graficos", None) or [])
+                    if g.enabled and g.out_end > t0
+                    and g.out_start < t0 + seg.nominal]
+    seg_camadas = [_relativo(c.to_dict())
+                   for c in CM.no_trecho(getattr(plan, "camadas", None) or [],
+                                         t0, seg.nominal)]
+    usa_recorte = bool(seg_camadas) or any(
+        g.get("camada") == "atras" for g in seg_graficos)
+    positional = bool(seg_cues or seg_blurs or seg_overlays or seg_graficos
+                      or seg_camadas)
     key = _hash({
         "src": seg.source_path, "start": round(seg.src_start, 4),
         "dur": round(seg.src_duration, 4), "speed": seg.speed,
@@ -791,6 +911,17 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "quadro": quadro_de_saida(plan, main, *target_size(main, plan.export)),
         "export": plan.export.__dict__,
         "cues": seg_cues, "blurs": seg_blurs, "overlays": seg_overlays,
+        # a pós-edição só entra na chave quando EXISTE no trecho: o trecho
+        # sem gráfico nem transição mantém a chave de antes, e o cache de
+        # quem atualizou o Sharkcut continua valendo
+        **({"graficos": seg_graficos, "fonte_graficos": plan.style.font}
+           if seg_graficos else {}),
+        **({"transicao": [seg.trans_entra, seg.trans_sai]}
+           if seg.trans_entra or seg.trans_sai else {}),
+        **({"camadas": seg_camadas} if seg_camadas else {}),
+        # com recorte o trecho sai em camadas; sem ele (sem o onnxruntime,
+        # sem o modelo) sai sem — são imagens diferentes, chaves diferentes
+        **({"recorte": RC.pronto()} if usa_recorte else {}),
         # a régua do tamanho das sobreposições (altura da fonte): entrou na
         # chave quando a fórmula passou a escalar pela altura da saída
         "ov_ref": tuple(main.display_size) if seg_overlays else None,
@@ -829,6 +960,64 @@ def _gravar_manifesto(path: Path, manifest: dict) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _janelas_do_recorte(seg: VideoSegment, plan: EditPlan) -> list[tuple[float, float]]:
+    """Onde este trecho precisa da máscara da pessoa ([] = não precisa)."""
+    cam = CM.no_trecho(getattr(plan, "camadas", None) or [], seg.t_start, seg.nominal)
+    atras = MG.no_trecho(getattr(plan, "graficos", None) or [], seg.t_start,
+                         seg.nominal, ("atras",))
+    if not cam and not atras:
+        return []
+    return CM.janelas(cam, atras, seg.t_start, seg.nominal)
+
+
+def _chave_da_base(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
+                   janelas: list) -> str:
+    """A identidade da IMAGEM BASE do trecho — é dela que sai a máscara.
+
+    Não entra nada do que vai POR CIMA (gráfico, legenda, look, b-roll em
+    janela): trocar o texto de um título não recalcula o recorte.
+    """
+    return _hash({
+        "src": seg.source_path, "start": round(seg.src_start, 4),
+        "dur": round(seg.src_duration, 4), "speed": seg.speed,
+        "kind": seg.kind, "photo": seg.photo, "fit": seg.fit,
+        "efeitos": getattr(seg, "effects", None) or [],
+        "zoom": round(seg.zoom, 4),
+        "face": (round(plan.zoom.anchor_x, 4), round(plan.zoom.anchor_y, 4)),
+        "unsharp": plan.zoom.unsharp,
+        "aspect": aspecto_do_export(plan.export),
+        "quadro": quadro_de_saida(plan, main, *target_size(main, plan.export)),
+        "size": target_size(main, plan.export),
+        "fps": fps_de_saida(main, plan.export),
+        "janelas": [[round(a, 1), round(b, 1)] for a, b in janelas],
+        "modelo": RC.MODELO_SHA256[:12], "lado": RC.LADO_MAX,
+    })
+
+
+def _preparar_recorte(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
+                      cues: list[dict], ass_dir: Path, media_paths: dict,
+                      hw: str | None, pasta: Path, janelas: list,
+                      cancel: Callable | None) -> dict | None:
+    """A máscara da pessoa deste trecho: do cache, ou calculada agora."""
+    width, height = target_size(main, plan.export)
+    mw, mh = RC.tamanho_do_recorte(width, height)
+    destino = pasta / f"rec_{_chave_da_base(seg, plan, main, janelas)}.mkv"
+    info = RC.ler_info(destino)
+    if info:
+        return info
+    args, _ = _build_video_command(seg, plan, main, cues, ass_dir, media_paths,
+                                   hw, ate_a_base=(mw, mh))
+    try:
+        return RC.gerar(args, mw, mh, fps_de_saida(main, plan.export), janelas,
+                        destino, cancel)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 — sem recorte, o trecho sai sem camada
+        seg.avisos.append(f"o recorte da pessoa falhou no trecho {seg.index + 1} "
+                          f"({str(exc)[:160]}); ele saiu sem as camadas")
+        return None
 
 
 def _faxina(work: Path, manifest_path: Path, manifest: dict, geracao: int) -> None:
@@ -875,6 +1064,24 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
 
     total_out = sum(s.out_theoretical for s in segs) or 1.0
 
+    # 0) o recorte da pessoa: o modelo vem UMA vez, antes das chaves — assim a
+    # chave de cada trecho já sabe se ele vai sair em camadas ou não
+    precisam = [s for s in segs if _janelas_do_recorte(s, plan)]
+    if precisam and not RC.tem_runtime():
+        precisam[0].avisos.append(
+            "o recorte da pessoa precisa do onnxruntime, que não está instalado "
+            "(rode o instalar.bat de novo): os gráficos \"atrás\" saíram na "
+            "frente e os efeitos de camada ficaram de fora")
+    elif precisam and not RC.tem_modelo():
+        if on_progress:
+            on_progress(0.0, "baixando o modelo de recorte da pessoa (15 MB, uma vez só)")
+        try:
+            RC.baixar_modelo()
+        except RuntimeError as exc:
+            precisam[0].avisos.append(f"recorte da pessoa indisponível: {exc}")
+    pasta_recortes = work / "recortes"
+    recortes_usados: set[str] = set()
+
     # 1) quem já está pronto e quem precisa encodar (barato, sequencial).
     #
     # O MANIFESTO É PELA CHAVE DE CONTEÚDO, NUNCA PELA POSIÇÃO. Indexado pelo
@@ -911,8 +1118,29 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
             seg = grupo[0]
             if cancel and cancel():
                 raise KeyboardInterrupt("exportação cancelada")
+            recorte_info = None
+            guarda = True
+            janelas = _janelas_do_recorte(seg, plan)
+            if janelas and RC.pronto():
+                if on_progress:
+                    on_progress(min(0.999, estado["out"] / total_out),
+                                f"recortando a pessoa do trecho {seg.index + 1}")
+                recorte_info = _preparar_recorte(seg, plan, main, cues, ass_dir,
+                                                 media_paths, hw, pasta_recortes,
+                                                 janelas, cancel)
+                if recorte_info:
+                    with trava:
+                        recortes_usados.add(Path(recorte_info["path"]).name)
+                    if not recorte_info.get("tem_pessoa", True):
+                        seg.avisos.append(
+                            f"não achei pessoa no trecho {seg.index + 1}: os "
+                            f"efeitos de camada dele ficaram de fora")
+                else:
+                    # falhou agora: o arquivo serve para ESTA exportação, mas
+                    # não entra no cache — a próxima tenta o recorte de novo
+                    guarda = False
             args, _ = _build_video_command(seg, plan, main, cues, ass_dir,
-                                           media_paths, hw)
+                                           media_paths, hw, recorte=recorte_info)
             # escreve ao lado e só então assume o nome: um encode cancelado
             # no meio nunca deixa um arquivo pela metade com cara de pronto
             parcial = dest.with_name(dest.stem + ".parcial.mp4")
@@ -924,9 +1152,10 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
                 s.measured = medido
             # o manifesto é compartilhado: uma escrita de cada vez
             with trava:
-                manifest[key] = {"file": str(dest), "measured": medido,
-                                 "geracao": geracao}
-                _gravar_manifesto(manifest_path, manifest)
+                if guarda:
+                    manifest[key] = {"file": str(dest), "measured": medido,
+                                     "geracao": geracao}
+                    _gravar_manifesto(manifest_path, manifest)
                 estado["out"] += sum(s.out_theoretical for s in grupo)
                 estado["n"] += 1
                 if on_progress:
@@ -953,6 +1182,17 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
                     raise erro
 
     _faxina(work, manifest_path, manifest, geracao)
+    # as máscaras que esta exportação não usou e que já têm um dia vão embora
+    # (as recentes ficam: desfazer um retoque não recalcula o recorte)
+    if pasta_recortes.exists():
+        agora = time.time()
+        for f in pasta_recortes.glob("rec_*.mkv"):
+            try:
+                if f.name not in recortes_usados and agora - f.stat().st_mtime > 86400:
+                    f.unlink(missing_ok=True)
+                    f.with_suffix(".json").unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # 3) a linha do tempo, em ordem, com as durações que saíram de verdade
     cursor = 0.0

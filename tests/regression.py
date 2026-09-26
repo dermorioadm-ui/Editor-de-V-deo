@@ -350,6 +350,7 @@ def main() -> int:
     testar_previa_mostra_o_que_baixa()
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
+    testar_pos_edicao_no_encode()
 
     print()
     if FALHAS:
@@ -7667,6 +7668,257 @@ def testar_broll_automatico() -> None:
                 pass
         shutil.rmtree(banco.pasta(), ignore_errors=True)
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_pos_edicao_no_encode() -> None:
+    """A pós-edição sai no MESMO encode — gráficos, transições e camadas.
+
+    Pedido: "você entraria numa pós-edição entregando o que o Sharkcut não
+    entrega": telas didáticas, tópicos, transições, desfoques, profundidade.
+    O que se prova aqui é o que quebraria sem ninguém ver: um gráfico que
+    atravessa a emenda de dois trechos tem de estar na MESMA fase dos dois
+    lados; uma transição não pode mudar a duração do vídeo (o áudio é outro
+    arquivo); a máscara da pessoa tem de casar quadro a quadro; e mexer num
+    gráfico não pode reencodar o vídeo inteiro.
+    """
+    import subprocess
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Camada, Clip, EditPlan, Grafico, Transicao
+    from editor.render import camadas as CM
+    from editor.render import motion as MG
+    from editor.render import recorte as RC
+    from editor.render import transicoes as TR
+    from editor.render.renderer import plan_segments, render_video_segments
+
+    print("\n-- pós-edição no encode")
+    tmp = Path(tempfile.mkdtemp(prefix="pos_"))
+
+    # ---- o motor de gráficos, sem render --------------------------------
+    g = Grafico(tipo="titulo", texto="{\\fs300\\c&H0000FF&}ATAQUE", out_start=1,
+                out_end=3)
+    texto = MG.ass([g], 1080, 1920, 0.0, 5.0)
+    check("\\fs300" not in texto and "(/fs300" in texto,
+          "o texto do gráfico não injeta comando no ASS")
+    check(MG.ass([g], 1080, 1920, 3.5, 2.0) == "",
+          "fora da janela do trecho, o gráfico não entra")
+    n = MG.normalizar({"tipo": "bomba", "cor": "vermelho", "x": 9, "tamanho": -1,
+                       "entrada": "explode", "out_start": 2, "out_end": 1}, 10.0)
+    check(n["tipo"] == "texto" and n["cor"] == "" and n["x"] == 1.0
+          and n["tamanho"] == 0.4 and n["entrada"] == "pop"
+          and n["out_end"] - n["out_start"] >= 0.3,
+          "valores fora da lista caem no padrão e números fora da faixa voltam")
+    for tipo in MG.TIPOS:
+        for entrada in MG.ENTRADAS:
+            ev = MG.eventos([{"tipo": tipo, "texto": "Teste de gráfico",
+                              "itens": ["um", "dois"], "numero": 42,
+                              "out_start": 0.0, "out_end": 3.0,
+                              "entrada": entrada}], 1080, 1920, 0.0, 3.0)
+            if not ev:
+                check(False, f"{tipo}/{entrada} não gerou nada")
+                break
+    check(True, f"os {len(MG.TIPOS)} tipos × {len(MG.ENTRADAS)} entradas geram eventos")
+    # a fatia que começa no meio da entrada leva o tempo da animação NEGATIVO:
+    # a animação continua de onde estava, não recomeça
+    ev = MG.eventos([Grafico(tipo="destaque", texto="X", out_start=1.9, out_end=4.0,
+                             entrada="pop")], 1080, 1920, 2.0, 2.0)
+    check(any("\\t(-100," in e for e in ev),
+          "a entrada que atravessa a emenda continua no ponto certo (tempo negativo)")
+
+    # ---- render de verdade -------------------------------------------
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=0x203060:s=360x640:r=30:d=5", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(fonte)],
+                   check=True)
+    info = probe(fonte)
+    fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+
+    def plano(cortes, graficos=(), trans=(), camadas=()):
+        p = EditPlan()
+        p.export = ExportParams(scale="source", burn_subtitles=False,
+                                preset="ultrafast", crf=18)
+        p.clips = [Clip(src_start=a, src_end=b) for a, b in cortes]
+        p.graficos = list(graficos)
+        p.camadas = list(camadas)
+        p.transicoes = [Transicao(clip_id=p.clips[i].id, tipo=t, duracao=d)
+                        for i, t, d in trans]
+        return p
+
+    def render(p, nome):
+        tl = Timeline(p.active_clips, 30.0)
+        segs = plan_segments(p, tl, fontes, info)
+        render_video_segments(segs, p, info, [], tmp / nome, {"main": str(fonte)},
+                              None)
+        lista = tmp / f"{nome}.txt"
+        lista.write_text("".join(f"file '{s.file}'\n" for s in segs))
+        saida = tmp / f"{nome}.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                        "-i", str(lista), "-c", "copy", str(saida)], check=True)
+        return saida, segs
+
+    def quadro(video, t):
+        r = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(video),
+                            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                            "-"], capture_output=True, check=True)
+        return np.frombuffer(r.stdout, np.uint8).reshape(640, 360, 3).astype(int)
+
+    titulo = lambda: Grafico(tipo="titulo", texto="Segurança", out_start=1.9,  # noqa: E731
+                             out_end=3.6, estilo="claro", y=0.2, entrada="pop")
+    um, _s = render(plano([(0, 4)], [titulo()]), "um")
+    dois, _s = render(plano([(0, 2), (2, 4)], [titulo()]), "dois")
+    difs = [np.abs(quadro(um, t) - quadro(dois, t)).mean() for t in (2.05, 2.2, 3.0)]
+    claro = (quadro(dois, 2.2).mean(axis=2) > 200).sum()
+    check(max(difs) < 1.0 and claro > 5000,
+          f"o gráfico que atravessa a emenda sai IGUAL em um trecho ou em dois "
+          f"(diferença {max(difs):.2f}; {claro} px do painel)")
+
+    flash, segs = render(plano([(0, 2), (2, 4)], [], [(1, "flash", 0.6)]), "flash")
+    luz = {t: quadro(flash, t).mean() for t in (1.0, 1.99, 2.0, 2.5)}
+    check(luz[1.99] > 200 and luz[2.0] > 200 and luz[1.0] < 90 and luz[2.5] < 90,
+          f"o flash cresce até a emenda e se desfaz depois ({luz})")
+    check(abs(probe(flash).duration - 4.0) < 0.01,
+          "e a transição não muda a duração do vídeo (o áudio é outro arquivo)")
+    tortos = []
+    for tipo in TR.TIPOS:
+        v, _s = render(plano([(0, 1.5), (1.5, 3.0)], [], [(1, tipo, 0.8)]), f"tr_{tipo}")
+        n = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams",
+                            "v", "-show_entries", "stream=nb_read_frames", "-of",
+                            "csv=p=0", str(v)], capture_output=True, text=True).stdout
+        if n.strip() != "90":
+            tortos.append(f"{tipo}={n.strip()}")
+    check(not tortos, f"as {len(TR.TIPOS)} transições mantêm os 90 quadros ({tortos})")
+
+    # ---- cache: mexer num gráfico do bloco 2 não reencoda o bloco 1 ------
+    p = plano([(0, 2), (2, 4)], [Grafico(tipo="texto", texto="a", out_start=2.5,
+                                         out_end=3.5)])
+    _v, segs = render(p, "cache")
+    antes = {s.file for s in segs}
+    p.graficos[0].texto = "b"
+    _v, segs = render(p, "cache")
+    depois = {s.file for s in segs}
+    check(len(antes & depois) == 1 and len(depois - antes) == 1,
+          "trocar o texto de um gráfico reencoda só o trecho onde ele está")
+
+    # ---- a máscara casa quadro a quadro (sem modelo: máscara sintética) --
+    for fps, fr in ((30.0, "30"), (30000 / 1001, "30000/1001")):
+        W, H = 320, 180
+        principal, mascara = tmp / "m.mp4", tmp / "k.mkv"
+        for alvo, fundo, extra in ((principal, "gray", ["-c:v", "libx264", "-qp", "0",
+                                                        "-pix_fmt", "yuv444p"]),
+                                   (mascara, "black", ["-c:v", "ffv1"])):
+            subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i",
+                            f"color=c={fundo}:s={W}x{H}:r={fr}:d=2", "-f", "lavfi",
+                            "-i", f"color=c=white:s=40x40:r={fr}:d=2",
+                            "-filter_complex", "[0][1]overlay=x='8*n':y=60,format="
+                            + ("gray" if alvo == mascara else "yuv444p"),
+                            *extra, str(alvo)], check=True)
+        grafo = CM.grafo("v0", "o", "1", W, H, fps, 0.0, 2.0,
+                         [Camada(efeito="escurecer", out_start=0, out_end=2, forca=1.0)],
+                         None, [], (0.5, 0.5))
+        r = subprocess.run([FFMPEG, "-v", "error", "-i", str(principal), "-i",
+                            str(mascara), "-filter_complex",
+                            f"[0:v]fps={fps:.6f}[v0];" + grafo, "-map", "[o]",
+                            "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                           capture_output=True)
+        q = np.frombuffer(r.stdout, np.uint8).reshape(-1, H, W)
+        mordidos = sum(1 for k in range(1, 30)
+                       if q[k, 80, 8 * (k + 1) + 2:8 * (k + 1) + 38].min() < 200)
+        check(len(q) == 60 * (1 if fps == 30.0 else 1) and mordidos == 0,
+              f"a pessoa recortada casa com a máscara em todo quadro a {fr} fps "
+              f"({mordidos} quadros desalinhados)")
+
+    # ---- sem onnxruntime: o gráfico "atrás" sai na frente, com aviso ------
+    real = RC.tem_runtime
+    RC.tem_runtime = lambda: False
+    try:
+        atras = Grafico(tipo="titulo", texto="ATRÁS", out_start=0.5, out_end=3.0,
+                        camada="atras", estilo="claro", y=0.3)
+        v, segs = render(plano([(0, 4)], [atras]), "sem_runtime")
+        avisos = [a for s in segs for a in s.avisos]
+        check(any("onnxruntime" in a for a in avisos),
+              "sem o onnxruntime a exportação avisa o que ficou de fora")
+        claro = (quadro(v, 1.5).mean(axis=2) > 200).sum()
+        check(claro > 3000, "e o gráfico atrás da pessoa aparece na frente, "
+                            "em vez de sumir")
+    finally:
+        RC.tem_runtime = real
+
+    # ---- o modelo baixado que não confere é recusado --------------------
+    class Falso(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            corpo = b"isto nao e o modelo" * 100
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(corpo)))
+            self.end_headers()
+            self.wfile.write(corpo)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Falso)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url_real = RC.MODELO_URL
+    RC.MODELO_URL = f"http://127.0.0.1:{srv.server_address[1]}/rvm.onnx"
+    try:
+        RC.baixar_modelo()
+        check(False, "um modelo que não confere devia ser recusado")
+    except RuntimeError as exc:
+        check("SHA-256" in str(exc) and not RC.caminho_do_modelo().exists()
+              and not RC.caminho_do_modelo().with_suffix(".parcial").exists(),
+              "o modelo baixado que não confere pelo SHA-256 é recusado e apagado")
+    finally:
+        RC.MODELO_URL = url_real
+        srv.shutdown()
+
+    # ---- com o modelo de verdade (se der para ter) -----------------------
+    modelo = os.environ.get("SHARKCUT_MODELO_RVM", "")
+    if modelo and Path(modelo).exists():
+        RC.caminho_do_modelo().parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(modelo, RC.caminho_do_modelo())
+    elif not RC.tem_modelo():
+        try:
+            RC.baixar_modelo()
+        except RuntimeError as exc:
+            print(f"  (pulado: sem o modelo de recorte nesta máquina — {exc})")
+    if RC.pronto():
+        cam = [Camada(efeito="desfoque", out_start=1.0, out_end=3.0)]
+        v, segs = render(plano([(0, 4)], [], [], cam), "sem_pessoa")
+        check(any("não achei pessoa" in a for a in segs[0].avisos),
+              "num quadro sem gente, o recorte diz que não achou pessoa e o "
+              "trecho sai sem camada")
+        check(list((tmp / "sem_pessoa" / "recortes").glob("rec_*.mkv")),
+              "e a máscara fica guardada para o próximo encode")
+        pessoa = os.environ.get("SHARKCUT_TESTE_PESSOA", "")
+        if pessoa and Path(pessoa).exists():
+            retrato = tmp / "retrato.mp4"
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-loop", "1", "-framerate",
+                            "30", "-i", pessoa, "-t", "4", "-vf",
+                            "scale=720:720,crop=405:720,scale=360:640,setsar=1",
+                            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt",
+                            "yuv420p", str(retrato)], check=True)
+            info_p = probe(retrato)
+            fontes_p = {"main": {"path": str(retrato), "info": info_p, "kind": "video"}}
+            p = plano([(0, 4)], [], [], [Camada(efeito="recorte", out_start=0.5,
+                                                out_end=3.5)])
+            tl = Timeline(p.active_clips, 30.0)
+            segs = plan_segments(p, tl, fontes_p, info_p)
+            render_video_segments(segs, p, info_p, [], tmp / "retrato",
+                                  {"main": str(retrato)}, None)
+            q = subprocess.run([FFMPEG, "-v", "error", "-ss", "2", "-i", segs[0].file,
+                                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                                "-"], capture_output=True).stdout
+            q = np.frombuffer(q, np.uint8).reshape(640, 360, 3).astype(int)
+            info_r = RC.ler_info(next((tmp / "retrato" / "recortes").glob("rec_*.mkv")))
+            check(info_r and info_r["tem_pessoa"], "o recorte acha a pessoa do retrato")
+            check(q[5:40, 5:40].mean() < 40 and q[300:340, 160:200].mean() > 80,
+                  "e a recorta sobre a cor lisa: o canto vira fundo, o rosto fica")
+    shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     install(["frase %d" % i for i in range(20)])

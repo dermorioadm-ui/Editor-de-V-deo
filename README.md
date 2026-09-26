@@ -771,6 +771,8 @@ A trilha tem faixas separadas, e cada uma aceita itens:
 | **B-roll** | vídeo **por cima da fala** (b-roll), cobrindo o quadro inteiro, com o seu áudio por baixo; e também vídeo ou imagem numa **janela** (picture-in-picture) — o vídeo entra sem o áudio dele, a fala continua |
 | **Desfoque** | proteção de rosto e documento |
 | **Trilha** | música de fundo, com ducking automático na fala |
+| **Gráficos** | a pós-edição: títulos, telas de tópico, listas, números, nome |
+| **Camadas** | fundo desfocado, holofote, 3D, pessoa recortada e as transições nas emendas |
 
 Arraste um item para movê-lo, arraste a borda para mudar a duração,
 **Shift+clique** apaga. Os botões **+ b-roll** e **+ trilha** na barra da
@@ -1493,14 +1495,76 @@ Em português, do jeito que você falaria:
 - *"põe essa música de fundo em -20 dB"*
 - *"exporta e me diz onde ficou"*
 
-São vinte e três ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
+São trinta ferramentas: abrir vídeo, editar sozinho, ver o projeto, ler a
 transcrição, cortar por palavra ou por tempo, resumir, velocidade, anexar,
 **b-roll** (vários vídeos por cima da fala, em sequência), **buscar b-roll no
 banco grátis** e **pôr b-roll do banco** (ele lê o que você fala no ponto,
 procura e põe), **b-roll automático**, animar, recortar em
 forma, efeitos, trilha, formatos (inclusive o 4:5 do feed), exportar,
-acrescentar vídeo, juntar vídeos, gravações, listar projetos e estado do
-editor.
+acrescentar vídeo, juntar vídeos, gravações, listar projetos, estado do
+editor — e as sete da **pós-edição** (abaixo).
+
+### O Claude como editor: a pós-edição
+
+Peça *"edita esse vídeo você, sem o Gemini, e faz a pós-edição"*. O Claude:
+
+1. roda o clique único com **`sem_gemini`** — o corte base sai pela regra do
+   programa (silêncio, palma, assobio, comando falado) e o Gemini não decide
+   nada. A faixa no topo do editor passa a dizer **"O Claude é o editor deste
+   vídeo"**;
+2. lê a transcrição e corta o que sobrou;
+3. lê o **roteiro da pós** (`pos_contexto`): o que é dito em cada segundo do
+   vídeo FINAL, os blocos e as emendas, a faixa da legenda, os b-rolls;
+4. olha a **cena** (`analisar_cena`): onde a pessoa está no quadro, quanto
+   ela ocupa em cada terço, que regiões estão livres para gráfico, a luz;
+5. põe por cima o que o corte não entrega, com as ferramentas `grafico`,
+   `camada` e `transicao`;
+6. **olha o resultado** (`ver_quadros`): as imagens do vídeo final naqueles
+   instantes — o encode de verdade parado num quadro, não uma imitação — e
+   corrige o que ficou ruim;
+7. exporta.
+
+O que a pós-edição tem:
+
+| | o que é |
+|---|---|
+| **título** | com barra de destaque animada; entra com pop, deslizando, subindo, **girando em 3D** (perspectiva de verdade), digitando ou aparecendo |
+| **tela de tópico** | tela cheia de capítulo ("PARTE 2", título, subtítulo e tópicos), com luz de profundidade e entrada em cortina — a separação por tópicos da edição didática |
+| **lista** | tópicos que entram **um a um, na hora em que são falados** |
+| **número** | contador que sobe até o valor (R$ 1.250, +37,5%) |
+| **destaque** | a palavra-chave num adesivo |
+| **nome** | o lower third (nome e função) |
+| **seta, círculo, barra** | apontar, marcar, mostrar progresso |
+| **transições** | zoom, chicote, flash, glitch, desfoque, luz e giro — **na emenda**, sem crossfade: o corte continua seco, a fala intacta e a duração do vídeo não muda |
+| **camadas** | a pessoa separada do fundo: **fundo desfocado** (lente aberta), **holofote** (fundo escuro), **3D** (a pessoa salta para a frente do fundo) e **pessoa recortada** sobre cor, com contorno |
+| **texto atrás da pessoa** | qualquer gráfico com "atrás da pessoa" passa por trás dela — o título some atrás da cabeça |
+
+Estilos: escuro, claro, neon (com brilho), cor da marca, sem fundo.
+
+**Uma geração de encode, ainda.** Os gráficos são desenhados pelo mesmo
+libass que queima a legenda, no mesmo passe; as transições são filtros na
+borda de cada trecho; a camada usa uma máscara (não imagem) calculada da
+própria fonte. Mexer num gráfico reencoda só o trecho onde ele está.
+
+**O recorte da pessoa roda na sua máquina.** É o Robust Video Matting, um
+modelo aberto de 15 MB que o Sharkcut baixa **uma vez** do GitHub oficial
+(conferido pelo SHA-256) na primeira vez que uma camada é usada — ou pelo
+botão **baixar** na aba **Pós**. Ele roda no processador (~40 ms por quadro
+num processador de 4 núcleos), só nos trechos que têm camada, e o resultado
+fica guardado. O vídeo não sai da máquina. Depois de atualizar, **rode o
+`instalar.bat` de novo** para instalar o `onnxruntime` (sem ele os gráficos
+funcionam e as camadas ficam de fora, com aviso).
+
+**O limite, dito de uma vez:** é profundidade em **camadas** (pessoa x
+fundo), que é como o After Effects faz isso com rotoscopia — não é
+reconstrução 3D da sala nem rastreamento de câmera. Texto "3D" é texto
+girando em perspectiva; o "parallax" é a pessoa saltando do fundo.
+
+Na tela, tudo que o Claude pôs aparece nos trilhos **Gráficos** e **Camadas**
+da linha do tempo e na aba **Pós**. Clique num item para ajustar texto,
+posição, tamanho, estilo, entrada, tempo — e **ver o quadro exato**. Arraste
+para mudar de lugar, estique a borda para mudar a duração. O botão **tirar o
+que o Claude pôs** leva só o que ele pôs, e o que você pôs à mão fica.
 
 ### O que ele NÃO pode fazer, de propósito
 

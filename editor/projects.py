@@ -714,6 +714,10 @@ def _cortes_da_ia(project: Project, ctx, words: list[dict],
     # como saber que era falta de chave — ainda mais porque a chave só existia
     # dentro do editor, que só abre DEPOIS deste processamento.
     ctx.stage("ia", "a IA vai decidir os cortes")
+    if getattr(getattr(project, "plan", None), "editor", "") == "claude":
+        ctx.progress(0.95, "o Claude é o editor deste vídeo: o corte sai pela "
+                           "regra do programa e o Claude revisa pelo MCP")
+        return {"ok": False, "erro": "claude", "pulada": True}
     if not db.get_setting("ai_cortes", True):
         ctx.progress(0.95, "IA desligada nos ajustes: corte pela regra do programa")
         return {"ok": False, "erro": "desligada", "pulada": True}
@@ -1721,6 +1725,42 @@ def build_tracks(project: "Project", blocks: list[dict],
         "detail": f"{b.shape}, força {b.strength}",
     } for b in plan.blurs if b.enabled]
 
+    # A PÓS-EDIÇÃO: gráficos num trilho, camadas e transições no outro. A
+    # transição vive na EMENDA (não tem começo e fim próprios): aparece
+    # centrada nela, e não se arrasta — troca o tipo ou apaga.
+    rotulos = {"titulo": "título", "tela": "tela", "lista": "lista",
+               "destaque": "destaque", "numero": "número", "texto": "texto",
+               "nome": "nome", "seta": "seta", "circulo": "círculo",
+               "barra": "barra"}
+    graficos = [{
+        "id": g.id, "kind": "grafico",
+        "label": f"{rotulos.get(g.tipo, g.tipo)}: {g.texto or g.subtexto or ''}".strip(": "),
+        "out_start": round(g.out_start, 3), "out_end": round(g.out_end, 3),
+        "movable": True, "resizable": True,
+        "detail": (f"{g.estilo}, entra {g.entrada}"
+                   + (", atrás da pessoa" if g.camada == "atras" else "")
+                   + (" — pelo Claude" if g.origem == "claude" else "")),
+    } for g in getattr(plan, "graficos", []) if g.enabled]
+    camadas = [{
+        "id": c.id, "kind": "camada", "label": f"camada: {c.efeito}",
+        "out_start": round(c.out_start, 3), "out_end": round(c.out_end, 3),
+        "movable": True, "resizable": True,
+        "detail": f"força {c.forca:.1f}" + (" — pelo Claude" if c.origem == "claude" else ""),
+    } for c in getattr(plan, "camadas", []) if c.enabled]
+    inicio_do_bloco = {b["id"]: float(b.get("out_start", 0.0)) for b in blocks}
+    for x in getattr(plan, "transicoes", []):
+        emenda = inicio_do_bloco.get(x.clip_id)
+        if not x.enabled or emenda is None:
+            continue
+        meia = max(0.1, float(x.duracao)) / 2
+        camadas.append({
+            "id": x.id, "kind": "transicao", "label": f"↔ {x.tipo}",
+            "out_start": round(max(0.0, emenda - meia), 3),
+            "out_end": round(emenda + meia, 3),
+            "movable": False, "resizable": False,
+            "detail": f"transição na emenda de {emenda:.2f} s",
+        })
+
     musica: list[dict] = []
     m = plan.music or {}
     if m.get("enabled") and m.get("media_id"):
@@ -1770,6 +1810,13 @@ def build_tracks(project: "Project", blocks: list[dict],
         {"id": "A1", "label": "Trilha", "kind": "audio", "accepts": ["audio"],
          "items": musica,
          "hint": "música de fundo, com ducking automático na fala."},
+        {"id": "G1", "label": "Gráficos", "kind": "grafico", "accepts": [],
+         "acao": "", "items": graficos,
+         "hint": "títulos, telas de tópico, listas, números — a pós-edição. "
+                 "Clique para editar; arraste para mudar de lugar."},
+        {"id": "L1", "label": "Camadas", "kind": "camada", "accepts": [],
+         "acao": "", "items": camadas,
+         "hint": "fundo desfocado, holofote, 3D e transições nas emendas."},
     ]
 
 
@@ -2700,6 +2747,13 @@ def fonte_da_palavra(project: Project, i: int) -> tuple[str, int]:
 def timeline_summary(project: Project) -> dict:
     plan = project.plan
     tl = Timeline(plan.active_clips, project.info.fps if project.info else None)
+    # a transição reencontra o bloco dela depois de um corte (ver
+    # transicoes.resolver); o id novo fica no plano no próximo save
+    from .render.transicoes import resolver as _resolver
+    for _x, _cid in ((x, _resolver([x], plan.active_clips).get(x.id))
+                     for x in getattr(plan, "transicoes", [])):
+        if _cid and _cid != _x.clip_id:
+            _x.clip_id = _cid
     blocks = []
     for placed in tl:
         c = placed.clip
@@ -2747,6 +2801,15 @@ def timeline_summary(project: Project) -> dict:
         "cutaways": [c.to_dict() for c in plan.cutaways],
         "overlays": [o.to_dict() for o in plan.overlays],
         "blurs": [b.to_dict() for b in plan.blurs],
+        # A PÓS-EDIÇÃO no trilho dela. A transição não tem começo e fim
+        # próprios: vive na emenda do bloco que entra, e é ali que aparece.
+        "graficos": [g.to_dict() for g in getattr(plan, "graficos", [])],
+        "camadas": [c.to_dict() for c in getattr(plan, "camadas", [])],
+        "transicoes": [
+            {**x.to_dict(), "emenda": next(
+                (b["out_start"] for b in blocks if b["id"] == x.clip_id), None)}
+            for x in getattr(plan, "transicoes", [])],
+        "editor": getattr(plan, "editor", ""),
         "speed_warn": [b["id"] for b in blocks
                        if b["speed"] > plan.speed.warn_above],
     }

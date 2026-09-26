@@ -71,6 +71,163 @@ def semear(cliente: Cliente, tmp: Path) -> str:
     return p.id
 
 
+def _jpeg_para_rgb(dados: bytes) -> np.ndarray:
+    r = subprocess.run([FFMPEG, "-v", "error", "-i", "-", "-f", "rawvideo",
+                        "-pix_fmt", "rgb24", "-"], input=dados, capture_output=True)
+    pr = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                         "stream=width,height", "-of", "csv=p=0", "-"],
+                        input=dados, capture_output=True)
+    w, h = (int(x) for x in pr.stdout.decode().strip().split(",")[:2])
+    return np.frombuffer(r.stdout, np.uint8).reshape(h, w, 3)
+
+
+def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
+    """O Claude como editor: roteiro, gráficos, transição, camada, olhos.
+
+    Pedido: "quero colocar você como editor tirando o Gemini da frente... você
+    entraria numa pós-edição entregando o que o Sharkcut não entrega": telas
+    didáticas, separação por tópicos, transições, desfoques, profundidade.
+    """
+    import base64
+
+    print("\n-- pós-edição pelo MCP")
+    # garante duas emendas: um corte no meio parte o vídeo em blocos
+    F.chamar(cliente, "cortar", {"projeto": pid, "palavras": [6]})
+    texto = F.chamar(cliente, "pos_contexto", {"projeto": pid})
+    check("FALA" in texto and "alfa" in texto and "BLOCOS" in texto,
+          "pos_contexto dá o roteiro: fala com tempo do vídeo final e os blocos")
+    check("legenda" in texto,
+          "e diz onde a legenda mora (para o gráfico não cair em cima dela)")
+
+    texto = F.chamar(cliente, "grafico", {
+        "projeto": pid, "tipo": "titulo", "inicio": 0.3, "fim": 2.4,
+        "texto": "O GANCHO", "estilo": "claro", "y": 0.2, "entrada": "3d"})
+    plano = svc.load(pid).plan
+    check(len(plano.graficos) == 1 and plano.graficos[0].origem == "claude"
+          and plano.graficos[0].entrada == "3d",
+          f"grafico põe um título de verdade no plano ({texto})")
+    gid = plano.graficos[0].id
+    F.chamar(cliente, "grafico", {"projeto": pid, "id": gid, "texto": "NOVO"})
+    check(svc.load(pid).plan.graficos[0].texto == "NOVO"
+          and svc.load(pid).plan.graficos[0].entrada == "3d",
+          "com id, muda só o que veio (o resto fica)")
+    F.chamar(cliente, "grafico", {
+        "projeto": pid, "tipo": "lista", "inicio": 2.5, "fim": 5.0,
+        "texto": "3 passos", "itens": ["um", "dois", "três"], "itens_em": [0.2, 0.9]})
+    lista = svc.load(pid).plan.graficos[-1]
+    check(lista.itens[0] == {"texto": "um", "em": 0.2} and lista.itens[2] == "três",
+          "lista casa cada item com o segundo em que ele é falado")
+    texto = F.chamar(cliente, "grafico", {"projeto": pid, "tipo": "numero",
+                                          "inicio": 99999, "numero": 1500})
+    ultimo = svc.load(pid).plan.graficos[-1]
+    dur = svc.duracao_de_saida(svc.load(pid))
+    check(ultimo.out_end <= dur + 1e-6 and ultimo.out_start < ultimo.out_end,
+          "tempo fora do vídeo é puxado para dentro (não some, não quebra)")
+
+    tl = svc.timeline_summary(svc.load(pid))
+    blocos = tl["blocks"]
+    if len(blocos) >= 2:
+        texto = F.chamar(cliente, "transicao", {"projeto": pid, "tipo": "flash",
+                                                "tempo": blocos[1]["out_start"] + 0.05})
+        xs = svc.load(pid).plan.transicoes
+        check(len(xs) == 1 and xs[0].clip_id == blocos[1]["id"],
+              f"transição pelo tempo cai na emenda mais perto ({texto})")
+        F.chamar(cliente, "transicao", {"projeto": pid, "tipo": "zoom",
+                                        "bloco": blocos[1]["id"]})
+        xs = svc.load(pid).plan.transicoes
+        check(len(xs) == 1 and xs[0].tipo == "zoom",
+              "uma transição por emenda: a nova substitui")
+        emendas = [x for x in svc.timeline_summary(svc.load(pid))["transicoes"]]
+        check(emendas and abs(emendas[0]["emenda"] - blocos[1]["out_start"]) < 1e-6,
+              "o trilho recebe a transição já na posição da emenda")
+        # um corte DENTRO do bloco que entra troca o id dele; a transição
+        # reencontra o bloco pela âncora na fonte e continua na mesma emenda
+        bloco = blocos[-1]
+        F.chamar(cliente, "transicao", {"projeto": pid, "tipo": "glitch",
+                                        "bloco": bloco["id"]})
+        palavra = next((w for w in svc.load(pid).analysis["words"]
+                        if bloco["src_start"] + 0.3 < w["start"] < bloco["src_end"]), None)
+        check(palavra is not None, "há palavra no meio do último bloco para cortar")
+        if palavra is not None:
+            F.chamar(cliente, "cortar", {"projeto": pid, "palavras": [palavra["i"]]})
+            depois = svc.timeline_summary(svc.load(pid))
+            ids = {b["id"] for b in depois["blocks"]}
+            x = next(t for t in depois["transicoes"] if t["tipo"] == "glitch")
+            check(bloco["id"] not in ids and x["clip_id"] in ids
+                  and x["emenda"] is not None
+                  and abs(x["emenda"] - bloco["out_start"]) < 0.05,
+                  "um corte dentro do bloco não perde a transição: ela reencontra "
+                  "o bloco pela âncora na fonte")
+    else:
+        check(False, f"o corte devia ter criado emendas ({len(blocos)} bloco)")
+    texto = F.chamar(cliente, "transicao", {"projeto": pid, "bloco": "nao_existe"})
+    check("não está no vídeo" in texto, "bloco que não existe volta explicado")
+    texto = F.chamar(cliente, "camada", {"projeto": pid, "efeito": "desfoque",
+                                         "inicio": 0.5, "fim": 2.0, "forca": 0.7})
+    check(len(svc.load(pid).plan.camadas) == 1 and "desfoque" in texto,
+          "camada separa pessoa e fundo no intervalo")
+
+    # ---- os olhos: o quadro de VERDADE, com o título
+    r = F.chamar(cliente, "ver_quadros", {"projeto": pid, "tempos": [1.5, 6.0],
+                                          "lado": 240})
+    imagens = [x for x in r["content"] if x["type"] == "image"]
+    check(len(imagens) == 2 and imagens[0]["mimeType"] == "image/jpeg",
+          "ver_quadros devolve IMAGENS (conteúdo de imagem do MCP)")
+    com = _jpeg_para_rgb(base64.b64decode(imagens[0]["data"]))
+    sem = _jpeg_para_rgb(base64.b64decode(imagens[1]["data"]))
+    h, w, _ = com.shape
+    # o painel claro do título: centro em (0,5; 0,2), corpo pelo lado menor
+    faixa = lambda q: q[int(h * 0.19):int(h * 0.21), int(w * 0.42):int(w * 0.58)].mean()  # noqa: E731
+    check(faixa(com) > faixa(sem) + 40,
+          f"no quadro do título, o painel claro está lá ({faixa(com):.0f} contra "
+          f"{faixa(sem):.0f} sem gráfico) — o quadro é o encode de verdade")
+    check(min(w, h) == 180,
+          f"no tamanho pedido, sem ampliar a fonte de 180 px ({w}x{h})")
+    rota = tc.get(f"/api/projects/{pid}/pos/quadro.jpg", params={"t": 1.0, "lado": 240})
+    check(rota.status_code == 200 and rota.content[:2] == b"\xff\xd8",
+          "e a tela tem o mesmo quadro em JPEG direto")
+
+    # pelo protocolo, a imagem chega como conteúdo de imagem
+    saida = io.StringIO()
+    servir(io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                   "params": {"name": "ver_quadros", "arguments": {
+                                       "projeto": pid, "tempos": [1.0], "lado": 240}}})
+                       + "\n"), saida, cliente)
+    resp = json.loads(saida.getvalue())
+    tipos = [x["type"] for x in resp["result"]["content"]]
+    check("image" in tipos and not resp["result"]["isError"],
+          "tools/call de ver_quadros responde com imagem pelo protocolo")
+
+    texto = F.chamar(cliente, "analisar_cena", {"projeto": pid, "tempo": 1.0})
+    check("cena em" in texto and "luz" in texto and "fala" in texto,
+          f"analisar_cena descreve o quadro e a fala dali ({texto[:120]!r})")
+
+    # a mão dele fica: tirar tudo só leva o que o Claude pôs
+    p = svc.load(pid)
+    from editor.models import Grafico
+    p.plan.graficos.append(Grafico(tipo="texto", texto="meu", out_start=0, out_end=1))
+    p.save_plan()
+    texto = F.chamar(cliente, "tirar_da_pos", {"projeto": pid, "tudo": True})
+    p = svc.load(pid)
+    check([g.texto for g in p.plan.graficos] == ["meu"] and not p.plan.camadas
+          and not p.plan.transicoes,
+          f"tirar_da_pos tudo=true leva só o que o Claude pôs ({texto})")
+
+    # sem Gemini: a receita marca o Claude como editor e o corte da IA pula
+    from editor.server import aplicar_receita
+    aplicar_receita(p, {"editor": "claude"})
+    check(p.plan.editor == "claude", "a receita marca o Claude como editor")
+
+    class _Ctx:
+        def stage(self, *a, **k): pass
+        def progress(self, *a, **k): pass
+    rel = svc._cortes_da_ia(p, _Ctx(), [], [], [])
+    check(rel and rel.get("pulada") and rel.get("erro") == "claude",
+          "com o Claude editando, o Gemini não decide os cortes")
+    p.save_plan()
+    check(svc.load(pid).plan.editor == "claude", "e isso fica gravado no plano")
+
+
 def main() -> int:
     install(["frase %d" % i for i in range(20)])
     tc = TestClient(app)
@@ -251,6 +408,8 @@ def main() -> int:
         texto = F.chamar(cliente, "cortar", {"projeto": pid})
         check("diga as palavras" in texto,
               "cortar sem argumento explica o que falta em vez de estourar")
+        testar_pos_edicao(cliente, tc, pid)
+
         texto = F.chamar(cliente, "ferramenta_que_nao_existe", {})
         check("não existe ferramenta" in texto and "cortar" in texto,
               "nome errado de ferramenta lista as que existem")

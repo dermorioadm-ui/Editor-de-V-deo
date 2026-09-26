@@ -28,6 +28,35 @@ NOME = "sharkcut"
 VERSAO = "1.0.0"
 
 
+INSTRUCOES = (
+    "Ferramentas do Sharkcut, o editor de vídeo que roda nesta máquina. Os "
+    "arquivos NUNCA saem daqui: as ferramentas recebem o CAMINHO do arquivo no "
+    "disco, não o arquivo. Comece por estado_do_editor se algo parecer errado, "
+    "e por abrir_video quando ele disser o nome de um arquivo.\n\n"
+    "VOCÊ É O EDITOR. Quando ele pedir para você editar (ou fazer a "
+    "pós-edição), o fluxo é:\n"
+    "1. editar_sozinho com sem_gemini=true — o corte, a legenda e o zoom saem "
+    "pela regra do programa; o Gemini não decide nada.\n"
+    "2. transcricao e cortar para tirar o que sobrou (repetição, frase "
+    "errada), se precisar.\n"
+    "3. pos_contexto — o roteiro com os tempos do vídeo FINAL.\n"
+    "4. Planeje a pós como um editor de After Effects: um título forte no "
+    "gancho; uma TELA de tópico (tipo tela, prefixo 'PARTE 1'...) quando o "
+    "assunto muda; LISTA quando ele enumera (cada item entrando na hora em que "
+    "é falado, com itens_em); NUMERO quando cita valor ou porcentagem; NOME no "
+    "começo; DESTAQUE na palavra que carrega a frase; transições nas emendas "
+    "que mudam de assunto (poucas — uma a cada 15–30 s, nunca em toda emenda); "
+    "camada desfoque ou escurecer nos momentos de ênfase; parallax para o "
+    "efeito 3D; texto ATRÁS da pessoa (camada=atras) em títulos grandes quando "
+    "a pessoa está no centro. Menos é mais: um gráfico por ideia, nunca em "
+    "cima da legenda, nunca cobrindo o rosto.\n"
+    "5. analisar_cena antes de posicionar — ela diz onde a pessoa está e o que "
+    "está livre.\n"
+    "6. ver_quadros para CONFERIR tudo o que pôs, e corrija com grafico(id=...).\n"
+    "7. exportar."
+)
+
+
 def _aviso(texto: str) -> None:
     print(texto, file=sys.stderr, flush=True)
 
@@ -58,13 +87,7 @@ def tratar(pedido: dict, cliente: Cliente) -> tuple[bool, dict | None]:
             "protocolVersion": versao,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": NOME, "version": VERSAO},
-            "instructions": (
-                "Ferramentas do Sharkcut, o editor de vídeo que roda nesta "
-                "máquina. Os arquivos NUNCA saem daqui: as ferramentas recebem "
-                "o CAMINHO do arquivo no disco, não o arquivo. Comece por "
-                "estado_do_editor se algo parecer errado, e por abrir_video "
-                "quando ele disser o nome de um arquivo."
-            ),
+            "instructions": INSTRUCOES,
         }
 
     if metodo in ("notifications/initialized", "initialized", "notifications/cancelled"):
@@ -81,7 +104,9 @@ def tratar(pedido: dict, cliente: Cliente) -> tuple[bool, dict | None]:
         nome = params.get("name", "")
         argumentos = params.get("arguments") or {}
         try:
-            return True, _texto(chamar(cliente, nome, argumentos))
+            r = chamar(cliente, nome, argumentos)
+            # ferramenta que devolve IMAGEM (ver_quadros) já monta o conteúdo
+            return True, (r if isinstance(r, dict) else _texto(r))
         except EditorFora as exc:
             return True, _texto(str(exc), erro=True)
         except ErroDoEditor as exc:

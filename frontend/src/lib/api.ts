@@ -313,6 +313,22 @@ export const api = {
     patch<any>(`/api/projects/${id}/media/${mid}`, { descricao }),
   safeZone: (id: string) => req<any>(`/api/projects/${id}/safe-zone`),
   bitrateEstimate: (id: string) => req<any>(`/api/projects/${id}/bitrate-estimate`),
+
+  // A PÓS-EDIÇÃO — gráficos animados, camadas (pessoa x fundo), transições.
+  // O que muda aqui só grava o plano: sai no próximo encode, no mesmo passe.
+  pos: (id: string) => req<any>(`/api/projects/${id}/pos`),
+  posCriar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes', dados: any) =>
+    post<any>(`/api/projects/${id}/pos/${tipo}`, dados),
+  posMudar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes', iid: string,
+             dados: any) => put<any>(`/api/projects/${id}/pos/${tipo}/${iid}`, dados),
+  posApagar: (id: string, iid: string) => del<any>(`/api/projects/${id}/pos/${iid}`),
+  posTirar: (id: string, dados: { ids?: string[]; tudo?: boolean; origem?: string }) =>
+    post<any>(`/api/projects/${id}/pos/tirar`, dados),
+  /** o quadro EXATO do vídeo final — o encode de verdade, parado em t */
+  posQuadroUrl: (id: string, t: number, lado = 540) =>
+    `/api/projects/${id}/pos/quadro.jpg?t=${t.toFixed(3)}&lado=${lado}&_=${Date.now()}`,
+  recorteEstado: () => req<any>('/api/recorte/estado'),
+  recorteBaixar: () => post<any>('/api/recorte/baixar', {}),
 }
 
 export function connectJobs(onJob: (job: Job) => void): () => void {

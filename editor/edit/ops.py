@@ -460,14 +460,17 @@ def remap_output_items(plan, old_tl: Timeline, new_tl: Timeline) -> list[dict]:
 
     moved: list[dict] = []
     for kind, items in (("cutaway", plan.cutaways), ("overlay", plan.overlays),
-                        ("blur", plan.blurs)):
+                        ("blur", plan.blurs),
+                        # a pós-edição também vive na linha de saída
+                        ("grafico", getattr(plan, "graficos", []) or []),
+                        ("camada", getattr(plan, "camadas", []) or [])):
         for item in items:
             a = remap(item.out_start)
             b = remap(item.out_end)
             if a is None or b is None:
                 continue
             orig = item.out_end - item.out_start
-            if kind == "overlay" and b - a < 0.2:
+            if kind in ("overlay", "grafico", "camada") and b - a < 0.2:
                 # sobreposição é decorativa: preserva a duração ancorada no início
                 b = min(new_tl.duration, a + orig)
             if b <= a:

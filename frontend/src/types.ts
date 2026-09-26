@@ -124,6 +124,8 @@ export interface TimelineView {
   look?: string; look_vignette?: number | null; word_fixes?: WordFix[]
   tracks?: Track[]; zoom_scenes?: ZoomScene[]; zoom_audit?: ZoomIssue[]
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
+  /** a pós-edição: gráficos animados, camadas de profundidade, transições */
+  graficos?: any[]; camadas?: any[]; transicoes?: any[]; editor?: string
 }
 
 export interface MediaInfo {

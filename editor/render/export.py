@@ -147,6 +147,10 @@ def export_project(
     segs = render_video_segments(
         segs, plan, main, cues, work / sub, media_paths, hw,
         on_progress=lambda f, m: report(f, m, 0.02, 0.62), cancel=cancel)
+    for s in segs:
+        for aviso in getattr(s, "avisos", None) or []:
+            if aviso not in pre_warnings:
+                pre_warnings.append(aviso)
 
     # 3) concat SEM reencodar
     report(0.0, "juntando os trechos (sem reencodar)", 0.62, 0.66)
