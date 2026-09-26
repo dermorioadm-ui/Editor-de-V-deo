@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
-import { getPlayhead, setPlayhead, toast, useStore } from '../state/store'
+import { getPlayhead, setPlayhead, setState, toast, useStore } from '../state/store'
 import { EFEITOS_CAMADA, TIPOS_GRAFICO, TIPOS_TRANSICAO } from './PosInspector'
 
 const NOME_TIPO = Object.fromEntries(TIPOS_GRAFICO)
@@ -38,6 +38,8 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
   const [recorte, setRecorte] = useState<any>(null)
+  const activeJob = useStore((s) => s.activeJob)
+  const claudeRodando = activeJob?.kind === 'claude' && ['fila', 'rodando'].includes(activeJob.status)
   const [baixando, setBaixando] = useState(false)
 
   useEffect(() => {
@@ -132,6 +134,21 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
             Os gráficos funcionam sem ele.</span>
         )}
       </div>
+
+      <button className="btn btn-primary w-full" data-acao="claude-pos"
+              disabled={!!claudeRodando}
+              onClick={async () => {
+                try {
+                  const job = await api.claudePedir(project.id, '', 'pos')
+                  setState({ activeJob: job })
+                  toast('info', 'O Claude está fazendo a pós-edição',
+                    'Títulos, telas, transições e camadas por cima da edição. Acompanhe no topo.')
+                } catch (e: any) {
+                  toast('warn', 'Não deu para chamar o Claude', String(e.message ?? e))
+                }
+              }}>
+        {claudeRodando ? 'o Claude está trabalhando…' : 'O Claude faz a pós-edição (1 clique)'}
+      </button>
 
       <div>
         <span className="label">pôr no cursor</span>

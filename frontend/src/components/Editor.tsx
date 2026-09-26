@@ -44,11 +44,14 @@ function FaixaDoClaude({ projectId, edicao, onVerPos }: {
   const [aberto, setAberto] = useState(false)
   const [pedido, setPedido] = useState('')
   const activeJob = useStore((s) => s.activeJob)
+  const view = useStore((s) => s.timeline)
+  const semPos = !((view?.graficos?.length ?? 0) + (view?.camadas?.length ?? 0)
+                   + (view?.transicoes?.length ?? 0))
   const rodando = activeJob?.kind === 'claude' && activeJob.project_id === projectId
     && ['fila', 'rodando'].includes(activeJob.status)
-  const pedir = async (texto: string) => {
+  const pedir = async (texto: string, modo: '' | 'pos' = '') => {
     try {
-      const job = await api.claudePedir(projectId, texto)
+      const job = await api.claudePedir(projectId, texto, modo)
       setState({ activeJob: job })
       setPedido('')
     } catch (e: any) {
@@ -62,7 +65,10 @@ function FaixaDoClaude({ projectId, edicao, onVerPos }: {
       <div className="flex items-center gap-3">
         <span className="text-amber-200 font-medium">
           {rodando ? 'O Claude está editando…'
-            : falhou ? 'O Claude não editou este vídeo' : 'O Claude editou este vídeo'}
+            : falhou ? 'O Claude não editou este vídeo'
+            : edicao?.modo === 'pos' ? 'O Claude fez a pós-edição'
+            : edicao?.modo === 'edicao' ? 'O Claude editou (sem pós-edição)'
+            : edicao ? 'O Claude editou este vídeo' : 'O Claude é o editor deste vídeo'}
         </span>
         <span className="text-slate-400 truncate">
           {rodando ? (activeJob?.message ?? '')
@@ -75,7 +81,13 @@ function FaixaDoClaude({ projectId, edicao, onVerPos }: {
             {aberto ? 'fechar' : 'o que ele fez'}</button>
         )}
         {falhou && !rodando && (
-          <button className="btn btn-xs" onClick={() => pedir('')}>tentar de novo com o Claude</button>
+          <button className="btn btn-xs" onClick={() => pedir('', edicao?.modo === 'pos' ? 'pos' : '')}>
+            tentar de novo com o Claude</button>
+        )}
+        {semPos && !rodando && !falhou && (
+          <button className="btn btn-xs" data-acao="fazer-pos" onClick={() => pedir('', 'pos')}
+                  title="títulos animados, telas de tópico, transições e camadas por cima desta edição">
+            fazer a pós-edição</button>
         )}
         <button className="btn btn-xs ml-auto" onClick={onVerPos}>ver a pós</button>
       </div>
@@ -683,6 +695,11 @@ export default function Editor() {
           </div>
         )
       })()}
+
+      {analysed && view?.editor !== 'claude' && project.analysis?.claude_edicao && (
+        <FaixaDoClaude projectId={project.id} edicao={project.analysis.claude_edicao}
+                       onVerPos={() => setTab('pos')} />
+      )}
 
       {analysed && view && (() => {
         // O veredito. O usuário reclamou que o editor não entregava pronto:

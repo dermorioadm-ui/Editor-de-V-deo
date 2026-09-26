@@ -431,10 +431,13 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     fontes_extras = [str(m) for m in (payload.get("fontes_extras") or []) if m]
 
     claude = project.plan.editor == "claude"
+    com_pos = bool(project.plan.pos_claude)
 
     def pipeline(ctx) -> dict:
         if claude:
-            res = _clique_do_claude(pid, ctx, fontes_extras)
+            res = _clique_do_claude(pid, ctx, fontes_extras, com_pos)
+        elif com_pos:
+            res = _clique_com_pos(pid, ctx, fontes_extras)
         else:
             res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras)
         # e o MP4 final continua sendo gerado — por baixo, sem segurar a tela.
@@ -453,10 +456,42 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     # trabalhos (refazer o corte, baixar b-roll). Na fila única, eles
     # esperariam o clique único e o clique único esperaria por eles: roda em
     # linha própria (ver JobQueue.submit).
-    return _run("clique-unico", pid, pipeline, paralelo=claude)
+    return _run("clique-unico", pid, pipeline, paralelo=claude or com_pos)
 
 
-def _clique_do_claude(pid: str, ctx, fontes_extras: list[str]) -> dict:
+def _previa_e_pronto(pid: str, ctx, res: dict, lo: float) -> dict:
+    p = svc.load(pid)
+    try:
+        res["previa"] = svc._scoped(ctx, lo, 1.0, lambda c: svc.previa_da_edicao(p, c))
+    except Exception as exc:  # noqa: BLE001
+        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
+        res["previa"] = {"ok": False}
+    p.set_status("pronto")
+    res["duracao"] = round(svc.duracao_de_saida(p), 2)
+    return res
+
+
+def _clique_com_pos(pid: str, ctx, fontes_extras: list[str]) -> dict:
+    """A edição de sempre (Gemini ou regra) e, por cima, a pós do Claude.
+
+    É o "entregar finalizado" sem trocar quem edita: o Gemini corta como
+    sempre cortou, e o Claude entra só com títulos, telas, transições e
+    camadas. Se o Claude não rodar, o vídeo sai com a edição, sem a pós.
+    """
+    from . import claude_editor
+
+    res = svc._scoped(ctx, 0.0, 0.72, lambda c: svc.one_click(
+        svc.load(pid), c, fontes_extras=fontes_extras, sem_previa=True))
+    res["claude"] = svc._scoped(ctx, 0.72, 0.95,
+                                lambda c: claude_editor.editar(pid, c, modo="pos"))
+    if not res["claude"].get("ok"):
+        ctx.progress(0.95, "a pós do Claude não entrou: o vídeo sai só com a edição — "
+                           + (res["claude"].get("erro") or ""))
+    return _previa_e_pronto(pid, ctx, res, 0.95)
+
+
+def _clique_do_claude(pid: str, ctx, fontes_extras: list[str],
+                      com_pos: bool = True) -> dict:
     """O clique único com o Claude Code como editor, de ponta a ponta.
 
     O programa faz o mecânico (transcrever, cortar o silêncio pela regra,
@@ -469,8 +504,9 @@ def _clique_do_claude(pid: str, ctx, fontes_extras: list[str]) -> dict:
 
     res = svc.one_click(svc.load(pid), ctx, fontes_extras=fontes_extras,
                         para_o_claude=True)
+    modo = "completo" if com_pos else "edicao"
     res["claude"] = svc._scoped(ctx, 0.62, 0.94,
-                                lambda c: claude_editor.editar(pid, c))
+                                lambda c: claude_editor.editar(pid, c, modo=modo))
     p = svc.load(pid)
     if not res["claude"].get("ok"):
         ctx.progress(0.94, "o Claude não editou: o vídeo sai pela regra — "
@@ -487,16 +523,7 @@ def _clique_do_claude(pid: str, ctx, fontes_extras: list[str]) -> dict:
                     p, c, p.plan.broll.get("frequencia", "medio")))
             except Exception as exc:  # noqa: BLE001
                 res["broll"] = {"ok": False, "erro": str(exc)}
-        p = svc.load(pid)
-    try:
-        res["previa"] = svc._scoped(ctx, 0.96, 1.0,
-                                    lambda c: svc.previa_da_edicao(p, c))
-    except Exception as exc:  # noqa: BLE001
-        ctx.progress(1.0, f"prévia da edição falhou ({exc})")
-        res["previa"] = {"ok": False}
-    p.set_status("pronto")
-    res["duracao"] = round(svc.duracao_de_saida(p), 2)
-    return res
+    return _previa_e_pronto(pid, ctx, res, 0.96)
 
 
 @app.post("/api/projects/{pid}/export")
@@ -571,6 +598,8 @@ def aplicar_receita(project, payload: dict) -> None:
         plan.editor = "claude" if payload.get("editor") == "claude" else ""
     if "pedido_claude" in payload:
         plan.pedido_claude = str(payload.get("pedido_claude") or "")[:4000]
+    if "pos_claude" in payload:
+        plan.pos_claude = bool(payload.get("pos_claude"))
     if "alvo_duracao" in payload:
         try:
             plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
@@ -2427,8 +2456,10 @@ def api_claude_estado(forcar: bool = False) -> dict:
     """Se o Claude Code está nesta máquina, e o que a primeira tela lembra."""
     from . import claude_editor
 
+    pos = db.get_setting("pos_padrao", None)
     return {**claude_editor.estado(forcar),
             "editor_padrao": str(db.get_setting("editor_padrao", "") or ""),
+            "pos_padrao": None if pos is None else bool(pos),
             "modelos": list(claude_editor.MODELOS)}
 
 
@@ -2446,6 +2477,8 @@ def api_claude_config(payload: dict = Body(...)) -> dict:
         if modelo not in claude_editor.MODELOS:
             raise HTTPException(400, "modelo desconhecido")
         db.set_setting("claude_modelo", modelo)
+    if "pos_padrao" in payload:
+        db.set_setting("pos_padrao", bool(payload.get("pos_padrao")))
     if "editor_padrao" in payload:
         db.set_setting("editor_padrao",
                        str(payload.get("editor_padrao") or "") if
@@ -2459,17 +2492,28 @@ def api_claude_retoque(pid: str, payload: dict = Body(default={})) -> dict:
 
     Com ``pedido``, ele faz SÓ aquilo em cima do que já existe; sem, refaz a
     edição dele inteira (útil quando o login do Claude Code faltou no clique
-    único). Depois, prévia e arquivo final, como no clique único.
+    único). ``modo="pos"`` é o botão "fazer a pós-edição": só títulos,
+    telas, transições e camadas, em cima da edição que já existe — seja de
+    quem for. Depois, prévia e arquivo final, como no clique único.
     """
     from . import claude_editor
 
     project = _project(pid)
     texto = str(payload.get("pedido") or "").strip()[:4000]
-    project.plan.editor = "claude"
+    modo = str(payload.get("modo") or "")
+    if modo == "pos":
+        # "fazer a pós-edição" num clique: quem editou continua quem editou
+        project.plan.pos_claude = True
+    else:
+        # pedido livre: tudo liberado (ele pode pedir um corte OU um título);
+        # refazer sem pedido respeita a escolha de pós da primeira tela
+        modo = "completo" if (texto or project.plan.pos_claude) else "edicao"
+        project.plan.editor = "claude"
     project.save_plan()
 
     def pipeline(ctx) -> dict:
-        r = svc._scoped(ctx, 0.0, 0.9, lambda c: claude_editor.editar(pid, c, retoque=texto))
+        r = svc._scoped(ctx, 0.0, 0.9, lambda c: claude_editor.editar(
+            pid, c, retoque=texto, modo=modo))
         p = svc.load(pid)
         try:
             previa = svc._scoped(ctx, 0.9, 1.0, lambda c: svc.previa_da_edicao(p, c))

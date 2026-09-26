@@ -72,6 +72,9 @@ export default function Home() {
   const [pedidoClaude, setPedidoClaude] = useState('')
   const [claudeCaminho, setClaudeCaminho] = useState('')
   const [testandoClaude, setTestandoClaude] = useState(false)
+  // A PÓS-EDIÇÃO DO CLAUDE: entregar finalizado (com títulos, telas,
+  // transições, camadas) ou só a edição. null = o que ficou lembrado
+  const [posClaude, setPosClaude] = useState<boolean | null>(null)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
   const [extras, setExtras] = useState<string[]>([])
@@ -208,6 +211,13 @@ export default function Home() {
     || (claude?.editor_padrao as any)
     || (claude?.instalado ? 'claude' : ia?.tem_chave ? 'gemini' : 'regra')
 
+  const posDaVez: boolean = posClaude ?? (claude?.pos_padrao ?? !!claude?.instalado)
+
+  async function escolherPos(v: boolean) {
+    setPosClaude(v)
+    try { setClaude(await api.claudeConfig({ pos_padrao: v })) } catch { /* só lembrança */ }
+  }
+
   async function escolherEditor(e: 'claude' | 'gemini' | 'regra') {
     setEditor(e)
     try { setClaude(await api.claudeConfig({ editor_padrao: e })) } catch { /* só lembrança */ }
@@ -229,7 +239,10 @@ export default function Home() {
   function receita() {
     return {
       editor: editorDaVez === 'claude' ? 'claude' : '',
-      pedido_claude: editorDaVez === 'claude' ? pedidoClaude.trim() : '',
+      pedido_claude: (editorDaVez === 'claude' || posDaVez) ? pedidoClaude.trim() : '',
+      // a pós do Claude vale para QUALQUER editor: com o Gemini cortando, o
+      // Claude entra só com títulos, telas, transições e camadas
+      pos_claude: posDaVez && !!claude?.instalado,
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       alvo_duracao: alvo,
       speed: { global_multiplier: velocidade },
@@ -523,6 +536,32 @@ export default function Home() {
               O corte sai só pela regra do programa (silêncio, palma, assobio, comando
               falado), sem IA nenhuma.
             </p>
+          )}
+          {/* A PÓS-EDIÇÃO DO CLAUDE, num clique: independe de quem edita */}
+          <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-line/60"
+               data-pos-claude={posDaVez ? 'sim' : 'nao'}>
+            <span className="text-sm text-slate-200 mr-1">Pós-edição do Claude</span>
+            <button className={`btn btn-xs ${posDaVez ? 'btn-primary' : ''}`} data-pos="sim"
+                    disabled={!claude?.instalado} onClick={() => escolherPos(true)}>
+              entregar finalizado</button>
+            <button className={`btn btn-xs ${!posDaVez ? 'btn-primary' : ''}`} data-pos="nao"
+                    onClick={() => escolherPos(false)}>só a edição</button>
+            <span className="text-[11px] text-slate-500 basis-full">
+              {!claude?.instalado
+                ? 'precisa do Claude Code nesta máquina'
+                : posDaVez
+                ? `títulos animados, telas de tópico, listas, números, transições, fundo desfocado e texto atrás de você — por cima da edição${editorDaVez === 'gemini' ? ' do Gemini' : editorDaVez === 'regra' ? ' da regra' : ''}`
+                : 'o vídeo sai só com a edição (cortes, ritmo, legenda, b-roll). Dá para pôr a pós depois, no editor, num clique.'}
+            </span>
+          </div>
+          {editorDaVez !== 'claude' && posDaVez && claude?.instalado && (
+            <label className="block">
+              <span className="label">o que você quer na pós (opcional)</span>
+              <textarea className="field w-full text-xs" rows={2} value={pedidoClaude}
+                        data-campo="pedido-pos"
+                        placeholder="ex.: telas de tópico, título amarelo no gancho, texto atrás de mim no começo"
+                        onChange={(e) => setPedidoClaude(e.target.value)} />
+            </label>
           )}
         </div>
 

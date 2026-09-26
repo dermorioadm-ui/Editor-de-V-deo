@@ -1270,7 +1270,7 @@ def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
 
 
 def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
-              para_o_claude: bool = False) -> dict:
+              para_o_claude: bool = False, sem_previa: bool = False) -> dict:
     """O clique único — TUDO antes de o editor abrir.
 
     O usuário solta o arquivo e recebe o vídeo PRONTO: cortado (pela IA, com
@@ -1341,6 +1341,11 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
         except Exception as exc:  # noqa: BLE001 — o vídeo sai sem b-roll
             ctx.progress(0.72, f"b-roll automático não entrou ({exc})")
             br = {"ok": False, "erro": str(exc)}
+    if sem_previa:
+        # a pós-edição do Claude entra AGORA, por cima da edição pronta, e a
+        # prévia só depois dela (quem chama — server.api_oneclick — cuida)
+        return {"analysis": a, "edit": b, "resumo": r, "anexos": x,
+                "broll": br, "duracao": round(duracao_de_saida(project), 2)}
     # A CÓPIA LEVE DA FONTE saiu do caminho crítico. Ela existe para arrastar a
     # agulha sobre a fonte, e o player só cai nela enquanto a prévia da edição
     # está sendo refeita — ou seja, só depois do primeiro retoque. Gerá-la aqui

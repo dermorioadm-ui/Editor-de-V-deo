@@ -391,6 +391,11 @@ class EditPlan:
     # o que ele pediu ao Claude na primeira tela ("corte seco, legenda amarela,
     # telas de tópico..."): vai junto no pedido de edição
     pedido_claude: str = ""
+    # A PÓS-EDIÇÃO DO CLAUDE no clique único (o "After Effects": títulos,
+    # telas de tópico, transições, camadas). Independe de quem edita: com o
+    # Gemini ou a regra editando, o Claude entra só para a pós. Desligada, o
+    # vídeo sai só com a edição.
+    pos_claude: bool = False
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -435,6 +440,7 @@ class EditPlan:
             "transicoes": [x.to_dict() for x in self.transicoes],
             "editor": self.editor,
             "pedido_claude": self.pedido_claude,
+            "pos_claude": self.pos_claude,
             "version": self.version,
         }
 
@@ -481,6 +487,7 @@ class EditPlan:
         plan.broll = dict(data.get("broll") or {})
         plan.editor = "claude" if data.get("editor") == "claude" else ""
         plan.pedido_claude = str(data.get("pedido_claude") or "")[:4000]
+        plan.pos_claude = bool(data.get("pos_claude", False))
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]
         plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])

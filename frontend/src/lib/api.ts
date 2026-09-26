@@ -330,12 +330,13 @@ export const api = {
   recorteEstado: () => req<any>('/api/recorte/estado'),
   // O CLAUDE COMO EDITOR: o Claude Code desta máquina, sem janela
   claudeEstado: (forcar = false) => req<any>(`/api/claude/estado${forcar ? '?forcar=true' : ''}`),
-  claudeConfig: (dados: { caminho?: string; modelo?: string; editor_padrao?: string }) =>
+  claudeConfig: (dados: { caminho?: string; modelo?: string; editor_padrao?: string;
+                          pos_padrao?: boolean }) =>
     post<any>('/api/claude/config', dados),
   claudeTestar: () => post<any>('/api/claude/testar', {}),
   /** pedir ao Claude de dentro do editor ("agora aumenta a legenda") */
-  claudePedir: (id: string, pedido: string) =>
-    post<Job>(`/api/projects/${id}/claude`, { pedido }),
+  claudePedir: (id: string, pedido: string, modo: '' | 'pos' = '') =>
+    post<Job>(`/api/projects/${id}/claude`, { pedido, modo }),
   recorteBaixar: () => post<any>('/api/recorte/baixar', {}),
 }
 

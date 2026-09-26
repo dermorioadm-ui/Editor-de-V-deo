@@ -1528,6 +1528,27 @@ O que acontece:
    de processamento ("Claude: pondo título…", "Claude: conferindo 3 quadros…");
 3. o Sharkcut gera a prévia e o arquivo final. O editor abre com tudo pronto.
 
+### Finalizado ou só a edição: a pós do Claude é uma chave
+
+Logo abaixo de "Quem edita", a chave **Pós-edição do Claude**:
+
+| | o que sai |
+|---|---|
+| **entregar finalizado** | a edição **e** a pós por cima: títulos animados, telas de tópico, listas, números, transições, fundo desfocado, texto atrás de você |
+| **só a edição** | o que o Gemini fazia — cortes, ritmo, câmera, legenda, b-roll — sem nenhum gráfico por cima |
+
+Ela vale para **qualquer editor**: com o **Gemini** (ou a regra) cortando, o
+Claude entra só para a pós, por cima da edição do Gemini — e nessa hora ele
+**não pode** mexer em corte, ritmo ou legenda (as ferramentas nem existem
+para ele). Com o **Claude** editando e "só a edição", é o contrário: as
+ferramentas de gráfico ficam de fora. Há um campo para dizer o que você quer
+na pós ("telas de tópico, título amarelo no gancho").
+
+Entregou só a edição e depois quis a pós? No editor, **fazer a pós-edição**
+(na faixa do topo) ou **O Claude faz a pós-edição (1 clique)** (aba **Pós**):
+ela entra por cima do que já está lá, e a prévia e o arquivo são refeitos. Não
+gostou? **tirar o que o Claude pôs**, na mesma aba — volta a ser só a edição.
+
 No topo do editor fica o **relatório** do que ele fez, e um campo **pedir ao
 Claude**: "aumenta a legenda", "tira o título do começo", "põe uma tela de
 tópico em 0:40" — ele faz só aquilo, sem refazer o resto.

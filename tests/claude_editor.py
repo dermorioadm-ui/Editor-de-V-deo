@@ -213,6 +213,7 @@ def main() -> int:
         pid = p["id"]
         job = http("POST", f"/api/projects/{pid}/oneclick", {"receita": {
             "editor": "claude", "pedido_claude": "título amarelo no começo, corte seco",
+            "pos_claude": True,
             "broll": {"auto": False}}}, base=base)
         fim, msgs = esperar(base, pid, job["id"])
         check(fim["status"] == "ok", f"o clique único termina (não travou): {fim['status']}",
@@ -278,6 +279,68 @@ def main() -> int:
         check("PEDIU AGORA: aumenta a legenda" in a["prompt"]
               and "SÓ o que ele pediu" in a["prompt"],
               "e o Claude recebe só o pedido novo, para não refazer o resto")
+
+        print("\n-- o Claude editando, SEM a pós-edição (só o que o Gemini fazia)")
+        p3 = http("POST", "/api/projects", {"source_path": str(fonte), "name": "sem pós",
+                                            "preset": "VSL"}, base=base)
+        job = http("POST", f"/api/projects/{p3['id']}/oneclick", {"receita": {
+            "editor": "claude", "pos_claude": False, "broll": {"auto": False}}}, base=base)
+        fim, _m = esperar(base, p3["id"], job["id"])
+        a = json.loads(registro.read_text(encoding="utf-8"))
+        argv = a["argv"]
+        negadas = argv[argv.index("--disallowedTools") + 1].split(",")
+        proj = svc.load(p3["id"])
+        check(fim["status"] == "ok" and "mcp__sharkcut__grafico" in negadas
+              and "mcp__sharkcut__ritmo" not in negadas,
+              "sem pós: as ferramentas de gráfico nem existem para ele; as de edição sim")
+        check("SEM PÓS-EDIÇÃO" in a["prompt"] and not proj.plan.graficos
+              and any(abs(c.speed - 1.12) < 0.01 for c in proj.plan.clips),
+              "e o vídeo sai só com a edição dele — nenhum gráfico por cima")
+        check((proj.analysis.get("claude_edicao") or {}).get("modo") == "edicao",
+              "o relatório diz que foi edição sem pós")
+
+        print("\n-- a regra (ou o Gemini) edita, e o Claude entra SÓ com a pós")
+        p4 = http("POST", "/api/projects", {"source_path": str(fonte), "name": "só pós",
+                                            "preset": "VSL"}, base=base)
+        job = http("POST", f"/api/projects/{p4['id']}/oneclick", {"receita": {
+            "editor": "", "pos_claude": True, "pedido_claude": "telas de tópico",
+            "broll": {"auto": False}}}, base=base)
+        fim, _m = esperar(base, p4["id"], job["id"])
+        a = json.loads(registro.read_text(encoding="utf-8"))
+        argv = a["argv"]
+        permitidas = argv[argv.index("--allowedTools") + 1].split(",")
+        proj = svc.load(p4["id"])
+        res = fim.get("result") or {}
+        check(fim["status"] == "ok" and (res.get("claude") or {}).get("ok"),
+              "o clique único termina com a pós do Claude", fim.get("error") or "")
+        check("Você faz a PÓS-EDIÇÃO" in a["prompt"] and "telas de tópico" in a["prompt"],
+              "o Claude recebe o pedido de pós (não o de edição)")
+        check("mcp__sharkcut__grafico" in permitidas
+              and "mcp__sharkcut__ritmo" not in permitidas
+              and "mcp__sharkcut__cortar" not in permitidas
+              and "mcp__sharkcut__respiro" not in permitidas,
+              "na pós ele NÃO pode mexer na edição: corte, ritmo e fôlego ficam de fora")
+        check(len(proj.plan.graficos) == 1
+              and not any(abs(c.speed - 1.12) < 0.01 for c in proj.plan.clips),
+              "o gráfico entrou e a edição da regra ficou intacta")
+        check(proj.plan.editor == "" and res.get("final_job")
+              and (res.get("previa") or {}).get("ok") is not False,
+              "quem editou continua sendo a regra; prévia e arquivo final saem depois da pós")
+
+        print("\n-- o botão 'fazer a pós-edição' no editor")
+        p5 = http("POST", "/api/projects", {"source_path": str(fonte), "name": "pós depois",
+                                            "preset": "VSL"}, base=base)
+        job = http("POST", f"/api/projects/{p5['id']}/oneclick",
+                   {"receita": {"editor": "", "pos_claude": False, "broll": {"auto": False}}},
+                   base=base)
+        esperar(base, p5["id"], job["id"])
+        check(not svc.load(p5["id"]).plan.graficos, "entregou só a edição")
+        job = http("POST", f"/api/projects/{p5['id']}/claude", {"modo": "pos"}, base=base)
+        fim, _m = esperar(base, p5["id"], job["id"])
+        proj = svc.load(p5["id"])
+        check(fim["status"] == "ok" and len(proj.plan.graficos) == 1
+              and proj.plan.editor == "" and proj.plan.pos_claude,
+              "um clique depois, a pós entra por cima — sem trocar quem editou")
 
         print("\n-- sem login: o vídeo sai do mesmo jeito, pela regra")
         os.environ["CLAUDE_FALSO_MODO"] = "sem_login"

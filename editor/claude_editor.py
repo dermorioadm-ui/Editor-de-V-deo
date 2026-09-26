@@ -127,11 +127,42 @@ def _ajuda(caminho: str) -> str:
 
 
 # ------------------------------------------------------------------- montar
-def ferramentas_liberadas() -> list[str]:
+# TRÊS MODOS, porque ele decide vídeo a vídeo o que entregar:
+#   completo — a edição (o que o Gemini fazia) E a pós-edição (o "After
+#              Effects": títulos, telas, transições, camadas);
+#   edicao   — SÓ a edição: o vídeo sai cortado, no ritmo, legendado, com
+#              b-roll, sem nenhum gráfico por cima;
+#   pos      — SÓ a pós-edição, em cima de uma edição que já existe (do
+#              Gemini, da regra, dele à mão ou do próprio Claude antes).
+# A trava é na lista de ferramentas, não só no pedido: no modo "edicao" as
+# ferramentas de gráfico não existem para ele; no "pos", as de corte não.
+MODOS = ("completo", "edicao", "pos")
+FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "tirar_da_pos"}
+FERRAMENTAS_DE_LEITURA = {"pos_contexto", "transcricao", "ver_projeto", "ver_quadros",
+                          "analisar_cena", "estado_do_editor"}
+
+
+def _nomes() -> list[str]:
     from .mcp.ferramentas import catalogo
 
-    return [f"mcp__{SERVIDOR}__{f['name']}" for f in catalogo()
-            if f["name"] not in EXCLUIDAS]
+    return [f["name"] for f in catalogo()]
+
+
+def _liberadas(modo: str) -> set[str]:
+    todas = set(_nomes()) - EXCLUIDAS
+    if modo == "edicao":
+        return todas - FERRAMENTAS_DA_POS
+    if modo == "pos":
+        return (FERRAMENTAS_DE_LEITURA | FERRAMENTAS_DA_POS) & todas
+    return todas
+
+
+def ferramentas_liberadas(modo: str = "completo") -> list[str]:
+    return [f"mcp__{SERVIDOR}__{n}" for n in _nomes() if n in _liberadas(modo)]
+
+
+def ferramentas_negadas(modo: str = "completo") -> list[str]:
+    return [f"mcp__{SERVIDOR}__{n}" for n in _nomes() if n not in _liberadas(modo)]
 
 
 def config_mcp(pasta: Path) -> Path:
@@ -155,10 +186,24 @@ SISTEMA = (
     "Escreva em português do Brasil."
 )
 
+GUIA_DA_POS = (
+    "PÓS-EDIÇÃO com grafico, transicao e camada: título forte no gancho; "
+    "tela de tópico quando o assunto muda; lista quando ele enumera (cada item "
+    "entrando quando é falado, com itens_em); número quando cita valor; nome "
+    "no começo se ele se apresenta; destaque na palavra que carrega a frase; "
+    "poucas transições (nas mudanças de assunto); camada desfoque/escurecer "
+    "nos momentos de ênfase; texto atrás da pessoa em títulos grandes quando "
+    "ela está no centro. Use analisar_cena para posicionar. Um gráfico por "
+    "ideia, nunca em cima da legenda, nunca cobrindo o rosto.")
+
 
 def _freq(f: str) -> str:
     return {"pouco": "pouco (um a cada ~20 s)", "medio": "médio (um a cada ~12 s)",
             "muito": "muito (um a cada ~7 s)"}.get(f, f)
+
+
+def _dono(plan) -> str:
+    return (getattr(plan, "pedido_claude", "") or "").strip()
 
 
 def pedido_de_retoque(project, texto: str) -> str:
@@ -179,16 +224,43 @@ def pedido_de_retoque(project, texto: str) -> str:
     ])
 
 
-def pedido(project) -> str:
+def pedido_da_pos(project) -> str:
+    """SÓ a pós-edição, por cima de uma edição que já está pronta."""
+    from .projects import duracao_de_saida
+
+    dono = _dono(project.plan)
+    return "\n".join([
+        f"Você faz a PÓS-EDIÇÃO do projeto {project.id} (\"{project.name}\") no "
+        f"Sharkcut. A edição (cortes, ritmo, câmera, legenda, b-roll) já está "
+        f"pronta ({duracao_de_saida(project):.1f} s) e NÃO é sua para mexer: você "
+        f"só acrescenta por cima.",
+        "",
+        "O QUE O DONO DO VÍDEO PEDIU: " + (dono or "nada específico — a pós que "
+                                           "um editor de After Effects faria."),
+        "",
+        "ORDEM DE TRABALHO:",
+        "1. pos_contexto (o roteiro com os tempos do vídeo final) e, se precisar, "
+        "transcricao.",
+        "2. " + GUIA_DA_POS,
+        "3. CONFIRA com ver_quadros o começo, cada gráfico e cada transição, e "
+        "corrija o que ficou ruim com grafico(id=...).",
+        "4. Termine com um RELATÓRIO curto, em tópicos, do que você pôs e por quê. "
+        "Você não exporta: o Sharkcut gera a prévia e o arquivo sozinho.",
+    ])
+
+
+def pedido(project, modo: str = "completo") -> str:
     """O pedido de edição, com o que a primeira tela decidiu."""
     from .projects import duracao_de_saida
 
+    if modo == "pos":
+        return pedido_da_pos(project)
     plan = project.plan
     info = project.info
     dur = duracao_de_saida(project)
     formato = plan.export.aspect if plan.export.aspect != "fonte" else (
         "vertical" if info and info.display_size[1] > info.display_size[0] else "horizontal")
-    dono = (getattr(plan, "pedido_claude", "") or "").strip()
+    dono = _dono(plan)
     linhas = [
         f"Você é o editor do projeto {project.id} (\"{project.name}\") no Sharkcut.",
         f"O vídeo já foi transcrito e passou pelo corte automático pela REGRA "
@@ -200,6 +272,9 @@ def pedido(project) -> str:
         "O QUE O DONO DO VÍDEO PEDIU: " + (dono or "nada específico — entregue o "
                                            "melhor vídeo de anúncio que der."),
     ]
+    if modo == "edicao":
+        linhas.append("SEM PÓS-EDIÇÃO: ele quer só a edição — nenhum título, tela, "
+                      "gráfico, transição ou camada por cima do vídeo.")
     if plan.alvo_duracao > 0:
         linhas.append(f"DURAÇÃO: o vídeo final tem que caber em {plan.alvo_duracao:.0f} s. "
                       f"Escolha você o que sai (nunca o gancho, o preço ou o CTA).")
@@ -213,44 +288,40 @@ def pedido(project) -> str:
                         "banco não tiver chave, use broll_automatico.")
     if not plan.export.burn_subtitles:
         linhas.append("LEGENDA: o vídeo sai SEM legenda queimada.")
-    linhas += [
-        "",
-        "ORDEM DE TRABALHO:",
-        "1. pos_contexto e transcricao (todas as palavras, de 400 em 400).",
-        "2. CORTES com cortar: repetições (a frase dita de novo — fica a melhor, "
+    passos = [
+        "pos_contexto e transcricao (todas as palavras, de 400 em 400).",
+        "CORTES com cortar: repetições (a frase dita de novo — fica a melhor, "
         "normalmente a última), frases começadas e abandonadas, gaguejo, muleta "
         "('é...', 'né', 'tipo'), erro de fala. Nunca corte no meio de uma ideia. "
         "Se o corte automático comeu uma palavra (frase sem sentido), use devolver.",
-        "3. FÔLEGO: se o vídeo inteiro estiver lento ou colado demais, respiro "
+        "FÔLEGO: se o vídeo inteiro estiver lento ou colado demais, respiro "
         "(0 seco … 1 com respiro) — só neste ponto, antes do resto.",
-        "4. RITMO E CÂMERA com ritmo: a etapa de cada bloco; velocidade 1.0 no "
+        "RITMO E CÂMERA com ritmo: a etapa de cada bloco; velocidade 1.0 no "
         "gancho, na oferta, na garantia e no CTA, até 1.15–1.2 na explicação; "
         "zoom mais fechado (1.08–1.15) nas frases de impacto e aberto (1.0) no "
         "resto — alternar dá a sensação de duas câmeras.",
-        "5. LEGENDAS: legendas acao=ver; corrija com acao=corrigir nomes, marcas, "
+        "LEGENDAS: legendas acao=ver; corrija com acao=corrigir nomes, marcas, "
         "números e termos mal transcritos; ajuste o estilo se o pedido falar disso.",
-        "6. B-ROLL, se pedido.",
-        "7. PÓS-EDIÇÃO com grafico, transicao e camada: título forte no gancho; "
-        "tela de tópico quando o assunto muda; lista quando ele enumera (cada item "
-        "entrando quando é falado, com itens_em); número quando cita valor; nome "
-        "no começo se ele se apresenta; destaque na palavra que carrega a frase; "
-        "poucas transições (nas mudanças de assunto); camada desfoque/escurecer "
-        "nos momentos de ênfase; texto atrás da pessoa em títulos grandes quando "
-        "ela está no centro. Use analisar_cena para posicionar. Um gráfico por "
-        "ideia, nunca em cima da legenda, nunca cobrindo o rosto.",
-        "8. CONFIRA com ver_quadros o começo, cada gráfico e cada transição, e "
-        "corrija o que ficou ruim com grafico(id=...).",
-        "9. Termine com um RELATÓRIO curto, em tópicos, dizendo o que você fez e "
-        "por quê — ele aparece na tela do editor para o dono do vídeo.",
+        "B-ROLL, se pedido.",
     ]
+    if modo == "completo":
+        passos += [GUIA_DA_POS,
+                   "CONFIRA com ver_quadros o começo, cada gráfico e cada transição, "
+                   "e corrija o que ficou ruim com grafico(id=...)."]
+    else:
+        passos += ["CONFIRA com ver_quadros o começo e alguns pontos (legenda, "
+                   "enquadramento, b-roll) e corrija o que ficou ruim."]
+    passos.append("Termine com um RELATÓRIO curto, em tópicos, dizendo o que você "
+                  "fez e por quê — ele aparece na tela do editor para o dono do vídeo.")
+    linhas += ["", "ORDEM DE TRABALHO:"] + [f"{i}. {x}" for i, x in enumerate(passos, 1)]
     return "\n".join(linhas)
 
 
-def comando(caminho: str, cfg: Path, modelo: str = "") -> list[str]:
+def comando(caminho: str, cfg: Path, modelo: str = "", modo: str = "completo") -> list[str]:
     ajuda = _ajuda(caminho)
     cmd = [caminho, "-p", "--output-format", "stream-json", "--verbose",
            "--mcp-config", str(cfg), "--strict-mcp-config",
-           "--allowedTools", ",".join(ferramentas_liberadas()),
+           "--allowedTools", ",".join(ferramentas_liberadas(modo)),
            "--append-system-prompt", SISTEMA]
     # as travas que dependem da versão instalada entram quando ela conhece
     if "--tools" in ajuda:
@@ -260,8 +331,7 @@ def comando(caminho: str, cfg: Path, modelo: str = "") -> list[str]:
     if "--disallowedTools" in ajuda:
         # as proibidas somem da lista que ele vê: sem isto ele gastava uma
         # volta tentando exportar e levando "negado" (medido com a CLI real)
-        cmd += ["--disallowedTools",
-                ",".join(f"mcp__{SERVIDOR}__{n}" for n in sorted(EXCLUIDAS))]
+        cmd += ["--disallowedTools", ",".join(ferramentas_negadas(modo))]
     if modelo and modelo in MODELOS:
         cmd += ["--model", modelo]
     return cmd
@@ -317,7 +387,8 @@ def _curva(n: int) -> float:
 
 
 # --------------------------------------------------------------------- rodar
-def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "") -> dict:
+def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
+           modo: str = "completo") -> dict:
     """Roda o Claude Code como editor do projeto. Nunca levanta (exceto cancelar).
 
     Devolve {"ok", "relatorio", "ferramentas", "erro", "segundos", ...}.
@@ -325,8 +396,9 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "") -> dict:
     from . import projects as svc
 
     t0 = time.time()
+    modo = modo if modo in MODOS else "completo"
     saida = {"ok": False, "relatorio": "", "ferramentas": 0, "erro": "",
-             "passos": []}
+             "passos": [], "modo": modo}
     ctx.stage("claude", "chamando o Claude Code nesta máquina")
     est = estado(forcar=True)
     if not est["instalado"]:
@@ -336,7 +408,7 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "") -> dict:
     pasta = project.dir / "claude"
     cfg = config_mcp(pasta)
     modelo = modelo if modelo is not None else str(db.get_setting("claude_modelo", "") or "")
-    cmd = comando(est["caminho"], cfg, modelo)
+    cmd = comando(est["caminho"], cfg, modelo, modo)
     env = dict(os.environ)
     env.setdefault("MCP_TIMEOUT", "60000")
     env.setdefault("MCP_TOOL_TIMEOUT", "900000")
@@ -354,7 +426,7 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "") -> dict:
     # o pedido vai pela entrada padrão: a linha de comando do Windows para em
     # 32767 caracteres, e o pedido não tem por que disputar esse espaço
     try:
-        texto = pedido_de_retoque(project, retoque) if retoque.strip() else pedido(project)
+        texto = pedido_de_retoque(project, retoque) if retoque.strip() else pedido(project, modo)
         proc.stdin.write(texto.encode("utf-8"))
         proc.stdin.close()
     except OSError:
@@ -471,7 +543,7 @@ def _gravar(pid: str, saida: dict, t0: float) -> dict:
     try:
         p = svc.load(pid)
         p.analysis["claude_edicao"] = {
-            "ok": saida["ok"], "relatorio": saida.get("relatorio", ""),
+            "ok": saida["ok"], "modo": saida.get("modo", "completo"), "relatorio": saida.get("relatorio", ""),
             "erro": saida.get("erro", ""), "ferramentas": saida.get("ferramentas", 0),
             "passos": saida.get("passos", [])[-30:], "segundos": saida["segundos"],
             "quando": time.time()}
