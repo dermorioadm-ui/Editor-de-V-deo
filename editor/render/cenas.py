@@ -232,7 +232,8 @@ def _moldura(tag_in: str, tag_out: str, cena, W: int, H: int, fps: float,
     partes.append(f"color=c=black:s={cw + 2 * m}x{ch + 2 * m}:r={fps:.6f},format=yuva420p[{p}sc]")
     partes.append(f"[{img(somb)}]format=gray,scale={cw + 2 * m}:{ch + 2 * m}[{p}sm]")
     partes.append(f"[{p}sc][{p}sm]alphamerge,"
-                  f"scale=w='max(2,trunc({cw + 2 * m}*{esc}/2)*2)':h=-2:eval=frame[{p}ss]")
+                  f"scale=w='max(2,trunc({cw + 2 * m}*{esc}/2)*2)'"
+                  f":h='max(2,trunc({ch + 2 * m}*{esc}/2)*2)':eval=frame[{p}ss]")
     dy = min(W, H) * 0.02
     partes.append(f"[{p}1][{p}ss]overlay=x='{x}-{m}*{esc}':y='{y}-{m}*{esc}+{dy:.1f}*{P}'"
                   f":eval=frame:format=auto:shortest=1[{p}2]")
@@ -240,7 +241,8 @@ def _moldura(tag_in: str, tag_out: str, cena, W: int, H: int, fps: float,
     partes.append(f"[{p}c]crop={cw}:{ch}:{g['cx0']}:{g['cy0']},format=yuva420p[{p}cc]")
     partes.append(f"[{img(masc)}]format=gray,scale={cw}:{ch}[{p}mm]")
     partes.append(f"[{p}cc][{p}mm]alphamerge,"
-                  f"scale=w='max(2,trunc({cw}*{esc}/2)*2)':h=-2:eval=frame[{p}cs]")
+                  f"scale=w='max(2,trunc({cw}*{esc}/2)*2)'"
+                  f":h='max(2,trunc({ch}*{esc}/2)*2)':eval=frame[{p}cs]")
     partes.append(f"[{p}2][{p}cs]overlay=x='{x}':y='{y}':eval=frame:format=auto"
                   f":shortest=1[{tag_out}]")
     return ";".join(partes)

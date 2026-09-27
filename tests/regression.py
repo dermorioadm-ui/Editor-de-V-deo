@@ -8043,6 +8043,16 @@ def testar_marca_logos_cenas() -> None:
     ok("fontsdir=" in fg and "-loop" in cmd and "§" not in fg,
           "a fonte da marca vai junto para o libass, e o logo entra como imagem em loop")
 
+    larga = Grafico(tipo="logo", logo="assinatura_branca", x=0.5, y=0.5, tamanho=1.4,
+                    out_start=1.03, out_end=3.0, entrada="pop", saida="pop")
+    try:
+        v, _s = render(plano([larga]), "larga")
+        saiu = contar(v) == 120
+    except Exception as exc:  # noqa: BLE001
+        saiu, v = False, str(exc)[-200:]
+    ok(saiu, "a assinatura (logo largo) entrando e saindo com pop não quebra o encode "
+       "(altura 0 no primeiro quadro parava a exportação)", str(v))
+
     moldura = Cena(tipo="moldura", lado="direita", fundo="marca", out_start=1.0, out_end=3.2)
     v, _s = render(plano(cenas=[moldura]), "moldura")
     ok(contar(v) == 120, f"a moldura não muda a contagem de quadros ({contar(v)})")

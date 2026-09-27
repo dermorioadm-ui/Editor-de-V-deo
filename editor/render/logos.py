@@ -129,7 +129,11 @@ def cadeia(g, entrada: str, saida_tag: str, W: int, H: int, t0: float,
         if s_sai:
             termos.append(f"if(gt(t,{b - sd:.3f}),max(0.02,1-(t-{b - sd:.3f})/{sd:.3f}),1)")
         S = "*".join(f"({x})" for x in termos)
-        filtros.append(f"scale=w='max(2,trunc({pw}*{S}/2)*2)':h=-2:eval=frame:flags=bicubic")
+        # largura E altura pela mesma escala, cada uma com piso de 2 px: com
+        # h=-2, a assinatura (5 x mais larga que alta) no começo do pop dava
+        # altura 0 e o ffmpeg parava o trecho ("Picture size 4x0 is invalid")
+        filtros.append(f"scale=w='max(2,trunc({pw}*{S}/2)*2)'"
+                       f":h='max(2,trunc({ph}*{S}/2)*2)':eval=frame:flags=bicubic")
     else:
         filtros.append(f"scale={pw}:{ph}:flags=lanczos")
     if op < 0.999:
