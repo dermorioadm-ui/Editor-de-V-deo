@@ -21,7 +21,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -1432,7 +1432,7 @@ def _atempo(speed: float) -> str:
 
 def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                   plan: EditPlan, sources: dict, duration: float,
-                  limpa: bool = False) -> Path:
+                  limpa: bool = False, avisos: list | None = None) -> Path:
     """Cadeia da Parte 9.1 aplicada UMA vez sobre a faixa inteira.
 
     O loudnorm roda em duas passadas (mede, depois aplica em modo linear).
@@ -1452,11 +1452,27 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
     # ducking) e o EQ de voz mexia no timbre da música. Agora: voz -> EQ de
     # estúdio -> compressor -> de-esser; só então a música, constante; e o
     # loudnorm + teto sobre a mistura pronta.
-    pre = build_pre_chain(params, limpa=limpa)
     voz_path = dest.with_name(dest.stem + "_voz.wav")
-    run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
-         *(["-af", pre] if pre else []),
-         "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le", str(voz_path)])
+
+    def tratar(cadeia: str) -> None:
+        run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
+             *(["-af", cadeia] if cadeia else []),
+             "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le", str(voz_path)])
+
+    try:
+        tratar(build_pre_chain(params, limpa=limpa))
+    except FFmpegError as exc:
+        # PLANO B: o tratamento de estúdio nunca derruba o vídeo. Um ffmpeg
+        # antigo sem algum filtro (o deesser só existe do 4.3 em diante)
+        # parava a exportação inteira; aqui ela segue com a cadeia de antes.
+        if not getattr(params, "voz_estudio", False):
+            raise
+        simples = replace(params, voz_estudio=False, deesser=0.0)
+        tratar(build_pre_chain(simples, limpa=False))
+        if avisos is not None:
+            ultima = (str(exc).strip().splitlines() or [""])[-1][:160]
+            avisos.append("o tratamento de estúdio da voz não rodou neste ffmpeg "
+                          f"({ultima}); a voz saiu com o tratamento simples")
 
     # "mudo" desliga a trilha sem perder o ajuste: o usuário testa com e sem
     music = (plan.music if plan.music and plan.music.get("enabled")

@@ -244,12 +244,13 @@ def _pedacos(n: int, trabalhadores: int) -> list[tuple[int, int]]:
 
 
 def _rodar(binario: Path, entrada: Path, saida_dir: Path, limite: int,
-           cancelar: Callable[[], bool] | None) -> Path:
+           cancelar: Callable[[], bool] | None, prazo: float = 600.0) -> Path:
     from ..ffmpeg_utils import _popen
 
     cmd = [str(binario), "-D", "-a", str(limite), "-o", str(saida_dir),
            str(entrada)]
     proc = _popen(cmd, stdout=subprocess.DEVNULL)
+    comeco = time.monotonic()
     while True:
         try:
             _, err = proc.communicate(timeout=0.5)
@@ -259,6 +260,13 @@ def _rodar(binario: Path, entrada: Path, saida_dir: Path, limite: int,
                 proc.kill()
                 proc.communicate()
                 raise RuntimeError("cancelado")
+            # um pedaço de 30 s leva segundos: passar do prazo é o redutor
+            # travado — mata e segue com a voz original, nunca fica parado
+            if time.monotonic() - comeco > prazo:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError(f"o redutor passou de {prazo:.0f} s num pedaço "
+                                   f"e foi parado")
     saida = saida_dir / entrada.name
     if proc.returncode != 0 or not saida.exists():
         msg = (err or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
@@ -312,7 +320,7 @@ def limpar(fonte: str | Path, destino: str | Path, forca: str = LIMPEZA_PADRAO,
             entrada = tmp / f"p{i:04d}.wav"
             write_wav(entrada, trecho, SR)
             saida = _rodar(binario, entrada, tmp / "saida", _limite(forca),
-                           cancelar)
+                           cancelar, prazo=max(180.0, 20.0 * len(trecho) / SR))
             y = _ler(saida)
             entrada.unlink(missing_ok=True)
             saida.unlink(missing_ok=True)

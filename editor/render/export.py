@@ -224,8 +224,14 @@ def export_project(
     # no zoom, no filtro. Sem cache, cada retoque pagava o áudio do vídeo
     # inteiro de novo, e era o que sobrava de "exportar tudo a cada ação"
     # depois que os trechos de vídeo já vinham do cache.
-    limpas = _vozes_limpas(plan, measured_timeline, sources, report, cancel,
-                           pre_warnings)
+    try:
+        limpas = _vozes_limpas(plan, measured_timeline, sources, report, cancel,
+                               pre_warnings)
+    except Exception as exc:  # noqa: BLE001 — a voz nova nunca derruba o vídeo
+        if cancel and cancel():
+            raise
+        limpas = {}
+        pre_warnings.append(f"a voz saiu SEM a limpeza de ruído por IA ({exc}).")
     report(0.0, "montando o áudio", 0.76, 0.80)
     chave_audio = _hash_audio(plan, measured_timeline, clip_durations, sources,
                               limpas)
@@ -246,7 +252,8 @@ def export_project(
                      "processando o áudio (highpass → compressor → loudnorm)"),
                0.80, 0.86)
         process_audio(raw_wav, processed, plan.audio, plan, sources,
-                      duration=len(track) / AUDIO_SR, limpa=bool(limpas))
+                      duration=len(track) / AUDIO_SR, limpa=bool(limpas),
+                      avisos=pre_warnings)
         marca.write_text(chave_audio, encoding="utf-8")
     audio_info = probe(processed)
 
