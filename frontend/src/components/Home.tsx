@@ -76,6 +76,9 @@ export default function Home() {
   // A PÓS-EDIÇÃO DO CLAUDE: entregar finalizado (com títulos, telas,
   // transições, camadas) ou só a edição. null = o que ficou lembrado
   const [posClaude, setPosClaude] = useState<boolean | null>(null)
+  // A MARCA do vídeo: o kit que a pós usa (cores, fonte, logos, grafia)
+  const [marcas, setMarcas] = useState<any>(null)
+  const [marcaDaVez, setMarcaDaVez] = useState<string | null>(null)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
   const [extras, setExtras] = useState<string[]>([])
@@ -164,6 +167,7 @@ export default function Home() {
     api.health().then(setHealth).catch(() => {})
     lerIa().catch(() => {})
     api.claudeEstado().then(setClaude).catch(() => setClaude(null))
+    api.marca().then(setMarcas).catch(() => setMarcas(null))
     api.looks().then(setLooks).catch(() => {})
     api.outputDir().then(setSaida).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
@@ -213,6 +217,11 @@ export default function Home() {
     || (claude?.instalado ? 'claude' : ia?.tem_chave ? 'gemini' : 'regra')
 
   const posDaVez: boolean = posClaude ?? (claude?.pos_padrao ?? !!claude?.instalado)
+
+  async function escolherMarca(slug: string) {
+    setMarcaDaVez(slug)
+    try { setMarcas(await api.marcaAtiva(slug)) } catch { /* só lembrança */ }
+  }
 
   async function escolherPos(v: boolean) {
     setPosClaude(v)
@@ -274,6 +283,7 @@ export default function Home() {
       // a pós do Claude vale para QUALQUER editor: com o Gemini cortando, o
       // Claude entra só com títulos, telas, transições e camadas
       pos_claude: posDaVez && !!claude?.instalado,
+      ...(marcas ? { marca: (marcaDaVez ?? marcas.ativa ?? '') || '-' } : {}),
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       alvo_duracao: alvo,
       speed: { global_multiplier: velocidade },
@@ -614,6 +624,24 @@ export default function Home() {
                 : 'o vídeo sai só com a edição (cortes, ritmo, legenda, b-roll). Dá para pôr a pós depois, no editor, num clique.'}
             </span>
           </div>
+          {marcas && (marcas.lista ?? []).length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap" data-marca-da-vez={(marcaDaVez ?? marcas.ativa) || 'nenhuma'}>
+              <span className="text-sm text-slate-200 mr-1">Marca</span>
+              {(marcas.lista ?? []).map((k: any) => (
+                <button key={k.slug} className={`btn btn-xs ${(marcaDaVez ?? marcas.ativa) === k.slug ? 'btn-primary' : ''}`}
+                        onClick={() => escolherMarca(k.slug)} data-marca={k.slug}>
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle"
+                        style={{ background: k.cor || '#888' }} />{k.nome}</button>
+              ))}
+              <button className={`btn btn-xs ${!(marcaDaVez ?? marcas.ativa) ? 'btn-primary' : ''}`}
+                      onClick={() => escolherMarca('')} data-marca="nenhuma">nenhuma</button>
+              <span className="text-[11px] text-slate-500 basis-full">
+                {(marcaDaVez ?? marcas.ativa)
+                  ? 'a pós sai na identidade dela: cores, fonte, logos e o nome escrito certo (também na legenda)'
+                  : 'sem marca: a pós usa os estilos padrão do Sharkcut'}
+              </span>
+            </div>
+          )}
           {editorDaVez !== 'claude' && posDaVez && claude?.instalado && (
             <label className="block">
               <span className="label">o que você quer na pós (opcional)</span>

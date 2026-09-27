@@ -82,8 +82,13 @@ def _rampa(a: float, b: float) -> str:
 def grafo(tag_in: str, tag_out: str, idx_mascara: str, W: int, H: int,
           fps: float, t0: float, dur: float, camadas: list,
           ass_atras: Path | None, graficos_atras: list,
-          centro: tuple[float, float]) -> str:
-    """O pedaço do filtergraph que separa e recompõe as camadas."""
+          centro: tuple[float, float], fontsdir: Path | None = None,
+          extra_fundo=None) -> str:
+    """O pedaço do filtergraph que separa e recompõe as camadas.
+
+    ``extra_fundo(tag_in, tag_out)``: o que mais vai no FUNDO, antes de a
+    pessoa voltar por cima — os logos com ``camada="atras"``.
+    """
     jan = janelas(camadas, graficos_atras, t0, dur)
     if not jan:
         return ""
@@ -127,11 +132,17 @@ def grafo(tag_in: str, tag_out: str, idx_mascara: str, W: int, H: int,
             fundo.append(f"drawbox=x=0:y=0:w=iw:h=ih:color={COR_DO_RECORTE}@1:t=fill"
                          f":enable='{en}'")
     if ass_atras:
-        fundo.append(f"ass='{escape_filter_path(ass_atras)}'")
+        fundo.append(f"ass='{escape_filter_path(ass_atras)}'"
+                     + (f":fontsdir='{escape_filter_path(fontsdir)}'" if fontsdir else ""))
     fundo_tag = "__pb"
     if fundo:
         partes.append("[__pb]" + ",".join(fundo) + "[__bg]")
         fundo_tag = "__bg"
+    if extra_fundo:
+        extra = extra_fundo(fundo_tag, "__bgl")
+        if extra:
+            partes.append(extra)
+            fundo_tag = "__bgl"
     if recortes:
         jr = [_rel(c, t0, dur) for c in recortes]
         partes.append(f"color=c=white:s={W}x{H}:r={fps:.6f}:d={dur + 1:.3f},"

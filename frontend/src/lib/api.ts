@@ -317,9 +317,9 @@ export const api = {
   // A PÓS-EDIÇÃO — gráficos animados, camadas (pessoa x fundo), transições.
   // O que muda aqui só grava o plano: sai no próximo encode, no mesmo passe.
   pos: (id: string) => req<any>(`/api/projects/${id}/pos`),
-  posCriar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes', dados: any) =>
+  posCriar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes' | 'cenas', dados: any) =>
     post<any>(`/api/projects/${id}/pos/${tipo}`, dados),
-  posMudar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes', iid: string,
+  posMudar: (id: string, tipo: 'graficos' | 'camadas' | 'transicoes' | 'cenas', iid: string,
              dados: any) => put<any>(`/api/projects/${id}/pos/${tipo}/${iid}`, dados),
   posApagar: (id: string, iid: string) => del<any>(`/api/projects/${id}/pos/${iid}`),
   posTirar: (id: string, dados: { ids?: string[]; tudo?: boolean; origem?: string }) =>
@@ -334,6 +334,15 @@ export const api = {
                           pos_padrao?: boolean }) =>
     post<any>('/api/claude/config', dados),
   claudeTestar: () => post<any>('/api/claude/testar', {}),
+  /** copia a habilidade de motion para as skills do Claude Code desta máquina */
+  claudeHabilidade: () => post<any>('/api/claude/habilidade', {}),
+  // A MARCA: o kit ligado, os logos, a marca de cada vídeo
+  marca: () => req<any>('/api/marca'),
+  marcaAtiva: (slug: string) => post<any>('/api/marca/ativa', { slug }),
+  marcaLogo: (caminho: string, nome = '') => post<any>('/api/marca/logos', { caminho, nome }),
+  marcaLogoApagar: (nome: string) => del<any>(`/api/marca/logos/${encodeURIComponent(nome)}`),
+  marcaLogoUrl: (nome: string) => `/api/marca/logo/${encodeURIComponent(nome)}`,
+  projetoMarca: (id: string, slug: string) => post<any>(`/api/projects/${id}/marca`, { slug }),
   /** abre o login do Claude Code numa janela (o navegador faz o resto) */
   claudeEntrar: () => post<any>('/api/claude/entrar', {}),
   /** pedir ao Claude de dentro do editor ("agora aumenta a legenda") */

@@ -58,7 +58,13 @@ INSTRUCOES = (
     "5. analisar_cena antes de posicionar — ela diz onde a pessoa está e o que "
     "está livre.\n"
     "6. ver_quadros para CONFERIR tudo o que pôs, e corrija com grafico(id=...).\n"
-    "7. exportar."
+    "7. exportar.\n\n"
+    "MARCA E CENAS: leia marca antes da pós (nome exato, cores, logos, regras). "
+    "Logo = grafico tipo=logo (de lado e transparente; camada=atras passa atrás "
+    "da pessoa). cena tipo=moldura põe o vídeo num cartão de um lado e deixa o "
+    "outro livre para explicar; cena tipo=vidro3d separa fundo, logos e pessoa "
+    "em placas de vidro que giram e se juntam. O manual completo é a skill "
+    "sharkcut-motion (habilidades/sharkcut-motion/SKILL.md)."
 )
 
 

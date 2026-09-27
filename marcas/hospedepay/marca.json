@@ -1,0 +1,60 @@
+{
+  "nome": "hospedepay",
+  "descricao": "Uma fechadura, não um enfeite. A marca existe pra dizer uma coisa: ninguém entra sem assinar.",
+  "grafia": {
+    "exata": "hospedepay",
+    "variantes": ["hospede pay", "hóspede pay", "hospedpay", "hospede-pay", "hóspede-pay",
+                  "hospedi pay", "hospedipay", "hospede pei", "hóspede pei", "hospedepei",
+                  "hospede paye", "hospedpei", "hospedepay"]
+  },
+  "cores": {
+    "marca": "#FF385C",
+    "marca_escura": "#E31C5F",
+    "confirma": "#00A699",
+    "alerta": "#FC642D",
+    "texto": "#000000",
+    "corpo": "#484848",
+    "apoio": "#8F8F8F",
+    "linha": "#F0F0F0",
+    "fundo": "#FFFFFF"
+  },
+  "fonte": {
+    "texto": "DM Sans",
+    "titulo": "DM Sans Medium",
+    "negrito": false,
+    "arquivos": ["fontes/DMSans-Regular.ttf", "fontes/DMSans-Medium.ttf"]
+  },
+  "forma": {
+    "canto": 0.32,
+    "sombra": "longa"
+  },
+  "logos": {
+    "simbolo": {"arquivo": "logos/simbolo.png", "uso": "o símbolo coral (fechadura branca) — o padrão, sobre imagem ou fundo claro"},
+    "simbolo_negativo": {"arquivo": "logos/simbolo_negativo.png", "uso": "símbolo branco com a fechadura coral — sobre coral ou fundo escuro"},
+    "simbolo_pb": {"arquivo": "logos/simbolo_pb.png", "uso": "símbolo branco com fechadura preta — preto e branco"},
+    "assinatura": {"arquivo": "logos/assinatura.png", "uso": "símbolo + hospedepay em preto — a assinatura horizontal, sobre fundo claro"},
+    "assinatura_branca": {"arquivo": "logos/assinatura_branca.png", "uso": "símbolo + hospedepay em branco — sobre coral, imagem escura ou vidro"}
+  },
+  "regras": [
+    "O nome é sempre hospedepay, tudo minúsculo, junto. Nunca HOSPEDEPAY, nunca Hospede Pay, nunca HospedPay.",
+    "Coral (#FF385C) é a marca: título, preço, destaque. Verde (#00A699) só confirma — assinado, online. Laranja (#FC642D) só alerta. O resto é branco e cinza.",
+    "DM Sans, sem negrito. Regular carrega tudo; medium só no nome e em título curto. Nada de caixa alta espaçada.",
+    "Canto largo em tudo. Sombra longa e quase invisível: o cartão flutua, não recorta. Sem gradiente.",
+    "O símbolo nunca gira e é sempre coral, branco ou preto. Verde e laranja nunca viram marca.",
+    "Nunca 'oficial' ou 'parceiro', e NUNCA logo de plataforma (Airbnb, Booking) ao lado da marca. Logo de plataforma só enquanto a fala é sobre a plataforma, e longe da hospedepay.",
+    "Em volta da assinatura, o vazio tem a altura do símbolo: nada encosta nela."
+  ],
+  "voz": [
+    "Frase curta. Verbo no presente. Um assunto por vez.",
+    "Assim: 'Data que não bate, não passa.' · 'Sou eu que respondo. Não é robô.' · '30 dias. Devolvo tudo.'",
+    "Nunca: 'Solução completa de gestão inteligente.' · 'Revolucione a sua hospedagem!' · 'Satisfação garantida (consulte condições).'"
+  ],
+  "frases": [
+    "Ninguém dorme sem assinar.",
+    "Três travas antes da chave.",
+    "A portaria já sabe.",
+    "Você comprou um emprego.",
+    "Reserva confirmada, documento, selfie e assinatura. Antes da chave."
+  ],
+  "vocabulario": ["hospedepay", "Airbnb", "Booking", "check-in", "anfitrião", "hóspede"]
+}

@@ -33,10 +33,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TIPOS = ("titulo", "tela", "lista", "destaque", "numero", "texto", "nome",
-         "seta", "circulo", "barra")
+         "seta", "circulo", "barra", "logo")
 ENTRADAS = ("pop", "slide", "subir", "3d", "digitar", "fade")
 SAIDAS = ("fade", "slide", "pop", "corte")
-ESTILOS = ("escuro", "claro", "neon", "marca", "limpo")
+ESTILOS = ("escuro", "claro", "neon", "marca", "limpo", "vidro")
 CAMADAS = ("frente", "atras")
 
 # Onde cada tipo nasce quando ninguém disse: longe da legenda, que mora
@@ -45,7 +45,7 @@ POSICAO_PADRAO = {
     "titulo": (0.5, 0.2), "tela": (0.5, 0.5), "lista": (0.5, 0.42),
     "destaque": (0.5, 0.3), "numero": (0.5, 0.3), "texto": (0.5, 0.22),
     "nome": (0.06, 0.72), "seta": (0.5, 0.5), "circulo": (0.5, 0.5),
-    "barra": (0.5, 0.14),
+    "barra": (0.5, 0.14), "logo": (0.9, 0.16),
 }
 
 # Paletas. ``fundo_a`` é a transparência do painel no ASS (00 = opaco).
@@ -60,6 +60,11 @@ PALETAS = {
                "sub": "#FFE4EA", "acento": "#FFFFFF"},
     "limpo":  {"fundo": "", "fundo_a": 0xFF, "texto": "#FFFFFF",
                "sub": "#F1F1F1", "acento": "#FFC400", "contorno": True},
+    # VIDRO: o painel quase transparente, com um fio claro na borda — a
+    # imagem continua aparecendo por trás. O texto ganha uma sombra macia
+    # para não sumir em fundo claro.
+    "vidro":  {"fundo": "#FFFFFF", "fundo_a": 0xC4, "texto": "#FFFFFF",
+               "sub": "#F4F4F4", "acento": "#FFFFFF", "vidro": True},
 }
 
 # Duração de cada entrada e saída, em segundos. Encolhem em gráfico curto.
@@ -114,6 +119,25 @@ def _esc(texto) -> str:
 def _fonte(nome) -> str:
     """Nome de fonte seguro: a vírgula separa os campos da linha de estilo."""
     return _esc(nome).replace(",", " ").strip() or "Arial"
+
+
+class _Fonte(str):
+    """A fonte do texto, que sabe o que fazer com "negrito".
+
+    Sem kit de marca, negrito é ``\b1`` na mesma fonte. Com o kit (a
+    hospedepay: "nada de negrito"), o peso de destaque é OUTRA fonte — a de
+    título, DM Sans Medium — e ``\b`` fica sempre em 0.
+    """
+
+    titulo: str = ""
+    negrito: bool = True
+
+    @classmethod
+    def de(cls, texto: str, titulo: str = "", negrito: bool = True) -> "_Fonte":
+        f = cls(_fonte(texto))
+        f.titulo = _fonte(titulo) if titulo else str(f)
+        f.negrito = bool(negrito)
+        return f
 
 
 def _esc_sem_aparar(texto) -> str:
@@ -353,9 +377,25 @@ def _eventos_do_elemento(el: _El, gs: float, ge: float, t0: float,
 
 
 # ---------------------------------------------------------------- estilo
-def _paleta(g) -> dict:
+def _paleta(g, kit: dict | None = None) -> dict:
     estilo = str(_v(g, "estilo", "escuro") or "escuro")
     p = dict(PALETAS.get(estilo, PALETAS["escuro"]))
+    if kit:
+        # AS CORES DA MARCA. "marca" é o cartão coral de letra branca (o do
+        # anúncio e do story); "claro" é o cartão branco com letra preta e
+        # destaque coral (o padrão da identidade); nos outros, o destaque
+        # passa a ser o coral.
+        c = kit.get("cores") or {}
+        marca = c.get("marca") or p["acento"]
+        if estilo == "marca":
+            p.update(fundo=marca, texto="#FFFFFF", sub="#FFFFFF", acento="#FFFFFF")
+        elif estilo == "claro":
+            p.update(fundo=c.get("fundo") or "#FFFFFF", fundo_a=0x00,
+                     texto=c.get("texto") or "#000000", sub=c.get("corpo") or "#484848",
+                     acento=marca)
+        elif estilo != "neon":
+            p["acento"] = marca
+        p["kit"] = True
     cor = str(_v(g, "cor", "") or "").strip()
     if cor and re.fullmatch(r"#?[0-9a-fA-F]{6}", cor):
         cor = "#" + cor.lstrip("#")
@@ -370,8 +410,16 @@ def _paleta(g) -> dict:
 
 def _texto(p: dict, corpo: float, cor: str, fonte: str, negrito: bool = True,
            u: float = 1000) -> str:
-    t = (f"\\fn{fonte}\\fs{corpo:.1f}\\b{1 if negrito else 0}"
+    nome, b = fonte, 1 if negrito else 0
+    if isinstance(fonte, _Fonte) and not fonte.negrito:
+        nome, b = (fonte.titulo if negrito else str(fonte)), 0
+    t = (f"\\fn{nome}\\fs{corpo:.1f}\\b{b}"
          f"\\1c{_cor(cor)}\\1a&H00&\\p0\\blur0")
+    if p.get("vidro"):
+        # no vidro o fundo pode ser claro: uma sombra macia segura a letra
+        t += (f"\\bord0\\shad{max(1.0, corpo * 0.045):.1f}\\4c&H000000&\\4a&H9A&"
+              f"\\blur{max(0.6, corpo * 0.02):.1f}")
+        return t
     if p.get("contorno"):
         t += (f"\\bord{max(1.0, corpo * 0.07):.1f}\\3c&H000000&\\3a&H10&"
               f"\\shad{max(1.0, corpo * 0.05):.1f}\\4c&H000000&\\4a&H70&")
@@ -384,7 +432,19 @@ def _painel(cor: str, alfa: int) -> str:
     return f"\\p1\\1c{_cor(cor)}\\1a{_alfa(alfa)}\\bord0\\shad0\\blur0"
 
 
-def _sombra(u: float) -> str:
+def _painel_de(p: dict, u: float) -> str:
+    """O painel do estilo: no vidro, com o fio claro na borda."""
+    if p.get("vidro"):
+        return (f"\\p1\\1c{_cor(p['fundo'])}\\1a{_alfa(p['fundo_a'])}"
+                f"\\bord{max(1.0, u * 0.0022):.1f}\\3c&HFFFFFF&\\3a&H6A&\\shad0\\blur0.6")
+    return _painel(p["fundo"], p["fundo_a"])
+
+
+def _sombra(u: float, longa: bool = False) -> str:
+    if longa:
+        # "sombra longa e quase invisível: o cartão flutua, não recorta"
+        return (f"\\p1\\1c&H000000&\\1a&HDC&\\bord0\\shad0"
+                f"\\blur{u * 0.05:.1f}")
     return (f"\\p1\\1c&H000000&\\1a&H8C&\\bord0\\shad0"
             f"\\blur{u * 0.018:.1f}")
 
@@ -433,6 +493,21 @@ class _Ctx:
     dur: float
     entrada: str
     saida: str
+    kit: dict | None = None
+
+    def canto(self, bw: float, bh: float, base: float) -> float:
+        """Canto largo quando há marca ("canto largo em tudo")."""
+        if not self.kit:
+            return base
+        return min(bh * 0.34, bw * 0.34, self.u * 0.05)
+
+    @property
+    def dy_sombra(self) -> float:
+        return self.u * (0.028 if self.kit else 0.01)
+
+    @property
+    def sombra(self) -> str:
+        return _sombra(self.u, longa=bool(self.kit))
 
 
 def _encaixar(cx: float, cy: float, bw: float, bh: float, W: int, H: int,
@@ -493,10 +568,11 @@ def _caixa_de_texto(ctx: _Ctx, principal: str, secundario: str,
     topo = cy - bh / 2
     els: list[_El] = []
     if p.get("fundo"):
-        els.append(_el(ctx, 0, cx, cy + u * 0.01, 5, _sombra(u), _ret(bw, bh, u * 0.02),
+        r = ctx.canto(bw, bh, u * 0.02)
+        els.append(_el(ctx, 0, cx, cy + ctx.dy_sombra, 5, ctx.sombra, _ret(bw, bh, r),
                        org=org, lado=lado))
-        els.append(_el(ctx, 1, cx, cy, 5, _painel(p["fundo"], p["fundo_a"]),
-                       _ret(bw, bh, u * 0.02), org=org, lado=lado))
+        els.append(_el(ctx, 1, cx, cy, 5, _painel_de(p, u),
+                       _ret(bw, bh, r), org=org, lado=lado))
     y1 = topo + pad + len(l1) * lh1 / 2
     tags1 = _texto(p, corpo1, p["texto"], ctx.fonte)
     if p.get("brilho"):
@@ -599,10 +675,11 @@ def _lista(ctx: _Ctx) -> list[_El]:
     esq, topo = cx - bw / 2, cy - bh / 2
     els: list[_El] = []
     if p.get("fundo"):
-        els.append(_el(ctx, 0, cx, cy + u * 0.01, 5, _sombra(u), _ret(bw, bh, u * 0.02),
+        r = ctx.canto(bw, bh, u * 0.02)
+        els.append(_el(ctx, 0, cx, cy + ctx.dy_sombra, 5, ctx.sombra, _ret(bw, bh, r),
                        org=org, lado=lado))
-        els.append(_el(ctx, 1, cx, cy, 5, _painel(p["fundo"], p["fundo_a"]),
-                       _ret(bw, bh, u * 0.02), org=org, lado=lado))
+        els.append(_el(ctx, 1, cx, cy, 5, _painel_de(p, u),
+                       _ret(bw, bh, r), org=org, lado=lado))
     y = topo + pad
     if lt:
         els += _texto_com_entrada(ctx, 3, esq + pad, y, 7,
@@ -645,8 +722,9 @@ def _tela(ctx: _Ctx) -> list[_El]:
     sub = _esc(_v(ctx.g, "subtexto", ""))[:MAX_TEXTO]
     rotulo = _esc(_v(ctx.g, "prefixo", ""))[:30]
     itens = _itens(ctx.g)
-    cor_texto = "#12151B" if _claro_demais(fundo) else "#FFFFFF"
-    cor_sub = "#4A5260" if _claro_demais(fundo) else "#C7CED8"
+    claro = _claro_demais(fundo) and not p.get("vidro")
+    cor_texto = (p["texto"] if p.get("kit") else "#12151B") if claro else "#FFFFFF"
+    cor_sub = (p["sub"] if p.get("kit") else "#4A5260") if claro else "#C7CED8"
     ct, cs_, cr, ci = u * 0.1 * s, u * 0.045 * s, u * 0.04 * s, u * 0.047 * s
     maxw = W * 0.84
     for _ in range(8):
@@ -666,32 +744,40 @@ def _tela(ctx: _Ctx) -> list[_El]:
     lado = -1
     cortina = "fade" if ctx.entrada == "fade" else "cortina"
     saida_fundo = "cortina" if ctx.saida == "slide" else ("corte" if ctx.saida == "corte" else "fade")
+    luzes = not ctx.kit and not p.get("vidro")
     els: list[_El] = [
-        _el(ctx, 0, 0, 0, 7, _painel(fundo, 0), _ret(W, H), entrada=cortina,
-            saida=saida_fundo, lado=lado),
-        # profundidade: duas luzes da cor de destaque, bem desfocadas. O
-        # tamanho é contido de propósito: o filtro ass mistura cada bitmap
-        # pixel a pixel em todo quadro, e duas luzes de meia tela custavam
-        # 1,5 s de encode a cada 4 s de tela (medido em 1080p).
-        _el(ctx, 1, W * 0.88, H * 0.1, 5,
-            f"\\p1\\1c{_cor(p['acento'])}\\1a&HB4&\\bord0\\shad0\\blur{u * 0.1:.1f}",
-            _elipse(u * 0.3, u * 0.3), entrada="fade", saida=saida_fundo,
-            aparece=0.1, ed=0.8),
-        _el(ctx, 1, W * 0.08, H * 0.94, 5,
-            f"\\p1\\1c{_cor(p['acento'])}\\1a&HCC&\\bord0\\shad0\\blur{u * 0.09:.1f}",
-            _elipse(u * 0.24, u * 0.24), entrada="fade", saida=saida_fundo,
-            aparece=0.1, ed=0.8),
+        _el(ctx, 0, 0, 0, 7, _painel(fundo, p["fundo_a"] if p.get("vidro") else 0),
+            _ret(W, H), entrada=cortina, saida=saida_fundo, lado=lado),
     ]
+    if luzes:
+        els += [
+            # profundidade: duas luzes da cor de destaque, bem desfocadas. O
+            # tamanho é contido de propósito: o filtro ass mistura cada bitmap
+            # pixel a pixel em todo quadro, e duas luzes de meia tela custavam
+            # 1,5 s de encode a cada 4 s de tela (medido em 1080p).
+            _el(ctx, 1, W * 0.88, H * 0.1, 5,
+                f"\\p1\\1c{_cor(p['acento'])}\\1a&HB4&\\bord0\\shad0\\blur{u * 0.1:.1f}",
+                _elipse(u * 0.3, u * 0.3), entrada="fade", saida=saida_fundo,
+                aparece=0.1, ed=0.8),
+            _el(ctx, 1, W * 0.08, H * 0.94, 5,
+                f"\\p1\\1c{_cor(p['acento'])}\\1a&HCC&\\bord0\\shad0\\blur{u * 0.09:.1f}",
+                _elipse(u * 0.24, u * 0.24), entrada="fade", saida=saida_fundo,
+                aparece=0.1, ed=0.8),
+        ]
     ent_txt = "subir" if ctx.entrada in ("pop", "slide", "subir") else ctx.entrada
     sub_ctx = _Ctx(**{**ctx.__dict__, "entrada": ent_txt})
     y = topo + ct * 0.2
     if rotulo:
+        cor_rot = p["acento"]
+        if p.get("kit") and _v(ctx.g, "estilo", "") == "marca":
+            cor_rot = "#FFFFFF"
         els.append(_el(sub_ctx, 3, cx, y + cr / 2, 5,
-                       _texto({}, cr, p["acento"], ctx.fonte) + f"\\fsp{cr * 0.12:.1f}",
+                       _texto(p if p.get("vidro") else {}, cr, cor_rot, ctx.fonte)
+                       + ("" if p.get("kit") else f"\\fsp{cr * 0.12:.1f}"),
                        rotulo, aparece=0.25))
         y += cr * 1.9
     yt = y + len(lt) * ct * 1.14 / 2
-    tags_t = _texto({}, ct, cor_texto, ctx.fonte)
+    tags_t = _texto(p if p.get("vidro") else {}, ct, cor_texto, ctx.fonte)
     if p.get("brilho"):
         els.append(_el(sub_ctx, 2, cx, yt, 5, tags_t + _brilho(ct, p["acento"]),
                        "\\N".join(lt), aparece=0.3))
@@ -745,11 +831,12 @@ def _destaque(ctx: _Ctx) -> list[_El]:
     org, lado = (cx, cy), (-1 if cx <= W / 2 else 1)
     acento = p["fundo"] if _v(ctx.g, "estilo", "") == "marca" else p["acento"]
     cor_txt = "#12151B" if _claro_demais(acento) else "#FFFFFF"
-    torto = "\\frz3"
+    torto = "" if ctx.kit else "\\frz3"
+    r = ctx.canto(bw, bh, u * 0.012)
     els = [
-        _el(ctx, 0, cx + u * 0.008, cy + u * 0.012, 5, _sombra(u) + torto,
-            _ret(bw, bh, u * 0.012), org=org, lado=lado),
-        _el(ctx, 1, cx, cy, 5, _painel(acento, 0) + torto, _ret(bw, bh, u * 0.012),
+        _el(ctx, 0, cx + (0 if ctx.kit else u * 0.008), cy + (ctx.dy_sombra if ctx.kit else u * 0.012),
+            5, ctx.sombra + torto, _ret(bw, bh, r), org=org, lado=lado),
+        _el(ctx, 1, cx, cy, 5, _painel(acento, 0) + torto, _ret(bw, bh, r),
             org=org, lado=lado),
     ]
     els += _texto_com_entrada(ctx, 3, cx, cy, 5,
@@ -787,10 +874,11 @@ def _numero_el(ctx: _Ctx) -> list[_El]:
     topo = cy - bh / 2
     els: list[_El] = []
     if p.get("fundo"):
-        els.append(_el(ctx, 0, cx, cy + u * 0.01, 5, _sombra(u), _ret(bw, bh, u * 0.025),
+        r = ctx.canto(bw, bh, u * 0.025)
+        els.append(_el(ctx, 0, cx, cy + ctx.dy_sombra, 5, ctx.sombra, _ret(bw, bh, r),
                        org=org, lado=lado))
-        els.append(_el(ctx, 1, cx, cy, 5, _painel(p["fundo"], p["fundo_a"]),
-                       _ret(bw, bh, u * 0.025), org=org, lado=lado))
+        els.append(_el(ctx, 1, cx, cy, 5, _painel_de(p, u),
+                       _ret(bw, bh, r), org=org, lado=lado))
     cor_n = p["acento"] if _v(ctx.g, "estilo", "") != "marca" else p["texto"]
     # a contagem: rápida no começo, freando no fim (curva cúbica)
     conta = min(1.4, max(0.5, ctx.dur * 0.45))
@@ -840,14 +928,16 @@ def _nome(ctx: _Ctx) -> list[_El]:
     ent_txt = "slide" if ctx.entrada in ("slide", "pop") else ctx.entrada
     sub_ctx = _Ctx(**{**ctx.__dict__, "entrada": ent_txt})
     els: list[_El] = [
-        _el(ctx, 2, x0, yc, 4, _painel(p["acento"], 0), _ret(barra, bh),
+        _el(ctx, 2, x0, yc, 4, _painel(p["acento"], 0),
+            _ret(barra, bh, barra / 2 if ctx.kit else 0.0),
             entrada="pop" if ctx.entrada != "fade" else "fade", org=org),
     ]
     if p.get("fundo"):
-        els.append(_el(ctx, 0, x0 + barra, yc + u * 0.008, 4, _sombra(u), _ret(bw, bh),
+        r = ctx.canto(bw, bh, 0.0)
+        els.append(_el(ctx, 0, x0 + barra, yc + ctx.dy_sombra, 4, ctx.sombra, _ret(bw, bh, r),
                        entrada=ent_painel, aparece=0.08, org=org))
-        els.append(_el(ctx, 1, x0 + barra, yc, 4, _painel(p["fundo"], p["fundo_a"]),
-                       _ret(bw, bh), entrada=ent_painel, aparece=0.08, org=org))
+        els.append(_el(ctx, 1, x0 + barra, yc, 4, _painel_de(p, u),
+                       _ret(bw, bh, r), entrada=ent_painel, aparece=0.08, org=org))
     topo = yc - bh / 2 + pad * 0.8
     # o texto desliza DE DENTRO da barra: fora do painel ele não existe
     janela = (f"\\clip({x0 + barra:.0f},{yc - bh / 2 - u * 0.02:.0f},"
@@ -958,9 +1048,42 @@ _MONTADORES = {
 }
 
 
-def elementos(g, W: int, H: int, fonte: str = "Arial") -> list[_El]:
+def _com_grafia(g, kit: dict | None):
+    """O gráfico com o nome da marca na grafia exata (HOSPEDEPAY → hospedepay)."""
+    if not kit:
+        return g
+    from ..marca import corrigir_grafia
+
+    d = dict(g) if isinstance(g, dict) else dict(getattr(g, "__dict__", {}))
+    for k in ("texto", "subtexto", "prefixo", "sufixo"):
+        if d.get(k):
+            d[k] = corrigir_grafia(str(d[k]), kit)
+    itens = []
+    for it in d.get("itens") or []:
+        if isinstance(it, dict):
+            it = {**it, "texto": corrigir_grafia(str(it.get("texto") or ""), kit)}
+        else:
+            it = corrigir_grafia(str(it), kit)
+        itens.append(it)
+    d["itens"] = itens
+    return d
+
+
+def fonte_do_kit(kit: dict | None, padrao: str) -> "_Fonte":
+    if not kit or not kit.get("fontes"):
+        return _Fonte.de(padrao)
+    f = kit.get("fonte") or {}
+    return _Fonte.de(f.get("texto") or padrao, f.get("titulo") or "",
+                     bool(f.get("negrito", True)))
+
+
+def elementos(g, W: int, H: int, fonte: str = "Arial",
+              kit: dict | None = None) -> list[_El]:
     """As peças de um gráfico, no quadro W x H."""
     tipo = str(_v(g, "tipo", "texto") or "texto")
+    if tipo == "logo":
+        return []            # o logo é imagem: vem por render/logos.py
+    g = _com_grafia(g, kit)
     montar = _MONTADORES.get(tipo, _texto_simples)
     try:
         s = max(0.4, min(2.5, float(_v(g, "tamanho", 1.0) or 1.0)))
@@ -968,11 +1091,11 @@ def elementos(g, W: int, H: int, fonte: str = "Arial") -> list[_El]:
         s = 1.0
     entrada = str(_v(g, "entrada", "pop") or "pop")
     saida = str(_v(g, "saida", "fade") or "fade")
-    ctx = _Ctx(g=g, W=int(W), H=int(H), u=float(min(W, H)), s=s, p=_paleta(g),
-               fonte=_fonte(fonte),
+    ctx = _Ctx(g=g, W=int(W), H=int(H), u=float(min(W, H)), s=s, p=_paleta(g, kit),
+               fonte=fonte if isinstance(fonte, _Fonte) else fonte_do_kit(kit, fonte),
                dur=max(0.1, float(_v(g, "out_end", 0)) - float(_v(g, "out_start", 0))),
                entrada=entrada if entrada in ENTRADAS else "pop",
-               saida=saida if saida in SAIDAS else "fade")
+               saida=saida if saida in SAIDAS else "fade", kit=kit)
     return montar(ctx)
 
 
@@ -994,22 +1117,25 @@ def no_trecho(graficos, t0: float, dur: float,
 
 
 def eventos(graficos, W: int, H: int, t0: float, dur: float,
-            camadas: tuple = ("frente",), fonte: str = "Arial") -> list[str]:
+            camadas: tuple = ("frente",), fonte: str = "Arial",
+            kit: dict | None = None) -> list[str]:
     linhas: list[str] = []
-    todos = sorted(no_trecho(graficos, t0, dur, camadas),
+    todos = sorted((g for g in no_trecho(graficos, t0, dur, camadas)
+                    if _v(g, "tipo", "") != "logo"),
                    key=lambda g: float(_v(g, "out_start", 0.0)))
     for i, g in enumerate(todos):
         gs, ge = float(_v(g, "out_start", 0.0)), float(_v(g, "out_end", 0.0))
         base = 1 + 10 * i          # o gráfico que começa depois fica por cima
-        for el in elementos(g, W, H, fonte):
+        for el in elementos(g, W, H, fonte, kit):
             linhas += _eventos_do_elemento(el, gs, ge, t0, t0 + dur + 0.05, base)
     return linhas
 
 
 def ass(graficos, W: int, H: int, t0: float, dur: float,
-        camadas: tuple = ("frente",), fonte: str = "Arial") -> str:
+        camadas: tuple = ("frente",), fonte: str = "Arial",
+        kit: dict | None = None) -> str:
     """O ASS de um trecho: tempos relativos ao começo do trecho. "" = nada."""
-    linhas = eventos(graficos, W, H, t0, dur, camadas, fonte)
+    linhas = eventos(graficos, W, H, t0, dur, camadas, fonte, kit)
     if not linhas:
         return ""
     cabeca = [
@@ -1021,7 +1147,7 @@ def ass(graficos, W: int, H: int, t0: float, dur: float,
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: G,{_fonte(fonte)},40,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        f"Style: G,{_fonte(fonte_do_kit(kit, fonte))},40,&H00FFFFFF,&H00FFFFFF,&H00000000,"
         "&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1", "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -1031,8 +1157,9 @@ def ass(graficos, W: int, H: int, t0: float, dur: float,
 
 
 def escrever(caminho: Path, graficos, W: int, H: int, t0: float, dur: float,
-             camadas: tuple = ("frente",), fonte: str = "Arial") -> bool:
-    texto = ass(graficos, W, H, t0, dur, camadas, fonte)
+             camadas: tuple = ("frente",), fonte: str = "Arial",
+             kit: dict | None = None) -> bool:
+    texto = ass(graficos, W, H, t0, dur, camadas, fonte, kit)
     if not texto:
         return False
     caminho = Path(caminho)
@@ -1104,6 +1231,8 @@ def normalizar(d: dict, duracao: float | None = None) -> dict:
         "prefixo": str(d.get("prefixo") or "")[:12],
         "sufixo": str(d.get("sufixo") or "")[:12],
         "angulo": _num(d.get("angulo"), 0.0, -360.0, 360.0),
+        "logo": re.sub(r"[^a-z0-9_-]", "", str(d.get("logo") or "").lower())[:60],
+        "opacidade": _num(d.get("opacidade"), 1.0, 0.1, 1.0),
         "enabled": bool(d.get("enabled", True)),
         "origem": str(d.get("origem") or "")[:20],
     }

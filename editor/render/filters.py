@@ -421,7 +421,12 @@ def annotation_chain(annotations: list, width: int, height: int,
     return ",".join(parts)
 
 
-def subtitle_chain(ass_path: str | Path) -> str:
+def subtitle_chain(ass_path: str | Path, fontsdir: str | Path | None = None) -> str:
+    """O filtro ass. ``fontsdir``: a pasta das fontes do kit da marca — o
+    libass as usa sem que elas estejam instaladas no Windows."""
+    if fontsdir:
+        return (f"ass='{escape_filter_path(ass_path)}'"
+                f":fontsdir='{escape_filter_path(fontsdir)}'")
     return f"ass='{escape_filter_path(ass_path)}'"
 
 

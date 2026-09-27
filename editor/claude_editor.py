@@ -573,9 +573,9 @@ def _ajuda(caminho: str) -> str:
 # A trava é na lista de ferramentas, não só no pedido: no modo "edicao" as
 # ferramentas de gráfico não existem para ele; no "pos", as de corte não.
 MODOS = ("completo", "edicao", "pos")
-FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "tirar_da_pos"}
+FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos"}
 FERRAMENTAS_DE_LEITURA = {"pos_contexto", "transcricao", "ver_projeto", "ver_quadros",
-                          "analisar_cena", "estado_do_editor"}
+                          "analisar_cena", "estado_do_editor", "marca"}
 
 
 def _nomes() -> list[str]:
@@ -684,14 +684,48 @@ SISTEMA = (
 )
 
 GUIA_DA_POS = (
-    "PÓS-EDIÇÃO com grafico, transicao e camada: título forte no gancho; "
-    "tela de tópico quando o assunto muda; lista quando ele enumera (cada item "
-    "entrando quando é falado, com itens_em); número quando cita valor; nome "
-    "no começo se ele se apresenta; destaque na palavra que carrega a frase; "
-    "poucas transições (nas mudanças de assunto); camada desfoque/escurecer "
-    "nos momentos de ênfase; texto atrás da pessoa em títulos grandes quando "
-    "ela está no centro. Use analisar_cena para posicionar. Um gráfico por "
-    "ideia, nunca em cima da legenda, nunca cobrindo o rosto.")
+    "PÓS-EDIÇÃO seguindo a HABILIDADE DE MOTION (no fim deste pedido): marca → "
+    "pos_contexto → analisar_cena → um PLANO por momento do vídeo → cenas "
+    "(moldura, vidro3d), gráficos (títulos e listas em vidro, logo de lado, "
+    "texto atrás da pessoa), poucas transições → ver_quadros em tudo. Um "
+    "elemento por ideia, entrando quando é falado, nunca em cima da legenda, "
+    "nunca cobrindo o rosto.")
+
+# A HABILIDADE: o manual de motion design que o Claude segue na pós-edição.
+# É um arquivo no formato de skill do Claude Code (habilidades/sharkcut-motion/
+# SKILL.md): o Sharkcut o entrega no pedido de toda pós, e o botão "instalar a
+# habilidade" copia o mesmo arquivo para as skills do Claude Code da máquina —
+# o app Claude (aba Code) passa a saber editar no Sharkcut do mesmo jeito.
+HABILIDADE = Path(__file__).resolve().parent.parent / "habilidades" / "sharkcut-motion" / "SKILL.md"
+
+
+def habilidade() -> str:
+    try:
+        texto = HABILIDADE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if texto.startswith("---"):
+        fim = texto.find("\n---", 3)
+        if fim > 0:
+            texto = texto[fim + 4:]
+    return texto.strip()
+
+
+def _com_habilidade(linhas: list[str]) -> list[str]:
+    h = habilidade()
+    return linhas + (["", "=== HABILIDADE DE MOTION (siga) ===", h] if h else [])
+
+
+def instalar_habilidade() -> dict:
+    """Copia a habilidade para as skills do Claude Code desta máquina."""
+    pasta = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    destino = pasta / "skills" / "sharkcut-motion" / "SKILL.md"
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(HABILIDADE, destino)
+    except OSError as exc:
+        return {"ok": False, "motivo": f"não consegui gravar a habilidade: {exc}"}
+    return {"ok": True, "onde": str(destino)}
 
 
 def _freq(f: str) -> str:
@@ -707,7 +741,7 @@ def pedido_de_retoque(project, texto: str) -> str:
     """Um pedido NO MEIO da edição: faça só isto, sem refazer o resto."""
     from .projects import duracao_de_saida
 
-    return "\n".join([
+    return "\n".join(_com_habilidade([
         f"Você é o editor do projeto {project.id} (\"{project.name}\") no Sharkcut. "
         f"O vídeo JÁ está editado ({duracao_de_saida(project):.1f} s) — por você "
         f"antes e/ou à mão pelo dono. O Gemini não participa.",
@@ -717,8 +751,10 @@ def pedido_de_retoque(project, texto: str) -> str:
         "Faça SÓ o que ele pediu, sem refazer o resto nem desfazer o que ele "
         "mexeu à mão. Leia pos_contexto antes, confira o resultado com "
         "ver_quadros e termine com um relatório curto do que mudou. Você não "
-        "exporta: o Sharkcut refaz a prévia e o arquivo sozinho.",
-    ])
+        "exporta: o Sharkcut refaz a prévia e o arquivo sozinho. Se o pedido "
+        "for de pós-edição (gráfico, logo, cena, marca), siga a habilidade de "
+        "motion abaixo.",
+    ]))
 
 
 def pedido_da_pos(project) -> str:
@@ -726,7 +762,7 @@ def pedido_da_pos(project) -> str:
     from .projects import duracao_de_saida
 
     dono = _dono(project.plan)
-    return "\n".join([
+    return "\n".join(_com_habilidade([
         f"Você faz a PÓS-EDIÇÃO do projeto {project.id} (\"{project.name}\") no "
         f"Sharkcut. A edição (cortes, ritmo, câmera, legenda, b-roll) já está "
         f"pronta ({duracao_de_saida(project):.1f} s) e NÃO é sua para mexer: você "
@@ -736,14 +772,14 @@ def pedido_da_pos(project) -> str:
                                            "um editor de After Effects faria."),
         "",
         "ORDEM DE TRABALHO:",
-        "1. pos_contexto (o roteiro com os tempos do vídeo final) e, se precisar, "
-        "transcricao.",
+        "1. marca e pos_contexto (o roteiro com os tempos do vídeo final) e, se "
+        "precisar, transcricao.",
         "2. " + GUIA_DA_POS,
-        "3. CONFIRA com ver_quadros o começo, cada gráfico e cada transição, e "
-        "corrija o que ficou ruim com grafico(id=...).",
+        "3. CONFIRA com ver_quadros o começo, cada cena, cada gráfico e cada "
+        "transição, e corrija o que ficou ruim com grafico(id=...) ou cena(id=...).",
         "4. Termine com um RELATÓRIO curto, em tópicos, do que você pôs e por quê. "
         "Você não exporta: o Sharkcut gera a prévia e o arquivo sozinho.",
-    ])
+    ]))
 
 
 REVISAO = [
@@ -838,12 +874,14 @@ def pedido(project, modo: str = "completo") -> str:
         passos.append("B-ROLL.")
     if modo == "completo":
         passos += [GUIA_DA_POS,
-                   "CONFIRA com ver_quadros o começo, cada gráfico e cada transição, "
-                   "e corrija o que ficou ruim com grafico(id=...)."]
+                   "CONFIRA com ver_quadros o começo, cada cena, cada gráfico e cada "
+                   "transição, e corrija o que ficou ruim com grafico(id=...) ou cena(id=...)."]
     passos.append("Termine com um RELATÓRIO curto, em tópicos, para o dono do vídeo: "
                   "o que você tirou na revisão (cite os trechos entre aspas) e por quê, "
                   "o que mais mudou, e quanto o vídeo encurtou (antes → depois).")
     linhas += ["", "ORDEM DE TRABALHO:"] + [f"{i}. {x}" for i, x in enumerate(passos, 1)]
+    if modo == "completo":
+        linhas = _com_habilidade(linhas)
     return "\n".join(linhas)
 
 

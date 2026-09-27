@@ -496,6 +496,7 @@ export default function Timeline(props: Props) {
           : track.kind === 'blur' ? '#94a3b8'
           : item.kind === 'grafico' ? '#f59e0b'
           : item.kind === 'transicao' ? '#f472b6'
+          : item.kind === 'cena' ? '#FF385C'
           : item.kind === 'camada' ? '#22d3ee' : '#c084fc'
         g.fillStyle = cor + (vivo ? 'ee' : '99')
         g.fillRect(x0, y + 2, w, ROW.track - 4)

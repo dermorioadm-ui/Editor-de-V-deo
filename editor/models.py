@@ -255,6 +255,9 @@ class Grafico:
     sufixo: str = ""                # numero: "%", " mil", ...
     angulo: float = 0.0             # seta: para onde aponta, em graus (0 =
     #                                 direita, 90 = baixo)
+    logo: str = ""                  # logo: o nome do logo (do kit da marca ou
+    #                                 um PNG que o usuário pôs: "airbnb"...)
+    opacidade: float = 1.0          # logo: 0,1 a 1 (transparente a sólido)
     enabled: bool = True
     origem: str = ""                # "claude" quando veio da pós-edição pelo MCP
 
@@ -303,6 +306,32 @@ class Transicao:
     # âncora, a transição reencontra o bloco que começa no mesmo ponto.
     fonte: str = ""
     src_t: float = -1.0
+    enabled: bool = True
+    origem: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class Cena:
+    """Uma CENA: o quadro inteiro muda de arranjo por alguns segundos.
+
+    ``moldura``: o vídeo encolhe para um cartão de canto largo de um lado, e
+    o outro fica livre para o motion graphic. ``vidro3d``: fundo, logos e a
+    pessoa viram placas de vidro que giram, se separam e se juntam de novo.
+    Ver editor/render/cenas.py.
+    """
+
+    id: str = field(default_factory=lambda: new_id("c_"))
+    tipo: str = "moldura"           # moldura | vidro3d
+    out_start: float = 0.0
+    out_end: float = 4.0
+    lado: str = ""                  # moldura: direita|esquerda|cima|baixo;
+    #                                 vidro3d: para onde gira (esquerda|direita)
+    fundo: str = ""                 # desfoque | marca | claro | escuro | #RRGGBB
+    logos: list = field(default_factory=list)   # vidro3d: a placa do meio
+    forca: float = 0.5              # moldura: tamanho; vidro3d: giro e abertura
     enabled: bool = True
     origem: str = ""
 
@@ -384,6 +413,7 @@ class EditPlan:
     graficos: list = field(default_factory=list)
     camadas: list = field(default_factory=list)
     transicoes: list = field(default_factory=list)
+    cenas: list = field(default_factory=list)
     # QUEM EDITA: "" (o padrão: a IA do Gemini decide cortes e b-roll quando
     # há chave) ou "claude" — o Claude edita pelo MCP, e o Gemini sai da
     # frente: o corte automático fica na regra do programa e o Claude revisa.
@@ -396,6 +426,9 @@ class EditPlan:
     # Gemini ou a regra editando, o Claude entra só para a pós. Desligada, o
     # vídeo sai só com a edição.
     pos_claude: bool = False
+    # A MARCA deste vídeo (kit em marcas/<slug>): "" = a marca ligada no
+    # programa, "-" = nenhuma. Ver editor/marca.py.
+    marca: str = ""
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -438,9 +471,11 @@ class EditPlan:
             "graficos": [g.to_dict() for g in self.graficos],
             "camadas": [c.to_dict() for c in self.camadas],
             "transicoes": [x.to_dict() for x in self.transicoes],
+            "cenas": [c.to_dict() for c in self.cenas],
             "editor": self.editor,
             "pedido_claude": self.pedido_claude,
             "pos_claude": self.pos_claude,
+            "marca": self.marca,
             "version": self.version,
         }
 
@@ -488,12 +523,15 @@ class EditPlan:
         plan.editor = "claude" if data.get("editor") == "claude" else ""
         plan.pedido_claude = str(data.get("pedido_claude") or "")[:4000]
         plan.pos_claude = bool(data.get("pos_claude", False))
+        plan.marca = str(data.get("marca") or "")[:40]
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]
         plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])
                         if isinstance(c, dict)]
         plan.transicoes = [_from_dict(Transicao, x) for x in data.get("transicoes", [])
                            if isinstance(x, dict)]
+        plan.cenas = [_from_dict(Cena, c) for c in data.get("cenas", [])
+                      if isinstance(c, dict)]
         plan.version = int(data.get("version", 1))
         return plan
 

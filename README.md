@@ -1658,7 +1658,7 @@ O que a pós-edição tem:
 | **camadas** | a pessoa separada do fundo: **fundo desfocado** (lente aberta), **holofote** (fundo escuro), **3D** (a pessoa salta para a frente do fundo) e **pessoa recortada** sobre cor, com contorno |
 | **texto atrás da pessoa** | qualquer gráfico com "atrás da pessoa" passa por trás dela — o título some atrás da cabeça |
 
-Estilos: escuro, claro, neon (com brilho), cor da marca, sem fundo.
+Estilos: vidro (translúcido), claro, cor da marca, escuro, neon (com brilho), sem fundo.
 
 **Uma geração de encode, ainda.** Os gráficos são desenhados pelo mesmo
 libass que queima a legenda, no mesmo passe; as transições são filtros na
@@ -1684,6 +1684,59 @@ da linha do tempo e na aba **Pós**. Clique num item para ajustar texto,
 posição, tamanho, estilo, entrada, tempo — e **ver o quadro exato**. Arraste
 para mudar de lugar, estique a borda para mudar a duração. O botão **tirar o
 que o Claude pôs** leva só o que ele pôs, e o que você pôs à mão fica.
+
+### A marca, os logos e as cenas
+
+**Kit de marca.** A pós-edição sai na identidade da marca do vídeo. O Sharkcut
+vem com o kit da **hospedepay** (tirado da identidade visual v1): o nome na
+grafia exata, o coral `#FF385C` e as outras cores, a **DM Sans** (licença OFL,
+vai junto com o programa — não precisa instalar no Windows), os logos com
+fundo transparente (símbolo positivo, negativo, preto e branco; assinatura
+escura e branca) e as regras de uso e de voz. Na primeira tela, **Marca**
+escolhe a marca daquele vídeo (ou nenhuma — você tem outros negócios); na aba
+**Pós**, dá para trocar a marca de um vídeo já feito.
+
+Com a marca ligada:
+
+- o nome sai sempre certo — **hospedepay**, minúsculo, junto — no gráfico, na
+  legenda (mesmo que o Whisper ouça "hóspede pay") e já na transcrição (o
+  Whisper recebe o vocabulário da marca antes de transcrever);
+- os estilos pintam com as cores dela: **vidro** (painel translúcido, a imagem
+  aparece por trás), **claro** (cartão branco com destaque coral), **cor da
+  marca** (cartão coral de letra branca); sem negrito, canto largo, sombra
+  longa e quase invisível — o que a identidade pede;
+- o Claude lê o kit (`marca`) antes de pôr qualquer coisa.
+
+Um kit é uma pasta `marcas/<nome>/` com um `marca.json`, `logos/` e
+`fontes/`; os seus ficam em `%LOCALAPPDATA%\Editor de Video\marcas\`.
+
+**Logo.** O gráfico **logo** põe um PNG da marca no vídeo: de lado, pequeno,
+com a transparência que você quiser, entrando com pop, fade ou deslizando — e,
+com "atrás da pessoa", passando **por trás** de você. Logos de plataforma
+(Airbnb, Booking…) o Sharkcut não traz: são marcas dos outros. Você põe o PNG
+pelo botão **+ pôr logo** da aba Pós e ele passa a existir pelo nome
+("airbnb"). A regra da hospedepay vale: logo de plataforma nunca ao lado da
+marca.
+
+**Cenas.** O quadro inteiro muda de arranjo por alguns segundos:
+
+| | o que é |
+|---|---|
+| **moldura** | o vídeo encolhe, da tela cheia, para um cartão de canto largo de um lado (direita, esquerda; no vertical, embaixo ou em cima) sobre o próprio vídeo desfocado ou a cor da marca — e o outro lado fica livre para o motion graphic explicar. No fim, o cartão volta para a tela |
+| **camadas de vidro** | com o recorte da pessoa, o quadro vira três placas de vidro — o fundo, os logos e você — que giram de lado, se separam em profundidade, giram mais e se juntam de novo. "Separa em camadas, gira e junta" |
+
+A sequência mais forte: camadas de vidro → moldura com a explicação do lado.
+As duas saem no mesmo encode (o trecho é partido nos quadros da cena, sem
+mudar a contagem de quadros nem a duração).
+
+**A habilidade de motion.** O jeito de usar tudo isso — quando entra cada
+cena, onde vai cada gráfico, a sincronia com a fala, as regras da marca — está
+num manual que o Claude segue: `habilidades/sharkcut-motion/SKILL.md`, no
+formato de skill do Claude Code. O Sharkcut entrega esse manual ao Claude em
+toda pós-edição. O botão **instalar a habilidade de motion no seu app Claude**
+(aba Pós) copia o mesmo arquivo para as skills do Claude Code da sua máquina:
+o app Claude (aba Code) passa a saber editar no Sharkcut do mesmo jeito,
+quando você pede na conversa.
 
 ### O que ele NÃO pode fazer, de propósito
 

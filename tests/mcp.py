@@ -471,6 +471,7 @@ def main() -> int:
         check("diga as palavras" in texto,
               "cortar sem argumento explica o que falta em vez de estourar")
         testar_pos_edicao(cliente, tc, pid)
+        testar_marca_e_cenas(cliente, tc, pid)
 
         texto = F.chamar(cliente, "ferramenta_que_nao_existe", {})
         check("não existe ferramenta" in texto and "cortar" in texto,
@@ -491,6 +492,54 @@ def main() -> int:
         return 1
     print("o MCP passa")
     return 0
+
+
+def testar_marca_e_cenas(cliente: Cliente, tc: TestClient, pid: str) -> None:
+    """A marca, o logo e as cenas pelas ferramentas do Claude."""
+    print("\n-- marca, logo e cenas pelo MCP")
+    texto = F.chamar(cliente, "marca", {"projeto": pid})
+    check("hospedepay" in texto and "#FF385C" in texto and "simbolo" in texto
+          and "NUNCA logo de plataforma" in texto,
+          "marca: o Claude lê o nome exato, o coral, as regras e os logos")
+    check("hospedepay" in F.chamar(cliente, "pos_contexto", {"projeto": pid})[:400],
+          "e o roteiro da pós já começa pela marca")
+    texto = F.chamar(cliente, "grafico", {"projeto": pid, "tipo": "logo", "logo": "simbolo",
+                                          "inicio": 0.3, "fim": 3.0, "x": 0.92, "y": 0.12,
+                                          "opacidade": 0.8})
+    g = [x for x in svc.load(pid).plan.graficos if x.tipo == "logo"]
+    check(len(g) == 1 and g[0].logo == "simbolo" and abs(g[0].opacidade - 0.8) < 1e-6
+          and "logo" in texto,
+          f"grafico tipo=logo põe o logo de lado, transparente ({texto[:60]})")
+    texto = F.chamar(cliente, "grafico", {"projeto": pid, "tipo": "logo", "logo": "airbnb",
+                                          "inicio": 1.0})
+    check("recusou" in texto and "simbolo" in texto,
+          "logo que não existe volta explicado, com os que existem")
+    F.chamar(cliente, "grafico", {"projeto": pid, "tipo": "titulo", "texto": "HOSPEDE PAY",
+                                  "inicio": 0.5, "fim": 2.0, "estilo": "vidro"})
+    t = svc.load(pid).plan.graficos[-1]
+    check(t.texto == "hospedepay" and t.estilo == "vidro",
+          f"o nome da marca é gravado na grafia exata ({t.texto}), estilo vidro aceito")
+    texto = F.chamar(cliente, "cena", {"projeto": pid, "tipo": "moldura", "inicio": 1.0,
+                                       "fim": 4.0, "lado": "direita"})
+    cenas = svc.load(pid).plan.cenas
+    check(len(cenas) == 1 and cenas[0].tipo == "moldura" and cenas[0].origem == "claude"
+          and "ver_quadros" in texto,
+          f"cena moldura entra no plano ({texto[:70]})")
+    texto = F.chamar(cliente, "cena", {"projeto": pid, "tipo": "vidro3d", "inicio": 2.0,
+                                       "fim": 5.0})
+    check("recusou" in texto and "uma cena por vez" in texto,
+          "duas cenas ao mesmo tempo: recusado, explicado")
+    texto = F.chamar(cliente, "cena", {"projeto": pid, "id": cenas[0].id, "tipo": "vidro3d",
+                                       "logos": ["assinatura_branca"]})
+    c = svc.load(pid).plan.cenas[0]
+    check(c.tipo == "vidro3d" and c.logos == ["assinatura_branca"],
+          "com id, a cena muda (vira camadas de vidro com o logo da marca)")
+    ctx = F.chamar(cliente, "pos_contexto", {"projeto": pid})
+    check(f"cena {c.id}: vidro3d" in ctx, "o que já está na pós lista a cena")
+    r = F.chamar(cliente, "tirar_da_pos", {"projeto": pid, "tudo": True})
+    check(not svc.load(pid).plan.cenas and not [x for x in svc.load(pid).plan.graficos
+                                                if x.origem == "claude"],
+          f"tirar_da_pos tudo=true tira também as cenas ({r})")
 
 
 if __name__ == "__main__":

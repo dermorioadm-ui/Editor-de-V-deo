@@ -7,11 +7,22 @@ export const TIPOS_GRAFICO: [string, string][] = [
   ['titulo', 'Título'], ['tela', 'Tela de tópico'], ['lista', 'Lista'],
   ['destaque', 'Destaque'], ['numero', 'Número'], ['texto', 'Texto'],
   ['nome', 'Nome (lower third)'], ['seta', 'Seta'], ['circulo', 'Círculo'],
-  ['barra', 'Barra de progresso'],
+  ['barra', 'Barra de progresso'], ['logo', 'Logo'],
 ]
 const ESTILOS: [string, string][] = [
-  ['escuro', 'Escuro'], ['claro', 'Claro'], ['neon', 'Neon'], ['marca', 'Cor da marca'],
-  ['limpo', 'Sem fundo'],
+  ['vidro', 'Vidro (translúcido)'], ['claro', 'Claro'], ['marca', 'Cor da marca'],
+  ['escuro', 'Escuro'], ['neon', 'Neon'], ['limpo', 'Sem fundo'],
+]
+export const TIPOS_CENA: [string, string][] = [
+  ['moldura', 'Moldura (o vídeo de um lado)'], ['vidro3d', 'Camadas de vidro 3D'],
+]
+const LADOS: [string, string][] = [
+  ['', 'automático'], ['direita', 'direita'], ['esquerda', 'esquerda'], ['baixo', 'embaixo'],
+  ['cima', 'em cima'],
+]
+const FUNDOS: [string, string][] = [
+  ['', 'padrão'], ['desfoque', 'o vídeo desfocado'], ['marca', 'cor da marca'],
+  ['claro', 'claro'], ['escuro', 'escuro'],
 ]
 const ENTRADAS: [string, string][] = [
   ['pop', 'Pop'], ['slide', 'Desliza'], ['subir', 'Sobe'], ['3d', 'Giro 3D'],
@@ -29,8 +40,8 @@ export const TIPOS_TRANSICAO: [string, string][] = [
   ['desfoque', 'Desfoque'], ['luz', 'Luz'], ['giro', 'Giro'],
 ]
 
-const COLECAO: Record<string, 'graficos' | 'camadas' | 'transicoes'> = {
-  grafico: 'graficos', camada: 'camadas', transicao: 'transicoes',
+const COLECAO: Record<string, 'graficos' | 'camadas' | 'transicoes' | 'cenas'> = {
+  grafico: 'graficos', camada: 'camadas', transicao: 'transicoes', cena: 'cenas',
 }
 
 /**
@@ -52,6 +63,11 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
   const [quadro, setQuadro] = useState<string | null>(null)
   const [carregando, setCarregando] = useState(false)
   const [salvando, setSalvando] = useState(false)
+  const [logos, setLogos] = useState<string[]>([])
+
+  useEffect(() => {
+    api.marca().then((m) => setLogos(Object.keys(m.logos ?? {}))).catch(() => setLogos([]))
+  }, [])
 
   useEffect(() => {
     if (!item) return
@@ -86,7 +102,12 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
           x: +d.x, y: +d.y, tamanho: +d.tamanho, estilo: d.estilo, cor: d.cor || '',
           entrada: d.entrada, saida: d.saida, camada: d.camada,
           numero: +d.numero, prefixo: d.prefixo, sufixo: d.sufixo, angulo: +d.angulo,
+          logo: d.logo ?? '', opacidade: +(d.opacidade ?? 1),
         }
+      } else if (kind === 'cena') {
+        dados = { tipo: d.tipo, lado: d.lado ?? '', fundo: d.fundo ?? '', logos: d.logos ?? [],
+                  forca: +d.forca, out_start: Math.max(0, +d.out_start),
+                  out_end: Math.max(0, +d.out_start) + Math.max(1.5, +d.dura) }
       } else if (kind === 'camada') {
         dados = { efeito: d.efeito, forca: +d.forca, out_start: Math.max(0, +d.out_start),
                   out_end: Math.max(0, +d.out_start) + Math.max(0.3, +d.dura) }
@@ -112,7 +133,9 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
     }
   }
 
-  const titulo = kind === 'grafico' ? 'Gráfico' : kind === 'camada' ? 'Camada' : 'Transição'
+  const titulo = kind === 'grafico' ? (d.tipo === 'logo' ? 'Logo' : 'Gráfico')
+    : kind === 'camada' ? 'Camada' : kind === 'cena' ? 'Cena' : 'Transição'
+  const ehLogo = kind === 'grafico' && d.tipo === 'logo'
   const pedeItens = d.tipo === 'lista' || d.tipo === 'tela'
   const pedeNumero = d.tipo === 'numero' || d.tipo === 'barra'
 
@@ -137,11 +160,30 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
               {TIPOS_GRAFICO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </label>
+          {ehLogo ? (
+            <>
+              <label className="block">
+                <span className="label">qual logo</span>
+                <select className="field w-full text-xs py-1" value={d.logo ?? ''} data-campo="logo"
+                        onChange={(e) => set('logo', e.target.value)}>
+                  {!logos.includes(d.logo) && <option value={d.logo}>{d.logo || '—'}</option>}
+                  {logos.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="label">opacidade ({Math.round((+(d.opacidade ?? 1)) * 100)}%)</span>
+                <input type="range" min={0.1} max={1} step={0.05} value={d.opacidade ?? 1}
+                       className="w-full" data-campo="opacidade"
+                       onChange={(e) => set('opacidade', +e.target.value)} />
+              </label>
+            </>
+          ) : (
           <label className="block">
             <span className="label">{d.tipo === 'nome' ? 'nome' : d.tipo === 'numero' ? 'legenda do número' : 'texto'}</span>
             <textarea className="field w-full text-xs py-1" rows={2} value={d.texto ?? ''}
                       data-campo="texto" onChange={(e) => set('texto', e.target.value)} />
           </label>
+          )}
           {['titulo', 'tela', 'texto', 'nome', 'barra'].includes(d.tipo) && (
             <label className="block">
               <span className="label">{d.tipo === 'nome' ? 'função' : 'linha de baixo'}</span>
@@ -204,6 +246,7 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             <input type="range" min={0.4} max={2.5} step={0.1} value={d.tamanho} className="w-full"
                    onChange={(e) => set('tamanho', +e.target.value)} />
           </label>
+          {!ehLogo && (
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="label">estilo</span>
@@ -235,10 +278,77 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
               </select>
             </label>
           </div>
+          )}
+          {ehLogo && (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="label">entra</span>
+                <select className="field w-full text-xs py-1" value={d.entrada}
+                        onChange={(e) => set('entrada', e.target.value)}>
+                  {ENTRADAS.filter(([v]) => v !== 'digitar').map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="label">sai</span>
+                <select className="field w-full text-xs py-1" value={d.saida}
+                        onChange={(e) => set('saida', e.target.value)}>
+                  {SAIDAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-[11px] text-slate-300">
             <input type="checkbox" checked={d.camada === 'atras'} data-campo="atras"
                    onChange={(e) => set('camada', e.target.checked ? 'atras' : 'frente')} />
             atrás da pessoa (o texto passa por trás dela)
+          </label>
+        </>
+      )}
+
+      {kind === 'cena' && (
+        <>
+          <label className="block">
+            <span className="label">cena</span>
+            <select className="field w-full text-xs py-1" value={d.tipo} data-campo="tipo-cena"
+                    onChange={(e) => set('tipo', e.target.value)}>
+              {TIPOS_CENA.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="label">{d.tipo === 'moldura' ? 'o vídeo fica' : 'gira para'}</span>
+              <select className="field w-full text-xs py-1" value={d.lado ?? ''}
+                      onChange={(e) => set('lado', e.target.value)}>
+                {LADOS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">fundo</span>
+              <select className="field w-full text-xs py-1" value={d.fundo ?? ''}
+                      onChange={(e) => set('fundo', e.target.value)}>
+                {FUNDOS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+          </div>
+          {d.tipo === 'vidro3d' && (
+            <div className="block">
+              <span className="label">logos na placa do meio</span>
+              <div className="flex flex-wrap gap-2">
+                {logos.map((n) => (
+                  <label key={n} className="flex items-center gap-1 text-[11px] text-slate-300">
+                    <input type="checkbox" checked={(d.logos ?? []).includes(n)}
+                           onChange={(e) => set('logos', e.target.checked
+                             ? [...(d.logos ?? []), n] : (d.logos ?? []).filter((x: string) => x !== n))} />
+                    {n}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <label className="block">
+            <span className="label">{d.tipo === 'moldura' ? 'tamanho do cartão' : 'quanto gira e abre'} ({(+d.forca).toFixed(2)})</span>
+            <input type="range" min={0} max={1} step={0.05} value={d.forca} className="w-full"
+                   onChange={(e) => set('forca', +e.target.value)} />
           </label>
         </>
       )}

@@ -482,6 +482,7 @@ def analisar_midia(project: Project, media_id: str, ctx) -> dict:
         samples, info.duration, silence=env.all_silence_runs(0.5),
         on_progress=lambda f, m: ctx.progress(0.30 + f * 0.62, m),
         device_info=detect_device(),
+        initial_prompt=_dica_da_marca(project),
     )
     ctx.stage("encaixe", "encaixando as palavras no áudio")
     palavras, encaixes = trim_words(resultado["words"], env)
@@ -520,6 +521,15 @@ def analisar_midia(project: Project, media_id: str, ctx) -> dict:
             "name": midia.get("name") or ""}
 
 
+def _dica_da_marca(project: Project) -> str | None:
+    """O nome da marca e o vocabulário dela, como prompt inicial do Whisper:
+    sem isso ele ouve "hóspede pay" e escreve assim."""
+    from . import marca as M
+
+    dica = M.dica_de_transcricao(M.do_projeto(project))
+    return f"Vocabulário: {dica}." if dica else None
+
+
 def analyze(project: Project, ctx) -> dict:
     """Fase 1: áudio -> envelope -> transcrição -> palmas -> takes."""
     from .transcribe import detect_device, transcribe
@@ -548,6 +558,7 @@ def analyze(project: Project, ctx) -> dict:
         samples, info.duration, silence=env.all_silence_runs(0.5),
         on_progress=lambda f, m: ctx.progress(0.22 + f * 0.68, m),
         device_info=device,
+        initial_prompt=_dica_da_marca(project),
     )
     # O Whisper devolve fronteira de ALINHAMENTO, não fronteira acústica:
     # uma palavra de duas letras vem ocupando cinco segundos, e esses cinco
@@ -1452,9 +1463,15 @@ def _scoped(ctx, lo: float, hi: float, fn: Callable) -> Any:
 
 
 # ----------------------------------------------------------------- legendas
+def regras_de_correcao(project: Project) -> list[dict]:
+    """O dicionário de correções + a grafia exata da marca do vídeo."""
+    from . import marca as M
+
+    return db.list_corrections() + M.regras_de_legenda(M.do_projeto(project))
+
+
 def corrected_words(project: Project) -> tuple[list[dict], list[dict]]:
-    rules = db.list_corrections()
-    return apply_corrections(project.words, rules)
+    return apply_corrections(project.words, regras_de_correcao(project))
 
 
 def rebuild_subtitles(project: Project, timeline: Timeline | None = None,
@@ -1480,7 +1497,7 @@ def rebuild_subtitles(project: Project, timeline: Timeline | None = None,
     # nenhum clipe principal e o clamp a empurra para a borda mais próxima —
     # o resultado é a legenda inteira do segundo vídeo empilhada num instante
     # só. Uma chamada por fonte, e a ordem final é por tempo de saída.
-    regras = db.list_corrections()
+    regras = regras_de_correcao(project)
     for _mid in project.fontes_com_fala()[1:]:
         extras = [w for w in project.words_de(_mid)
                   if w.get("src_i", w["i"]) not in removed]
@@ -1762,10 +1779,11 @@ def build_tracks(project: "Project", blocks: list[dict],
     rotulos = {"titulo": "título", "tela": "tela", "lista": "lista",
                "destaque": "destaque", "numero": "número", "texto": "texto",
                "nome": "nome", "seta": "seta", "circulo": "círculo",
-               "barra": "barra"}
+               "barra": "barra", "logo": "logo"}
     graficos = [{
         "id": g.id, "kind": "grafico",
-        "label": f"{rotulos.get(g.tipo, g.tipo)}: {g.texto or g.subtexto or ''}".strip(": "),
+        "label": (f"logo: {g.logo}" if g.tipo == "logo" else
+                  f"{rotulos.get(g.tipo, g.tipo)}: {g.texto or g.subtexto or ''}".strip(": ")),
         "out_start": round(g.out_start, 3), "out_end": round(g.out_end, 3),
         "movable": True, "resizable": True,
         "detail": (f"{g.estilo}, entra {g.entrada}"
@@ -1778,6 +1796,17 @@ def build_tracks(project: "Project", blocks: list[dict],
         "movable": True, "resizable": True,
         "detail": f"força {c.forca:.1f}" + (" — pelo Claude" if c.origem == "claude" else ""),
     } for c in getattr(plan, "camadas", []) if c.enabled]
+    rot_cena = {"moldura": "moldura", "vidro3d": "camadas de vidro"}
+    for c in getattr(plan, "cenas", []):
+        if not c.enabled:
+            continue
+        camadas.append({
+            "id": c.id, "kind": "cena", "label": f"cena: {rot_cena.get(c.tipo, c.tipo)}",
+            "out_start": round(c.out_start, 3), "out_end": round(c.out_end, 3),
+            "movable": True, "resizable": True,
+            "detail": ((f"lado {c.lado}, " if c.lado else "") + (c.fundo or "fundo padrão")
+                       + (" — pelo Claude" if c.origem == "claude" else "")),
+        })
     inicio_do_bloco = {b["id"]: float(b.get("out_start", 0.0)) for b in blocks}
     for x in getattr(plan, "transicoes", []):
         emenda = inicio_do_bloco.get(x.clip_id)
@@ -1847,7 +1876,8 @@ def build_tracks(project: "Project", blocks: list[dict],
                  "Clique para editar; arraste para mudar de lugar."},
         {"id": "L1", "label": "Camadas", "kind": "camada", "accepts": [],
          "acao": "", "items": camadas,
-         "hint": "fundo desfocado, holofote, 3D e transições nas emendas."},
+         "hint": "fundo desfocado, holofote, 3D, cenas (moldura, camadas de vidro) "
+                 "e transições nas emendas."},
     ]
 
 
@@ -2840,6 +2870,8 @@ def timeline_summary(project: Project) -> dict:
             {**x.to_dict(), "emenda": next(
                 (b["out_start"] for b in blocks if b["id"] == x.clip_id), None)}
             for x in getattr(plan, "transicoes", [])],
+        "cenas": [c.to_dict() for c in getattr(plan, "cenas", [])],
+        "marca": getattr(plan, "marca", ""),
         "editor": getattr(plan, "editor", ""),
         "speed_warn": [b["id"] for b in blocks
                        if b["speed"] > plan.speed.warn_above],

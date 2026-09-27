@@ -29,8 +29,10 @@ import numpy as np
 
 from .config import ExportParams
 from .edit.timeline import Timeline
-from .models import Camada, Grafico, Transicao
+from . import marca as MK
+from .models import Camada, Cena, Grafico, Transicao
 from .render import camadas as CM
+from .render import cenas as CN
 from .render import motion as MG
 from .render import recorte as RC
 from .render import renderer as R
@@ -142,6 +144,8 @@ def contexto(project) -> dict:
         "graficos": [g.to_dict() for g in plan.graficos],
         "camadas": [c.to_dict() for c in plan.camadas],
         "transicoes": [x.to_dict() for x in plan.transicoes],
+        "cenas": [c.to_dict() for c in getattr(plan, "cenas", [])],
+        "marca": MK.resumo(MK.do_projeto(project)),
         "recorte": RC.estado(),
         "editor": getattr(plan, "editor", ""),
     }
@@ -376,6 +380,23 @@ def _achar(lista, iid: str):
     return next((x for x in lista if x.id == iid), None)
 
 
+def _conferir_grafico(project, novo: dict) -> dict:
+    """O nome da marca na grafia exata, e o logo pedido tem de existir."""
+    kit = MK.do_projeto(project)
+    for k in ("texto", "subtexto", "prefixo", "sufixo"):
+        if novo.get(k):
+            novo[k] = MK.corrigir_grafia(novo[k], kit)
+    novo["itens"] = [({**it, "texto": MK.corrigir_grafia(it.get("texto", ""), kit)}
+                      if isinstance(it, dict) else MK.corrigir_grafia(it, kit))
+                     for it in novo.get("itens") or []]
+    if novo.get("tipo") == "logo":
+        disponiveis = sorted(MK.logos(kit))
+        if novo.get("logo") not in disponiveis:
+            raise KeyError(f"o logo '{novo.get('logo') or '(vazio)'}' não existe — os que "
+                           f"existem: {', '.join(disponiveis) or 'nenhum (ponha um PNG na aba Pós)'}")
+    return novo
+
+
 def por_grafico(project, dados: dict, gid: str | None = None) -> Grafico:
     """Cria (sem ``gid``) ou atualiza um gráfico. Não grava."""
     plan = project.plan
@@ -384,12 +405,12 @@ def por_grafico(project, dados: dict, gid: str | None = None) -> Grafico:
         if g is None:
             raise KeyError(f"gráfico {gid} não existe")
         base = {**g.to_dict(), **{k: v for k, v in dados.items() if v is not None}}
-        novo = MG.normalizar(base, _duracao(project))
+        novo = _conferir_grafico(project, MG.normalizar(base, _duracao(project)))
         for k, v in novo.items():
             if k != "id":
                 setattr(g, k, v)
         return g
-    novo = MG.normalizar(dados, _duracao(project))
+    novo = _conferir_grafico(project, MG.normalizar(dados, _duracao(project)))
     novo.pop("id", None)
     g = Grafico(**novo)
     plan.graficos.append(g)
@@ -411,6 +432,39 @@ def por_camada(project, dados: dict, cid: str | None = None) -> Camada:
     novo.pop("id", None)
     c = Camada(**novo)
     plan.camadas.append(c)
+    return c
+
+
+def por_cena(project, dados: dict, cid: str | None = None) -> Cena:
+    """Cria (sem ``cid``) ou atualiza uma cena (moldura, camadas de vidro)."""
+    plan = project.plan
+    kit = MK.do_projeto(project)
+    if cid:
+        c = _achar(plan.cenas, cid)
+        if c is None:
+            raise KeyError(f"cena {cid} não existe")
+        base = {**c.to_dict(), **{k: v for k, v in dados.items() if v is not None}}
+        novo = CN.normalizar(base, _duracao(project))
+    else:
+        novo = CN.normalizar(dados, _duracao(project))
+    faltam = [n for n in novo["logos"] if n not in MK.logos(kit)]
+    if faltam:
+        raise KeyError(f"logo(s) que não existem: {', '.join(faltam)} — os que existem: "
+                       f"{', '.join(sorted(MK.logos(kit))) or 'nenhum'}")
+    # uma cena por vez: a nova não pode se sobrepor a outra
+    for outra in plan.cenas:
+        if outra.id != cid and outra.enabled and \
+                novo["out_start"] < outra.out_end and outra.out_start < novo["out_end"]:
+            raise KeyError(f"já existe a cena {outra.id} ({outra.tipo}) de "
+                           f"{outra.out_start:.2f} a {outra.out_end:.2f} s — uma cena por vez")
+    if cid:
+        for k, v in novo.items():
+            if k != "id":
+                setattr(c, k, v)
+        return c
+    novo.pop("id", None)
+    c = Cena(**novo)
+    plan.cenas.append(c)
     return c
 
 
@@ -464,7 +518,7 @@ def tirar(project, ids: list[str] | None = None, tudo: bool = False,
     plan = project.plan
     alvo = set(ids or [])
     n = 0
-    for nome in ("graficos", "camadas", "transicoes"):
+    for nome in ("graficos", "camadas", "transicoes", "cenas"):
         antes = getattr(plan, nome)
         fica = [x for x in antes
                 if not ((x.id in alvo)

@@ -1130,6 +1130,11 @@ def _itens_da_pos(d: dict) -> list[str]:
     for t in d.get("transicoes") or []:
         linhas.append(f"  transição {t['id']}: {t['tipo']} {t['duracao']} s "
                       f"na entrada do bloco {t['clip_id']}")
+    for c in d.get("cenas") or []:
+        linhas.append(f"  cena {c['id']}: {c['tipo']} {_seg(c['out_start'])}–"
+                      f"{_seg(c['out_end'])}" + (f" lado {c['lado']}" if c.get("lado") else "")
+                      + (f" fundo {c['fundo']}" if c.get("fundo") else "")
+                      + (f" logos {', '.join(c['logos'])}" if c.get("logos") else ""))
     return linhas
 
 
@@ -1155,6 +1160,8 @@ def pos_contexto(c: Cliente, a: dict) -> str:
     leg = d.get("legenda")
     rec = d.get("recorte") or {}
     linhas = [
+        d.get("marca") or "Nenhuma marca ligada.",
+        "",
         f"vídeo final: {_seg(d.get('duracao'))}, quadro {f.get('largura')}x{f.get('altura')}"
         f" ({f.get('proporcao')})",
         (f"legenda queimada ocupa a faixa y={leg['de']}–{leg['ate']} da altura: "
@@ -1262,7 +1269,7 @@ _ESQUEMA_GRAFICO = {
     "id": {"type": "string", "description": "para MUDAR um gráfico que já existe"},
     "tipo": {"type": "string",
              "enum": ["titulo", "tela", "lista", "destaque", "numero", "texto",
-                      "nome", "seta", "circulo", "barra"],
+                      "nome", "seta", "circulo", "barra", "logo"],
              "description": "titulo: título com barra de destaque; tela: TELA "
                             "CHEIA de tópico/capítulo (cobre o vídeo; aceita "
                             "prefixo 'PARTE 2' e itens); lista: tópicos que "
@@ -1272,7 +1279,11 @@ _ESQUEMA_GRAFICO = {
                             "lower third (texto=nome, subtexto=função; x,y = "
                             "borda ESQUERDA); seta: aponta para (x,y) — a PONTA "
                             "— na direção 'angulo'; circulo: anel em volta de "
-                            "(x,y); barra: progresso ('numero' em %)"},
+                            "(x,y); barra: progresso ('numero' em %); logo: a "
+                            "IMAGEM de um logo (campo logo = o nome, veja a "
+                            "ferramenta marca), no centro (x,y), com opacidade — "
+                            "de lado (x 0.08 ou 0.92) e transparente é o padrão "
+                            "bonito; camada=atras o põe ATRÁS da pessoa"},
     "inicio": {"type": "number", "description": "segundo do vídeo final"},
     "fim": {"type": "number", "description": "segundo do vídeo final"},
     "texto": {"type": "string"},
@@ -1285,7 +1296,10 @@ _ESQUEMA_GRAFICO = {
     "x": {"type": "number", "description": "0–1, centro na largura"},
     "y": {"type": "number", "description": "0–1, centro na altura"},
     "tamanho": {"type": "number", "description": "0.4–2.5 (1 = normal)"},
-    "estilo": {"type": "string", "enum": ["escuro", "claro", "neon", "marca", "limpo"]},
+    "estilo": {"type": "string", "enum": ["escuro", "claro", "neon", "marca", "limpo", "vidro"],
+               "description": "com marca ligada: marca = cartão na cor da marca, "
+                              "claro = cartão branco com destaque da marca, vidro = "
+                              "painel translúcido (a imagem aparece por trás)"},
     "cor": {"type": "string", "description": "#RRGGBB da cor de destaque"},
     "entrada": {"type": "string", "enum": ["pop", "slide", "subir", "3d", "digitar", "fade"]},
     "saida": {"type": "string", "enum": ["fade", "slide", "pop", "corte"]},
@@ -1295,6 +1309,8 @@ _ESQUEMA_GRAFICO = {
     "prefixo": {"type": "string"},
     "sufixo": {"type": "string"},
     "angulo": {"type": "number", "description": "seta: 0 direita, 90 baixo, 180 esquerda, -90 cima"},
+    "logo": {"type": "string", "description": "tipo logo: o nome do logo (veja marca)"},
+    "opacidade": {"type": "number", "description": "tipo logo: 0.1–1 (padrão 1)"},
 }
 
 
@@ -1311,7 +1327,8 @@ def grafico(c: Cliente, a: dict) -> str:
     gid = str(a.get("id") or "")
     corpo = {k: a[k] for k in ("tipo", "texto", "subtexto", "x", "y", "tamanho",
                                "estilo", "cor", "entrada", "saida", "camada",
-                               "numero", "prefixo", "sufixo", "angulo")
+                               "numero", "prefixo", "sufixo", "angulo", "logo",
+                               "opacidade")
              if a.get(k) is not None}
     if a.get("inicio") is not None:
         corpo["out_start"] = float(a["inicio"])
@@ -1329,6 +1346,10 @@ def grafico(c: Cliente, a: dict) -> str:
     else:
         r = c.put(f"/api/projects/{pid}/pos/graficos/{gid}", corpo)
     g = r["item"]
+    if g["tipo"] == "logo":
+        return (f"logo {g['id']} ({g['logo']}) de {g['out_start']:.2f} a {g['out_end']:.2f} s, "
+                f"opacidade {g['opacidade']}{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}. "
+                f"Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
     return (f"gráfico {g['id']} ({g['tipo']}) de {g['out_start']:.2f} a "
             f"{g['out_end']:.2f} s{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}. "
             f"Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
@@ -1407,8 +1428,88 @@ def transicao(c: Cliente, a: dict) -> str:
 
 
 @ferramenta(
+    "marca",
+    "A MARCA do vídeo: o nome na grafia exata, as cores (hex), a fonte, as "
+    "regras de uso, a voz e os LOGOS disponíveis (os nomes que vão no gráfico "
+    "tipo logo e na cena vidro3d). Leia antes de pôr qualquer gráfico: tudo "
+    "que você puser tem de parecer da marca.",
+    {"properties": {"projeto": {"type": "string",
+                                "description": "opcional: a marca deste vídeo"}}},
+)
+def marca(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    if pid:
+        return c.get(f"/api/projects/{pid}/pos/contexto").get("marca") or "Nenhuma marca ligada."
+    d = c.get("/api/marca")
+    kit = d.get("kit")
+    if not kit:
+        return ("Nenhuma marca ligada. Logos disponíveis: "
+                + (", ".join(sorted(d.get("logos") or {})) or "nenhum"))
+    linhas = [f"MARCA: {kit['nome']}", "CORES: " + ", ".join(f"{k} {v}" for k, v in kit["cores"].items())]
+    linhas += [f"- {r}" for r in kit.get("regras") or []]
+    linhas.append("LOGOS: " + ", ".join(sorted(d.get("logos") or {})))
+    return "\n".join(linhas)
+
+
+@ferramenta(
+    "cena",
+    "Uma CENA: o quadro inteiro muda de arranjo por alguns segundos (mínimo "
+    "1,5 s; uma cena por vez). moldura = o vídeo encolhe, da tela cheia, para "
+    "um cartão de canto largo de um LADO (direita/esquerda; no vertical, "
+    "baixo/cima) sobre o fundo (desfoque = o próprio vídeo desfocado; marca; "
+    "claro; escuro) — o outro lado fica LIVRE: ponha ali os gráficos que "
+    "explicam (x≈0.26 com o vídeo à direita). No fim, o cartão volta à tela. "
+    "vidro3d = CAMADAS DE VIDRO: o fundo, os logos (logos=[...], na placa do "
+    "meio) e a pessoa viram placas que giram de lado, se separam em "
+    "profundidade, giram mais e se juntam de novo — para mostrar 'o que está "
+    "por trás'; precisa do recorte da pessoa; 4 a 7 s é o tempo bom. Com id, "
+    "muda uma cena.",
+    {"properties": {"projeto": {"type": "string"},
+                    "id": {"type": "string"},
+                    "tipo": {"type": "string", "enum": ["moldura", "vidro3d"]},
+                    "inicio": {"type": "number"}, "fim": {"type": "number"},
+                    "lado": {"type": "string", "enum": ["direita", "esquerda", "cima", "baixo"],
+                             "description": "moldura: onde fica o vídeo; vidro3d: para onde gira"},
+                    "fundo": {"type": "string",
+                              "description": "desfoque | marca | claro | escuro | #RRGGBB"},
+                    "logos": {"type": "array", "items": {"type": "string"},
+                              "description": "vidro3d: os logos da placa do meio (até 4)"},
+                    "forca": {"type": "number",
+                              "description": "0–1: moldura = tamanho do cartão; vidro3d = "
+                                             "o quanto gira e abre"}},
+     "required": ["projeto"]},
+)
+def cena(c: Cliente, a: dict) -> str:
+    pid = str(a.get("projeto") or "")
+    corpo = {k: a[k] for k in ("tipo", "lado", "fundo", "logos", "forca")
+             if a.get(k) is not None}
+    if a.get("inicio") is not None:
+        corpo["out_start"] = float(a["inicio"])
+    if a.get("fim") is not None:
+        corpo["out_end"] = float(a["fim"])
+    if a.get("id"):
+        r = c.put(f"/api/projects/{pid}/pos/cenas/{a['id']}", corpo)
+    else:
+        if "out_start" not in corpo:
+            return "faltou o início."
+        corpo["origem"] = "claude"
+        r = c.post(f"/api/projects/{pid}/pos/cenas", corpo)
+    x = r["item"]
+    rec = r.get("recorte") or {}
+    aviso = ""
+    if x["tipo"] == "vidro3d" and not (rec.get("pronto") or rec.get("runtime")):
+        aviso = " ATENÇÃO: sem o recorte da pessoa, as placas saem sem a pessoa separada."
+    meio = (x["out_start"] + x["out_end"]) / 2
+    return (f"cena {x['id']}: {x['tipo']} de {x['out_start']:.2f} a {x['out_end']:.2f} s"
+            + (f", lado {x['lado']}" if x.get("lado") else "")
+            + (f", logos {', '.join(x['logos'])}" if x.get("logos") else "")
+            + f".{aviso} Confira com ver_quadros em {x['out_start'] + 0.4:.2f}, {meio:.2f} "
+              f"e {x['out_end'] - 0.3:.2f}.")
+
+
+@ferramenta(
     "tirar_da_pos",
-    "Tira itens da pós-edição (gráficos, camadas, transições) pelos ids — ou "
+    "Tira itens da pós-edição (gráficos, camadas, transições, cenas) pelos ids — ou "
     "todos os que VOCÊ pôs (tudo=true), sem mexer no que ele pôs à mão.",
     {"properties": {"projeto": {"type": "string"},
                     "ids": {"type": "array", "items": {"type": "string"}},

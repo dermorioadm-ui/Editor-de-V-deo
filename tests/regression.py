@@ -351,6 +351,7 @@ def main() -> int:
     testar_relogio_e_aviso_de_pronto()
     testar_trilha_toca_do_comeco_ao_fim()
     testar_pos_edicao_no_encode()
+    testar_marca_logos_cenas()
 
     print()
     if FALHAS:
@@ -7712,7 +7713,7 @@ def testar_pos_edicao_no_encode() -> None:
           and n["tamanho"] == 0.4 and n["entrada"] == "pop"
           and n["out_end"] - n["out_start"] >= 0.3,
           "valores fora da lista caem no padrão e números fora da faixa voltam")
-    for tipo in MG.TIPOS:
+    for tipo in [t for t in MG.TIPOS if t != "logo"]:   # o logo é imagem, não ASS
         for entrada in MG.ENTRADAS:
             ev = MG.eventos([{"tipo": tipo, "texto": "Teste de gráfico",
                               "itens": ["um", "dois"], "numero": 42,
@@ -7721,7 +7722,7 @@ def testar_pos_edicao_no_encode() -> None:
             if not ev:
                 check(False, f"{tipo}/{entrada} não gerou nada")
                 break
-    check(True, f"os {len(MG.TIPOS)} tipos × {len(MG.ENTRADAS)} entradas geram eventos")
+    check(True, f"os {len(MG.TIPOS) - 1} tipos × {len(MG.ENTRADAS)} entradas geram eventos")
     # a fatia que começa no meio da entrada leva o tempo da animação NEGATIVO:
     # a animação continua de onde estava, não recomeça
     ev = MG.eventos([Grafico(tipo="destaque", texto="X", out_start=1.9, out_end=4.0,
@@ -7917,6 +7918,156 @@ def testar_pos_edicao_no_encode() -> None:
             check(info_r and info_r["tem_pessoa"], "o recorte acha a pessoa do retrato")
             check(q[5:40, 5:40].mean() < 40 and q[300:340, 160:200].mean() > 80,
                   "e a recorta sobre a cor lisa: o canto vira fundo, o rosto fica")
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_marca_logos_cenas() -> None:
+    """A identidade da marca, os logos e as cenas — no MESMO encode.
+
+    Pedido: "falta usar a identidade visual da marca... hospedepay tá escrito
+    errado... botar a logo de lateral, transparente... elementos atrás de mim...
+    separa tudo em camadas de vidro, gira e junta de novo, me coloca numa
+    moldura do lado direito e explica do lado esquerdo".
+    """
+    import subprocess
+
+    from editor import marca as MK
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Cena, Clip, EditPlan, Grafico
+    from editor.render import cenas as CN
+    from editor.render import logos as LG
+    from editor.render import motion as MG
+    from editor.render.renderer import (_build_video_command, _chave_do_trecho,
+                                        plan_segments, render_video_segments)
+    from editor.subtitles.corrections import apply_corrections
+
+    def ok(cond, rotulo, extra=""):
+        check(bool(cond), rotulo + (f" — {extra}" if extra and not cond else ""))
+
+    print("\n-- marca, logos e cenas")
+    kit = MK.carregar("hospedepay")
+    ok(bool(kit) and kit["nome"] == "hospedepay" and kit["cores"].get("marca") == "#FF385C"
+          and len(kit["fontes"]) == 2
+          and {"simbolo", "assinatura", "assinatura_branca"} <= set(kit["logos"]),
+          "o kit da hospedepay vem com o programa: nome, coral, DM Sans e os logos")
+    ok(LG.dims_png(kit["logos"]["simbolo"]["caminho"]) == (528, 528),
+          "os logos são PNG de verdade (lidos pelo cabeçalho)")
+    frase = MK.corrigir_grafia("Conheça a HOSPEDEPAY, a Hospede Pay e a hóspede-pay.", kit)
+    ok(frase == "Conheça a hospedepay, a hospedepay e a hospedepay.",
+          f"a grafia da marca é corrigida em qualquer variante ({frase})")
+    ok(MK.corrigir_grafia("O hóspede chega às 14h.", kit) == "O hóspede chega às 14h.",
+          "e a palavra hóspede sozinha continua hóspede")
+    palavras = [{"i": 0, "start": 0.0, "end": 0.3, "text": "Hospede"},
+                {"i": 1, "start": 0.3, "end": 0.6, "text": "Pay,"},
+                {"i": 2, "start": 0.6, "end": 0.9, "text": "agora"}]
+    saida, _log = apply_corrections(palavras, MK.regras_de_legenda(kit))
+    ok([w["text"] for w in saida] == ["hospedepay,", "agora"],
+          "na legenda também — minúsculo mesmo no começo da frase",
+          str([w["text"] for w in saida]))
+    ok(MK.dica_de_transcricao(kit).startswith("hospedepay"),
+          "e o Whisper recebe o nome da marca antes de transcrever")
+
+    t = MG.ass([Grafico(tipo="titulo", texto="HOSPEDEPAY", estilo="marca",
+                        out_start=0, out_end=3)], 1920, 1080, 0.0, 3.0, kit=kit)
+    ok("DM Sans" in t and "\\b1" not in t and "hospedepay" in t and "HOSPEDEPAY" not in t
+          and "&H5C38FF&" in t,
+          "com a marca: DM Sans, sem negrito, o coral dela e o nome escrito certo")
+    v = MG.ass([Grafico(tipo="texto", texto="vidro", estilo="vidro", out_start=0, out_end=3)],
+               1920, 1080, 0.0, 3.0, kit=kit)
+    ok("\\1a&HC4&" in v and "\\3c&HFFFFFF&" in v,
+          "o estilo vidro: painel translúcido com fio claro na borda")
+    ok(MG.ass([Grafico(tipo="logo", logo="simbolo", out_start=0, out_end=3)],
+                 1920, 1080, 0.0, 3.0, kit=kit) == "",
+          "o logo não vira ASS (é imagem, entra pelo overlay)")
+    n = CN.normalizar({"tipo": "vidro3d", "out_start": 5, "out_end": 5.5, "lado": "x",
+                       "fundo": "arco-íris", "logos": ["a", "b", "c", "d", "e"]}, 30.0)
+    ok(n["out_end"] - n["out_start"] >= 1.5 and n["lado"] == "" and n["fundo"] == ""
+          and len(n["logos"]) == 4,
+          "cena fora da regra volta para dentro (mínimo 1,5 s, lado e fundo válidos, até 4 logos)")
+
+    tmp = Path(tempfile.mkdtemp(prefix="marca_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=s=640x360:r=30:d=4", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(fonte)], check=True)
+    info = probe(fonte)
+    fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+
+    def plano(graficos=(), cenas=(), cortes=((0, 4),)):
+        p = EditPlan()
+        p.export = ExportParams(scale="source", burn_subtitles=False, preset="ultrafast", crf=18)
+        p.clips = [Clip(src_start=a, src_end=b) for a, b in cortes]
+        p.graficos, p.cenas, p.marca = list(graficos), list(cenas), "hospedepay"
+        return p
+
+    def render(p, nome):
+        tl = Timeline(p.active_clips, 30.0)
+        segs = plan_segments(p, tl, fontes, info)
+        render_video_segments(segs, p, info, [], tmp / nome, {"main": str(fonte)}, None)
+        lista = tmp / f"{nome}.txt"
+        lista.write_text("".join(f"file '{s.file}'\n" for s in segs))
+        saida = tmp / f"{nome}.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                        "-i", str(lista), "-c", "copy", str(saida)], check=True)
+        return saida, segs
+
+    def quadro(video, t):
+        r = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(video),
+                            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                           capture_output=True, check=True)
+        return np.frombuffer(r.stdout, np.uint8).reshape(360, 640, 3).astype(int)
+
+    def contar(video):
+        r = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v",
+                            "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0",
+                            str(video)], capture_output=True, text=True, check=True)
+        return int(r.stdout.strip() or 0)
+
+    original, _s = render(plano(), "original")
+    logo = Grafico(tipo="logo", logo="simbolo", x=0.85, y=0.25, tamanho=1.0, opacidade=1.0,
+                   out_start=0.2, out_end=3.8, entrada="fade")
+    titulo = Grafico(tipo="titulo", texto="hospedepay", estilo="claro", x=0.3, y=0.8,
+                     out_start=0.5, out_end=3.5)
+    v, segs = render(plano([logo, titulo]), "logo")
+    q = quadro(v, 2.0)
+    pw, ph = LG.tamanho(logo, kit["logos"]["simbolo"]["caminho"], 640, 360)
+    cx, cy = int(0.85 * 640), int(0.25 * 360)
+    canto = q[cy - ph // 2 + 6, cx - pw // 2 + pw // 2 - pw // 3]     # o coral do quadrado
+    ok(canto[0] > 200 and canto[1] < 110 and canto[2] < 140,
+          f"o logo sai no quadro, na cor dele (pixel {list(canto)})")
+    cmd, _i = _build_video_command(segs[0], plano([logo, titulo]), info, [], tmp / "ass",
+                                   {"main": str(fonte)}, None)
+    fg = cmd[cmd.index("-filter_complex") + 1]
+    ok("fontsdir=" in fg and "-loop" in cmd and "§" not in fg,
+          "a fonte da marca vai junto para o libass, e o logo entra como imagem em loop")
+
+    moldura = Cena(tipo="moldura", lado="direita", fundo="marca", out_start=1.0, out_end=3.2)
+    v, _s = render(plano(cenas=[moldura]), "moldura")
+    ok(contar(v) == 120, f"a moldura não muda a contagem de quadros ({contar(v)})")
+    a, b = quadro(original, 2.2), quadro(v, 2.2)
+    esquerda = b[40:320, 20:200].reshape(-1, 3).mean(axis=0)
+    ok(abs(esquerda[0] - 255) < 30 and esquerda[1] < 110,
+          f"no meio da cena, o lado livre é o fundo da marca (cor média {esquerda.round()})")
+    ok(np.abs(quadro(original, 0.5) - quadro(v, 0.5)).mean() < 2.0
+          and np.abs(quadro(original, 3.6) - quadro(v, 3.6)).mean() < 2.0,
+          "fora da cena, o quadro é o original")
+    ok(np.abs(a - b)[:, 360:].mean() > 8,
+          "e o vídeo está no cartão, do lado direito (a imagem mudou de lugar)")
+    k1 = _chave_do_trecho(segs[0], plano(), info, [], None)[0]
+    k2 = _chave_do_trecho(segs[0], plano(cenas=[moldura]), info, [], None)[0]
+    ok(k1 != k2, "uma cena muda a chave do cache do trecho")
+
+    vidro = Cena(tipo="vidro3d", logos=["assinatura_branca"], out_start=0.8, out_end=3.4)
+    v, segs = render(plano(cenas=[vidro], cortes=((0, 2), (2, 4))), "vidro")
+    ok(contar(v) == 120, f"as camadas de vidro não mudam a contagem de quadros ({contar(v)})")
+    q = quadro(v, 2.1)
+    cantos = np.concatenate([q[2:12, 2:12].reshape(-1, 3), q[-12:-2, -12:-2].reshape(-1, 3)]).mean(axis=0)
+    ok(cantos[0] > 200 and cantos[1] < 110,
+          f"no meio da cena, as placas giram sobre o coral da marca (cantos {cantos.round()})")
+    ok(np.abs(quadro(original, 0.4) - quadro(v, 0.4)).mean() < 2.0,
+          "antes da cena, o quadro é o original — e a cena atravessa a emenda dos trechos")
     shutil.rmtree(tmp, ignore_errors=True)
 
 

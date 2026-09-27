@@ -600,6 +600,12 @@ def aplicar_receita(project, payload: dict) -> None:
         plan.pedido_claude = str(payload.get("pedido_claude") or "")[:4000]
     if "pos_claude" in payload:
         plan.pos_claude = bool(payload.get("pos_claude"))
+    if "marca" in payload:
+        # a marca DESTE vídeo: o slug do kit, "-" = nenhuma, "" = a do programa
+        from . import marca as MK
+
+        slug = str(payload.get("marca") or "")
+        plan.marca = slug if slug in ("", "-") or MK.carregar(slug) else ""
     if "alvo_duracao" in payload:
         try:
             plan.alvo_duracao = max(0.0, float(payload["alvo_duracao"] or 0.0))
@@ -1172,7 +1178,8 @@ def api_item(pid: str, payload: dict = Body(...)) -> dict:
 
     colecoes = {"cutaway": plan.cutaways, "overlay": plan.overlays,
                 "blur": plan.blurs, "grafico": plan.graficos,
-                "camada": plan.camadas, "transicao": plan.transicoes}
+                "camada": plan.camadas, "transicao": plan.transicoes,
+                "cena": getattr(plan, "cenas", [])}
     alvo = None
     if kind == "music":
         if not plan.music:
@@ -2315,6 +2322,7 @@ def _pos(project) -> dict:
     return {"graficos": [g.to_dict() for g in plan.graficos],
             "camadas": [c.to_dict() for c in plan.camadas],
             "transicoes": [x.to_dict() for x in plan.transicoes],
+            "cenas": [c.to_dict() for c in getattr(plan, "cenas", [])],
             "recorte": _recorte_estado(),
             "editor": getattr(plan, "editor", "")}
 
@@ -2378,6 +2386,86 @@ def api_pos_transicao(pid: str, payload: dict = Body(...)) -> dict:
 @app.put("/api/projects/{pid}/pos/transicoes/{xid}")
 def api_pos_transicao_mudar(pid: str, xid: str, payload: dict = Body(...)) -> dict:
     return _pos_mudar(pid, lambda pe, p: pe.por_transicao(p, payload, xid))
+
+
+@app.post("/api/projects/{pid}/pos/cenas")
+def api_pos_cena(pid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_cena(p, payload))
+
+
+@app.put("/api/projects/{pid}/pos/cenas/{cid}")
+def api_pos_cena_mudar(pid: str, cid: str, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_cena(p, payload, cid))
+
+
+# ------------------------------------------------------------------ marca
+# O KIT DA MARCA (editor/marca.py). A tela mostra o kit ligado, troca de
+# marca, e põe/tira logos na biblioteca (os PNG do usuário: Airbnb, Booking).
+# Nenhuma rota devolve caminho do disco; o PNG só sai pelo nome.
+@app.get("/api/marca")
+def api_marca() -> dict:
+    from . import marca as MK
+
+    kit = MK.ativa()
+    return {"ativa": MK.ativa_slug(), "kit": MK.publico(kit), "lista": MK.listar(),
+            "logos": {n: {"uso": d["uso"], "da_marca": d["da_marca"]}
+                      for n, d in MK.logos(kit).items()}}
+
+
+@app.post("/api/marca/ativa")
+def api_marca_ativa(payload: dict = Body(...)) -> dict:
+    from . import marca as MK
+
+    try:
+        MK.definir_ativa(str(payload.get("slug") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return api_marca()
+
+
+@app.post("/api/marca/logos")
+def api_marca_logo(payload: dict = Body(...)) -> dict:
+    """Guarda um PNG do disco na biblioteca de logos (pelo caminho)."""
+    from . import marca as MK
+
+    try:
+        r = MK.guardar_logo(str(payload.get("caminho") or ""), str(payload.get("nome") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "nome": r["nome"], **api_marca()}
+
+
+@app.delete("/api/marca/logos/{nome}")
+def api_marca_logo_apagar(nome: str) -> dict:
+    from . import marca as MK
+
+    if not MK.apagar_logo(nome):
+        raise HTTPException(404, "esse logo não está na biblioteca (os do kit não se apagam)")
+    return {"ok": True, **api_marca()}
+
+
+@app.get("/api/marca/logo/{nome}")
+def api_marca_logo_ver(nome: str):
+    from . import marca as MK
+
+    caminho = MK.caminho_do_logo(MK.ativa(), nome)
+    if not caminho:
+        raise HTTPException(404, "logo não encontrado")
+    return FileResponse(caminho, media_type="image/png")
+
+
+@app.post("/api/projects/{pid}/marca")
+def api_projeto_marca(pid: str, payload: dict = Body(...)) -> dict:
+    """A marca DESTE vídeo: "" = a ligada no programa, "-" = nenhuma."""
+    from . import marca as MK
+
+    project = _project(pid)
+    slug = str(payload.get("slug") or "")
+    if slug not in ("", "-") and not MK.carregar(slug):
+        raise HTTPException(400, "essa marca não existe")
+    project.plan.marca = slug
+    project.save_plan()
+    return {"ok": True, "marca": slug}
 
 
 @app.post("/api/projects/{pid}/pos/tirar")
@@ -2535,6 +2623,16 @@ def api_claude_testar() -> dict:
     from . import claude_editor
 
     return claude_editor.testar(str(db.get_setting("claude_modelo", "") or ""))
+
+
+@app.post("/api/claude/habilidade")
+def api_claude_habilidade(request: Request) -> dict:
+    """Instala a habilidade de motion nas skills do Claude Code desta máquina."""
+    from . import claude_editor
+
+    if request.client and request.client.host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "instale a habilidade pelo próprio computador")
+    return claude_editor.instalar_habilidade()
 
 
 @app.post("/api/claude/entrar")

@@ -2,14 +2,21 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
 import { getPlayhead, setPlayhead, setState, toast, useStore } from '../state/store'
-import { EFEITOS_CAMADA, TIPOS_GRAFICO, TIPOS_TRANSICAO } from './PosInspector'
+import { EFEITOS_CAMADA, TIPOS_CENA, TIPOS_GRAFICO, TIPOS_TRANSICAO } from './PosInspector'
 
 const NOME_TIPO = Object.fromEntries(TIPOS_GRAFICO)
 const NOME_EFEITO = Object.fromEntries(EFEITOS_CAMADA)
 const NOME_TRANS = Object.fromEntries(TIPOS_TRANSICAO)
+const NOME_CENA = Object.fromEntries(TIPOS_CENA)
 
 // os atalhos: cada um põe um item pronto no cursor, para ajustar depois
-const RAPIDOS: { rotulo: string; tipo: 'graficos' | 'camadas'; dados: any }[] = [
+const RAPIDOS: { rotulo: string; tipo: 'graficos' | 'camadas' | 'cenas'; dados: any; dura?: number }[] = [
+  { rotulo: 'logo de lado', tipo: 'graficos',
+    dados: { tipo: 'logo', logo: 'simbolo', x: 0.92, y: 0.12, tamanho: 0.7, opacidade: 0.8 }, dura: 8 },
+  { rotulo: 'moldura', tipo: 'cenas', dados: { tipo: 'moldura', fundo: 'desfoque' }, dura: 6 },
+  { rotulo: 'camadas de vidro', tipo: 'cenas', dados: { tipo: 'vidro3d', logos: ['assinatura_branca'] }, dura: 5 },
+  { rotulo: 'título em vidro', tipo: 'graficos',
+    dados: { tipo: 'titulo', texto: 'TÍTULO', y: 0.2, estilo: 'vidro', entrada: 'subir' } },
   { rotulo: 'título', tipo: 'graficos', dados: { tipo: 'titulo', texto: 'TÍTULO', y: 0.2, entrada: '3d' } },
   { rotulo: 'tela de tópico', tipo: 'graficos',
     dados: { tipo: 'tela', texto: 'Tópico', prefixo: 'PARTE 1', entrada: 'pop' } },
@@ -50,11 +57,15 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
   const graficos = view.graficos ?? []
   const camadas = view.camadas ?? []
   const transicoes = view.transicoes ?? []
-  const doClaude = [...graficos, ...camadas, ...transicoes].filter((x: any) => x.origem === 'claude').length
+  const cenas = (view as any).cenas ?? []
+  const doClaude = [...graficos, ...camadas, ...transicoes, ...cenas]
+    .filter((x: any) => x.origem === 'claude').length
 
   const itens = [
+    ...cenas.map((c: any) => ({ kind: 'cena', id: c.id, t: c.out_start, fim: c.out_end,
+      rotulo: `Cena: ${NOME_CENA[c.tipo] ?? c.tipo}`, extra: c.lado || '', claude: c.origem === 'claude' })),
     ...graficos.map((g: any) => ({ kind: 'grafico', id: g.id, t: g.out_start, fim: g.out_end,
-      rotulo: `${NOME_TIPO[g.tipo] ?? g.tipo}${g.texto ? `: ${g.texto}` : ''}`,
+      rotulo: g.tipo === 'logo' ? `Logo: ${g.logo}` : `${NOME_TIPO[g.tipo] ?? g.tipo}${g.texto ? `: ${g.texto}` : ''}`,
       extra: g.camada === 'atras' ? 'atrás da pessoa' : '', claude: g.origem === 'claude' })),
     ...camadas.map((c: any) => ({ kind: 'camada', id: c.id, t: c.out_start, fim: c.out_end,
       rotulo: NOME_EFEITO[c.efeito] ?? c.efeito, extra: '', claude: c.origem === 'claude' })),
@@ -62,13 +73,13 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
       rotulo: `Transição: ${NOME_TRANS[x.tipo] ?? x.tipo}`, extra: '', claude: x.origem === 'claude' })),
   ].sort((a, b) => a.t - b.t)
 
-  const por = async (tipo: 'graficos' | 'camadas', dados: any) => {
+  const por = async (tipo: 'graficos' | 'camadas' | 'cenas', dados: any, dura = 3) => {
     snapshot()
     const t = getPlayhead()
     try {
-      const r = await api.posCriar(project.id, tipo, { ...dados, out_start: t, out_end: t + 3 })
+      const r = await api.posCriar(project.id, tipo, { ...dados, out_start: t, out_end: t + dura })
       await onChanged()
-      onSelect(tipo === 'graficos' ? 'grafico' : 'camada', r.item.id)
+      onSelect(tipo === 'graficos' ? 'grafico' : tipo === 'cenas' ? 'cena' : 'camada', r.item.id)
     } catch (e: any) {
       toast('warn', 'Não deu para pôr', String(e.message ?? e))
     }
@@ -135,6 +146,8 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
         )}
       </div>
 
+      <MarcaDoVideo projeto={project.id} marcaDoPlano={(view as any).marca ?? ''} />
+
       <button className="btn btn-primary w-full" data-acao="claude-pos"
               disabled={!!claudeRodando}
               onClick={async () => {
@@ -154,7 +167,7 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
         <span className="label">pôr no cursor</span>
         <div className="flex flex-wrap gap-1.5">
           {RAPIDOS.map((r) => (
-            <button key={r.rotulo} className="btn btn-xs" onClick={() => por(r.tipo, r.dados)}>
+            <button key={r.rotulo} className="btn btn-xs" onClick={() => por(r.tipo, r.dados, r.dura)}>
               + {r.rotulo}</button>
           ))}
           <button className="btn btn-xs" onClick={transicao}>+ transição na emenda</button>
@@ -189,6 +202,95 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
           ))}
         </ul>
       </div>
+    </div>
+  )
+}
+
+
+/**
+ * A MARCA DESTE VÍDEO: o kit (nome, cores, logos) que o Claude e os gráficos
+ * usam, os logos disponíveis — os da marca e os que você pôs (Airbnb,
+ * Booking…) — e a habilidade de motion para o seu app Claude.
+ */
+function MarcaDoVideo({ projeto, marcaDoPlano }: { projeto: string; marcaDoPlano: string }) {
+  const [m, setM] = useState<any>(null)
+  const [escolha, setEscolha] = useState(marcaDoPlano)
+  const carregar = () => api.marca().then(setM).catch(() => setM(null))
+  useEffect(() => { carregar() }, [])
+  useEffect(() => { setEscolha(marcaDoPlano) }, [marcaDoPlano])
+  if (!m) return null
+  const kit = escolha === '-' ? null
+    : (escolha ? (m.lista ?? []).find((k: any) => k.slug === escolha) : m.kit)
+  const cores: [string, string][] = kit && m.kit && (!escolha || escolha === m.kit.slug)
+    ? Object.entries(m.kit.cores ?? {}).slice(0, 5) as [string, string][] : []
+
+  const trocar = async (slug: string) => {
+    setEscolha(slug)
+    try { await api.projetoMarca(projeto, slug) } catch (e: any) {
+      toast('warn', 'Não deu para trocar a marca', String(e.message ?? e))
+    }
+  }
+  const porLogo = async () => {
+    try {
+      const r = await api.escolher('image', 'Escolher o PNG do logo (fundo transparente)')
+      if (r.cancelado) return
+      const nome = window.prompt('Nome do logo (ex.: airbnb, booking):',
+        String(r.path ?? '').split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? '') ?? ''
+      const res = await api.marcaLogo(r.path, nome)
+      setM(res)
+      toast('ok', `Logo "${res.nome}" pronto`, 'O Claude e o "+ logo" já podem usar.')
+    } catch (e: any) {
+      toast('warn', 'Não deu para pôr o logo', String(e.message ?? e))
+    }
+  }
+  const instalar = async () => {
+    try {
+      const r = await api.claudeHabilidade()
+      if (r.ok) toast('ok', 'Habilidade instalada no seu Claude', `em ${r.onde}`)
+      else toast('warn', 'Não deu para instalar', r.motivo)
+    } catch (e: any) {
+      toast('warn', 'Não deu para instalar', String(e.message ?? e))
+    }
+  }
+  return (
+    <div className="card p-2 space-y-1.5 text-[11px]" data-marca-do-video={kit?.slug ?? 'nenhuma'}>
+      <div className="flex items-center gap-2">
+        <span className="text-slate-300 flex-1">Marca deste vídeo</span>
+        <select className="field text-xs py-0.5" value={escolha} onChange={(e) => trocar(e.target.value)}>
+          <option value="">{m.kit ? `a do programa (${m.kit.nome})` : 'a do programa (nenhuma)'}</option>
+          {(m.lista ?? []).map((k: any) => <option key={k.slug} value={k.slug}>{k.nome}</option>)}
+          <option value="-">nenhuma</option>
+        </select>
+      </div>
+      {cores.length > 0 && (
+        <div className="flex items-center gap-1">
+          {cores.map(([nome, cor]) => (
+            <span key={nome} title={`${nome} ${cor}`} className="w-4 h-4 rounded"
+                  style={{ background: cor, border: '1px solid #ffffff22' }} />
+          ))}
+          <span className="text-slate-500 ml-1">{m.kit?.fonte?.texto}</span>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {Object.keys(m.logos ?? {}).map((n) => (
+          <span key={n} className="chip border-line text-slate-300 flex items-center gap-1" data-logo={n}>
+            <img src={api.marcaLogoUrl(n)} alt="" className="h-4 w-auto" />{n}
+            {!m.logos[n].da_marca && (
+              <button className="text-red-300" title="tirar da biblioteca"
+                      onClick={async () => setM(await api.marcaLogoApagar(n))}>×</button>
+            )}
+          </span>
+        ))}
+        <button className="btn btn-xs" onClick={porLogo} data-acao="por-logo">+ pôr logo (PNG)</button>
+      </div>
+      <p className="text-slate-500 leading-snug">
+        Logos de plataforma (Airbnb, Booking) você põe aqui — o Sharkcut não traz marca dos
+        outros. Pela regra da marca, eles nunca aparecem ao lado do seu logo.
+      </p>
+      <button className="btn btn-xs w-full" onClick={instalar} data-acao="instalar-habilidade"
+              title="copia o manual de motion do Sharkcut para as skills do Claude Code desta máquina">
+        instalar a habilidade de motion no seu app Claude
+      </button>
     </div>
   )
 }

@@ -106,7 +106,10 @@ def apply_corrections(words: list[dict], rules: list[dict]) -> tuple[list[dict],
             target = str(rule["to"])
             for cap in caps:
                 target = target.replace("{n}", cap, 1)
-            target = _restore_case(_core(group[0]["text"])[1], target)
+            if not rule.get("exato"):
+                # a grafia de uma MARCA é exata: "hospedepay" continua
+                # minúsculo mesmo no começo da frase
+                target = _restore_case(_core(group[0]["text"])[1], target)
 
             pieces = target.split()
             span_start = float(group[0]["start"])

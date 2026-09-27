@@ -35,8 +35,11 @@ from ..ffmpeg_utils import (FFmpegError, MediaInfo, decode_pcm, probe, run,
 from ..models import EditPlan
 from ..subtitles import ass as ass_mod
 from . import animacao as A
+from .. import marca as MK
 from . import camadas as CM
+from . import cenas as CN
 from . import filters as F
+from . import logos as LG
 from . import looks
 from . import mascara as Msk
 from . import motion as MG
@@ -631,6 +634,34 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                  "-filter_complex", ";".join(graph_parts), "-map", "[vout]",
                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], inputs)
 
+    # A MARCA do vídeo (editor/marca.py): a fonte vai junto para o libass, os
+    # logos viram entradas. Toda imagem em loop (logo, máscara de canto da
+    # moldura) entra com um marcador §IMGk§ que vira o número da entrada no
+    # fim — como a máscara da pessoa, elas vêm depois das do b-roll.
+    kit = MK.kit_do_plano(plan)
+    fontsdir = Path(kit["fontes"][0]).parent if kit and kit.get("fontes") else None
+    imagens: list[str] = []
+
+    def img(caminho) -> str:
+        caminho = str(caminho)
+        if caminho not in imagens:
+            imagens.append(caminho)
+        return f"§IMG{imagens.index(caminho)}§:v"
+
+    def logos_resolvidos(lista: list) -> list[tuple]:
+        out = []
+        for g in lista:
+            nome = str(getattr(g, "logo", "") or (g.get("logo") if isinstance(g, dict) else "") or "")
+            caminho = MK.caminho_do_logo(kit, nome)
+            if caminho:
+                out.append((g, img(caminho), caminho))
+            else:
+                aviso = (f"o logo '{nome}' não está no kit da marca nem na biblioteca de "
+                         "logos — ficou de fora")
+                if aviso not in seg.avisos:
+                    seg.avisos.append(aviso)
+        return out
+
     # CAMADAS: com a máscara da pessoa, o fundo e a pessoa se separam aqui —
     # depois do enquadramento (a máscara foi calculada desta mesma imagem) e
     # ANTES do desfoque de proteção e do b-roll por cima: o que protege uma
@@ -642,16 +673,24 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         cam_seg = CM.no_trecho(getattr(plan, "camadas", None) or [],
                                seg.t_start, seg.nominal)
         atras = MG.no_trecho(graficos, seg.t_start, seg.nominal, ("atras",))
+        logos_atras = logos_resolvidos([g for g in atras if getattr(g, "tipo", "") == "logo"])
         ass_atras = None
-        if atras:
+        if any(getattr(g, "tipo", "") != "logo" for g in atras):
             ass_atras = ass_dir / f"mga_{seg.index:04d}.ass"
             if not MG.escrever(ass_atras, graficos, width, height, seg.t_start,
                                seg.nominal, camadas=("atras",),
-                               fonte=plan.style.font):
-                ass_atras, atras = None, []
+                               fonte=plan.style.font, kit=kit):
+                ass_atras = None
+        atras = [g for g in atras if getattr(g, "tipo", "") != "logo" and ass_atras
+                 or any(g is lg[0] for lg in logos_atras)]
+        extra = None
+        if logos_atras:
+            def extra(tin: str, tout: str, _l=logos_atras) -> str:
+                return LG.grafo(tin, tout, _l, width, height, seg.t_start, "__la")
         cam_graph = CM.grafo(cur_tag, "__vc", "§MASCARA§", width, height, fps,
                              seg.t_start, seg.nominal, cam_seg, ass_atras, atras,
-                             tuple(recorte.get("centro") or (0.5, 0.5)))
+                             tuple(recorte.get("centro") or (0.5, 0.5)),
+                             fontsdir=fontsdir, extra_fundo=extra)
         if cam_graph:
             graph_parts.append(cam_graph)
             cur_tag = "__vc"
@@ -715,6 +754,39 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                 pre += ["-loop", "1", "-framerate", f"{fps}",
                         "-t", f"{seg.nominal + 1.0:.3f}", "-i", ent["path"]]
 
+    # CENAS (moldura, camadas de vidro): mexem no quadro inteiro, depois do
+    # b-roll e do desfoque de proteção (a cena leva a imagem que o espectador
+    # veria) e antes da transição e dos gráficos — o título da explicação
+    # entra no lado livre da moldura, por cima.
+    cenas_seg = CN.no_trecho(getattr(plan, "cenas", None) or [], seg.t_start, seg.nominal)
+    if cenas_seg:
+        mascara_cena = None
+        tem_recorte = bool(recorte and recorte.get("path") and recorte.get("tem_pessoa", True))
+        if tem_recorte and any(getattr(c, "tipo", "") == "vidro3d" for c in cenas_seg):
+            graph_parts.append(f"[§MASCARA§:v]format=gray,settb=AVTB,"
+                               f"setpts='floor(N/({fps:.6f}*TB))',"
+                               f"scale={width}:{height}:flags=bilinear[__mcn]")
+            mascara_cena = "__mcn"
+            mascara = str(recorte["path"])
+        elif any(getattr(c, "tipo", "") == "vidro3d" for c in cenas_seg):
+            aviso = ("as camadas de vidro saíram sem a pessoa separada: falta o recorte "
+                     "(baixe o modelo na aba Pós)")
+            if aviso not in seg.avisos:
+                seg.avisos.append(aviso)
+        centro = tuple(recorte.get("centro") or (0.5, 0.5)) if tem_recorte else (
+            float(plan.zoom.anchor_x), float(plan.zoom.anchor_y))
+
+        def logos_de(c) -> list[str]:
+            return [p for p in (MK.caminho_do_logo(kit, n) for n in (getattr(c, "logos", None) or []))
+                    if p]
+        cn_graph = CN.grafo(cur_tag, "__vcn", cenas_seg, width, height, fps,
+                            max(1, int(round(seg.nominal * fps))), seg.t_start,
+                            plan.export.pix_fmt, kit, centro, mascara_cena, img,
+                            ass_dir.parent / "cenas", logos_de)
+        if cn_graph:
+            graph_parts.append(cn_graph)
+            cur_tag = "__vcn"
+
     # TRANSIÇÃO: nas bordas do trecho, depois de tudo que é IMAGEM (o b-roll
     # por cima, o desfoque de proteção) e antes do que é GRÁFICO — o título e
     # a legenda não mergulham no zoom nem somem no flash.
@@ -730,7 +802,15 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # legenda queimada não pode virar sépia junto com a imagem, senão o
     # contorno preto some e o texto some com ele.
     lk = looks.look_chain(plan.look, plan.look_vignette)
-    if lk:
+    logos_frente = logos_resolvidos(LG.no_trecho(graficos, seg.t_start, seg.nominal,
+                                                 camadas_da_frente)) if graficos else []
+    if logos_frente:
+        # o logo não é graduado junto com a imagem: entra depois do look
+        graph_parts.append(f"[{cur_tag}]{lk or 'null'}[__vlk]")
+        graph_parts.append(LG.grafo("__vlk", "__vlg", logos_frente, width, height,
+                                    seg.t_start, "__lf"))
+        cur_tag = "__vlg"
+    elif lk:
         tail.append(lk)
     # GRÁFICOS DA PÓS-EDIÇÃO: depois do look (a cor da marca não é graduada
     # junto com a imagem) e antes da legenda (a fala fica sempre por cima).
@@ -739,8 +819,8 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         mg_path = ass_dir / f"mg_{seg.index:04d}.ass"
         if MG.escrever(mg_path, graficos, width, height, seg.t_start,
                        seg.nominal, camadas=camadas_da_frente,
-                       fonte=plan.style.font):
-            tail.append(F.subtitle_chain(mg_path))
+                       fonte=plan.style.font, kit=kit):
+            tail.append(F.subtitle_chain(mg_path, fontsdir))
     if plan.export.burn_subtitles and cues:
         window_end = seg.t_start + seg.nominal + 1.0
         ass_path = ass_dir / f"seg_{seg.index:04d}.ass"
@@ -752,6 +832,13 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     graph_parts.append(f"[{cur_tag}]" + ",".join(tail) + "[vout]")
 
     filtergraph = ";".join(graph_parts)
+    for k, caminho in enumerate(imagens):
+        # imagem em loop (-loop 1): um PNG entra como um quadro só; em loop
+        # ele dura o trecho inteiro e o fade/escala por quadro funcionam
+        idx = sum(1 for a in pre if a == "-i")
+        pre += ["-loop", "1", "-framerate", f"{fps}",
+                "-t", f"{seg.nominal + 1.0:.3f}", "-i", caminho]
+        filtergraph = filtergraph.replace(f"§IMG{k}§", str(idx))
     if mascara:
         # a máscara é a ÚLTIMA entrada: as sobreposições já numeraram as delas
         idx = sum(1 for a in pre if a == "-i")
@@ -760,7 +847,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     args = [FFMPEG, "-y", "-v", "error", *pre,
             "-filter_complex", filtergraph, "-map", "[vout]"]
     args += encoder_args(plan.export, main, hw)
-    if overlays or mascara:
+    if overlays or mascara or imagens:
         # o overlay (framesync) repete o último quadro do principal enquanto a
         # entrada do PNG tiver quadros — sem esta trava, cada trecho com
         # sobreposição saía mais longo que o planejado e a soma inflava o vídeo
@@ -890,10 +977,28 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     seg_camadas = [_relativo(c.to_dict())
                    for c in CM.no_trecho(getattr(plan, "camadas", None) or [],
                                          t0, seg.nominal)]
+    seg_cenas = [_relativo(c.to_dict())
+                 for c in CN.no_trecho(getattr(plan, "cenas", None) or [], t0, seg.nominal)]
     usa_recorte = bool(seg_camadas) or any(
-        g.get("camada") == "atras" for g in seg_graficos)
+        g.get("camada") == "atras" for g in seg_graficos) or any(
+        c.get("tipo") == "vidro3d" for c in seg_cenas)
     positional = bool(seg_cues or seg_blurs or seg_overlays or seg_graficos
-                      or seg_camadas)
+                      or seg_camadas or seg_cenas)
+    # a MARCA e os arquivos dos logos: trocar a cor do kit ou o PNG de um
+    # logo muda a imagem — a chave tem de mudar junto
+    kit = MK.kit_do_plano(plan) if (seg_graficos or seg_cenas) else None
+    nomes_logos = {g.get("logo") for g in seg_graficos if g.get("tipo") == "logo"}
+    for c in seg_cenas:
+        nomes_logos.update(c.get("logos") or [])
+    arquivos_logos = {}
+    for n in sorted(x for x in nomes_logos if x):
+        caminho = MK.caminho_do_logo(kit, n)
+        if caminho:
+            try:
+                st = os.stat(caminho)
+                arquivos_logos[n] = [st.st_size, int(st.st_mtime)]
+            except OSError:
+                pass
     key = _hash({
         "src": seg.source_path, "start": round(seg.src_start, 4),
         "dur": round(seg.src_duration, 4), "speed": seg.speed,
@@ -919,6 +1024,11 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         **({"transicao": [seg.trans_entra, seg.trans_sai]}
            if seg.trans_entra or seg.trans_sai else {}),
         **({"camadas": seg_camadas} if seg_camadas else {}),
+        **({"cenas": seg_cenas, "centro": (round(plan.zoom.anchor_x, 3),
+                                           round(plan.zoom.anchor_y, 3))}
+           if seg_cenas else {}),
+        **({"marca": kit["hash"]} if kit else {}),
+        **({"logos": arquivos_logos} if arquivos_logos else {}),
         # com recorte o trecho sai em camadas; sem ele (sem o onnxruntime,
         # sem o modelo) sai sem — são imagens diferentes, chaves diferentes
         **({"recorte": RC.pronto()} if usa_recorte else {}),
@@ -967,9 +1077,18 @@ def _janelas_do_recorte(seg: VideoSegment, plan: EditPlan) -> list[tuple[float, 
     cam = CM.no_trecho(getattr(plan, "camadas", None) or [], seg.t_start, seg.nominal)
     atras = MG.no_trecho(getattr(plan, "graficos", None) or [], seg.t_start,
                          seg.nominal, ("atras",))
-    if not cam and not atras:
+    vidros = CN.janelas_de_recorte(getattr(plan, "cenas", None) or [],
+                                   seg.t_start, seg.nominal)
+    if not cam and not atras and not vidros:
         return []
-    return CM.janelas(cam, atras, seg.t_start, seg.nominal)
+    brutas = sorted(CM.janelas(cam, atras, seg.t_start, seg.nominal) + vidros)
+    unidas: list[list[float]] = []
+    for a, b in brutas:
+        if unidas and a <= unidas[-1][1] + 0.05:
+            unidas[-1][1] = max(unidas[-1][1], b)
+        else:
+            unidas.append([a, b])
+    return [(a, b) for a, b in unidas]
 
 
 def _chave_da_base(seg: VideoSegment, plan: EditPlan, main: MediaInfo,

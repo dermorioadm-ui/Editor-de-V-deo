@@ -955,10 +955,10 @@ export default function Editor() {
                     ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null} />
         </main>
 
-        <aside className={`${['cutaway', 'grafico', 'camada', 'transicao'].includes(itemSel?.kind ?? '')
+        <aside className={`${['cutaway', 'grafico', 'camada', 'transicao', 'cena'].includes(itemSel?.kind ?? '')
                              ? 'w-[340px]' : 'w-[300px]'}
                            shrink-0 border-l border-line overflow-auto`}>
-          {itemSel && ['grafico', 'camada', 'transicao'].includes(itemSel.kind) && (
+          {itemSel && ['grafico', 'camada', 'transicao', 'cena'].includes(itemSel.kind) && (
             <PosInspector key={itemSel.id} kind={itemSel.kind} id={itemSel.id}
                           onChanged={refresh} snapshot={snapshot}
                           onClose={() => setItemSel(null)} />

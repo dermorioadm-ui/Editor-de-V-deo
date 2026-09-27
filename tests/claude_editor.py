@@ -638,6 +638,10 @@ def main() -> int:
               "o pedido leva o projeto e o que ele escreveu na primeira tela")
         check("Gemini NÃO participa" in a["prompt"],
               "e diz que o Gemini está fora")
+        check("HABILIDADE DE MOTION" in a["prompt"] and "cena tipo=moldura" in a["prompt"]
+              and "vidro3d" in a["prompt"] and "mcp__sharkcut__cena" in permitidas
+              and "mcp__sharkcut__marca" in permitidas,
+              "com pós: o Claude recebe a habilidade de motion e as ferramentas de marca e cena")
         check("REVISÃO — o seu trabalho principal" in a["prompt"]
               and "REDUNDÂNCIA" in a["prompt"] and "MULETA" in a["prompt"]
               and "Não refaça isso" in a["prompt"],
@@ -738,8 +742,11 @@ def main() -> int:
         negadas = argv[argv.index("--disallowedTools") + 1].split(",")
         proj = svc.load(p3["id"])
         check(fim["status"] == "ok" and "mcp__sharkcut__grafico" in negadas
+              and "mcp__sharkcut__cena" in negadas
               and "mcp__sharkcut__ritmo" not in negadas,
-              "sem pós: as ferramentas de gráfico nem existem para ele; as de edição sim")
+              "sem pós: as ferramentas de gráfico e cena nem existem para ele; as de edição sim")
+        check("HABILIDADE DE MOTION" not in a["prompt"],
+              "e o pedido sem pós não leva a habilidade de motion")
         check("SEM PÓS-EDIÇÃO" in a["prompt"] and not proj.plan.graficos
               and any(abs(c.speed - 1.12) < 0.01 for c in proj.plan.clips),
               "e o vídeo sai só com a edição dele — nenhum gráfico por cima")
