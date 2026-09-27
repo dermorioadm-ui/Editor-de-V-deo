@@ -357,6 +357,8 @@ def main() -> int:
     testar_voz_de_estudio_trilha_constante_e_broll_fixo()
     testar_graficos_de_dados_e_sem_cartao_solido()
     testar_cena_de_vidro_colada_na_emenda()
+    testar_audio_nao_e_esticado()
+    testar_musica_em_relacao_a_voz()
 
     print()
     if FALHAS:
@@ -1138,7 +1140,7 @@ def testar_anexo_nao_come_palavra() -> None:
 
     O caminho: o ffmpeg entrega um segmento curto, render_video_segments grava
     a duração medida, export soma essa duração menor, build_audio_track pede um
-    alvo menor e _resample_exact corta o PCM em samples[:alvo]. O fim da frase
+    alvo menor e _no_tamanho corta o PCM em samples[:alvo]. O fim da frase
     some, e o único sintoma era um aviso de texto invertido. Regra 3, quebrada
     em silêncio, sem nenhum teste em cima.
     """
@@ -8225,16 +8227,18 @@ def testar_voz_de_estudio_trilha_constante_e_broll_fixo() -> None:
         c_limpa = build_pre_chain(a, limpa=True)
         c_crua = build_pre_chain(a, limpa=False)
         velho = build_pre_chain(AudioParams(voz_estudio=False))
-        check(a.voz_ia and a.voz_estudio and a.voz_limpeza == "forte",
-              "voz de estúdio LIGADA por padrão, limpeza forte")
-        check("highpass=f=80:poles=2" in c_limpa and "equalizer=f=140" in c_limpa
-              and "equalizer=f=350" in c_limpa and "treble=" in c_limpa
-              and "deesser=" in c_limpa,
-              "a cadeia de estúdio: corta o ronco, dá corpo, tira a caixa, abre o ar "
-              "e segura os 's'")
-        check("treble=" not in c_crua,
-              "sem a limpeza, o agudo não sobe (levantaria o chiado junto)")
-        check("equalizer=f=140" not in velho and "highpass=f=75" in velho,
+        check(a.voz_ia and a.voz_estudio and a.voz_limpeza == "media"
+              and voz.LIMPEZA["media"] <= 20,
+              "voz de estúdio LIGADA por padrão, limpeza MÉDIA (a forte deixava a voz "
+              "seca, 'digitalizada')")
+        check("highpass=f=75:poles=2" in c_limpa and "bass=g=3" in c_limpa
+              and "equalizer=f=300" in c_limpa and "equalizer=f=3500" in c_limpa,
+              "a cadeia de estúdio: corta o ronco, dá CORPO (grave de microfone perto "
+              "da boca), tira só um toque da caixa e põe presença")
+        check("treble=" not in c_limpa and "deesser=" not in c_limpa and c_limpa == c_crua,
+              "sem 'ar' de 10 kHz e sem de-esser automático — os dois acendiam o "
+              "rastro da limpeza")
+        check("bass=g=3" not in velho and "highpass=f=75" in velho,
               "e desligada, volta a cadeia de antes")
 
         # 5) A TRILHA É CONSTANTE: com a voz entrando e saindo, a música fica
@@ -8359,7 +8363,8 @@ def testar_voz_de_estudio_trilha_constante_e_broll_fixo() -> None:
               f"e com a voz de estúdio desligada, da original ({corr:.2f})")
         p = svc.load(projeto.id)
         p.plan.audio.voz_ia = True
-        p.plan.audio.voz_limpeza = "media"
+        # uma força que ainda não foi limpa (a padrão já está guardada)
+        p.plan.audio.voz_limpeza = "leve"
         p.save_plan()
         voz.caminho_do_binario = lambda: _deep_filter_falso(tmp, "falha")
         corr, avisos = exportar("falhou.mp4")
@@ -8628,6 +8633,167 @@ def testar_cena_de_vidro_colada_na_emenda() -> None:
             check(not falhas,
                   f"cena de vidro terminando {nome}: todos os trechos encodam "
                   f"({falhas or 'ok'})")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_audio_nao_e_esticado() -> None:
+    """ "O áudio tá meio digitalizado, sem corpo." Uma das causas estava no
+    montador: o vídeo de cada bloco sai arredondado para o quadro (10 a 30 ms
+    a mais que o áudio, em todo bloco) e o áudio era ESTICADO por
+    interpolação linear para caber — o tom da voz mudava ~0,2 semitom, cada
+    bloco diferente, e os agudos oscilavam. Aqui um tom de 1000 Hz na
+    gravação tem de sair em 1000 Hz em TODOS os blocos, e cada bloco
+    continua começando na hora certa (a boca na sincronia).
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import projects as svc
+    from editor.config import FFMPEG, ExportParams
+    from editor.ffmpeg_utils import decode_pcm
+    from editor.models import Clip
+    from editor.render import renderer as R
+    from tests.e2e import Ctx
+
+    tmp = Path(tempfile.mkdtemp(prefix="tom_"))
+    projeto = None
+    try:
+        sr = 48000
+        dur = 12.0
+        t = np.arange(int(sr * dur)) / sr
+        tom = (0.3 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+        wav = tmp / "tom.wav"
+        from editor.ffmpeg_utils import write_wav
+        write_wav(wav, tom, sr)
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=s=320x180:r=30:d=12", "-i", str(wav), "-map", "0:v",
+                        "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-c:a", "pcm_s16le", "-shortest", str(fonte)], check=True)
+        projeto = svc.create(str(fonte), "tom", "VSL")
+        cortes = [(0.137, 2.411), (3.05, 5.93), (6.2, 9.77), (10.01, 11.9)]
+        projeto.plan.clips = [Clip(src_start=a, src_end=b) for a, b in cortes]
+        projeto.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                           preset="ultrafast", crf=30)
+        projeto.plan.audio.voz_ia = False
+        projeto.plan.audio.voz_estudio = False
+        projeto.save_plan()
+        diferencas = []
+        orig = R._no_tamanho
+
+        def espiao(s, alvo):
+            diferencas.append(len(s) - alvo)
+            return orig(s, alvo)
+
+        R._no_tamanho = espiao
+        try:
+            r = svc.export(svc.load(projeto.id), Ctx(quiet=True),
+                           {"filename": "tom.mp4", "overwrite": True, "output_dir": str(tmp)})
+        finally:
+            R._no_tamanho = orig
+        check(any(d != 0 for d in diferencas),
+              f"o vídeo dos blocos sai arredondado para o quadro (diferenças {diferencas} "
+              f"amostras) — é o caso que o esticamento 'resolvia'")
+        a = decode_pcm(r["output"], sample_rate=sr)
+        blocos = svc.timeline_summary(svc.load(projeto.id))["blocks"]
+        freqs = []
+        for b in blocos:
+            i0, i1 = int((b["out_start"] + 0.1) * sr), int((b["out_end"] - 0.1) * sr)
+            seg = a[i0:i1] * np.hanning(i1 - i0)
+            n = 1 << 21
+            esp = np.abs(np.fft.rfft(seg, n))
+            freqs.append(float(np.fft.rfftfreq(n, 1 / sr)[int(np.argmax(esp))]))
+        check(all(abs(f - 1000.0) < 1.0 for f in freqs),
+              f"o tom sai em 1000 Hz em todos os blocos ({[round(f, 1) for f in freqs]}) — "
+              f"esticado, cada bloco saía num tom diferente")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_musica_em_relacao_a_voz() -> None:
+    """ "Não tá em harmonia com o fundo da música." O volume da trilha era
+    aplicado no arquivo da música, cru: uma música masterizada a -18 dB ficava
+    na altura de uma voz gravada no celular e brigava com a fala — mais ou
+    menos, conforme o volume em que ele gravou. E a mistura era MONO: a
+    música estéreo virava um ponto só, em cima da voz.
+
+    Agora: a música fica ``gain_db`` abaixo da VOZ (as duas medidas em LUFS),
+    igual com a voz gravada baixa ou alta; a saída é estéreo (a música aberta,
+    a voz no centro); e o comprimento continua exato, amostra por amostra.
+    """
+    import subprocess
+    import tempfile
+    import wave
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, AudioParams
+    from editor.ffmpeg_utils import write_wav
+    from editor.models import EditPlan
+    from editor.render import renderer as R
+
+    tmp = Path(tempfile.mkdtemp(prefix="rel_"))
+    try:
+        sr, dur = 48000, 8.0
+        t = np.arange(int(sr * dur)) / sr
+        fala = ((np.floor(t) % 2) == 1).astype(np.float32)
+        musica = tmp / "musica.wav"
+        subprocess.run([FFMPEG, "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "sine=f=500:sample_rate=48000:d=8",
+                        "-f", "lavfi", "-i", "sine=f=700:sample_rate=48000:d=8",
+                        "-filter_complex", "[0][1]join=inputs=2:channel_layout=stereo,volume=5[a]",
+                        "-map", "[a]", str(musica)], check=True)
+
+        def ler(p):
+            with wave.open(str(p)) as w:
+                ch = w.getnchannels()
+                x = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(float) / 32768
+            return x.reshape(-1, ch), ch
+
+        def nivel(sig, f0):
+            esp = np.abs(np.fft.rfft(sig * np.hanning(len(sig))))
+            f = np.fft.rfftfreq(len(sig), 1 / sr)
+            return 20 * np.log10(esp[(f > f0 - 20) & (f < f0 + 20)].max() + 1e-12)
+
+        relacoes, canais, tamanhos, esquerda_700 = [], set(), set(), []
+        for amp in (0.03, 0.4):
+            voz = tmp / f"voz_{amp}.wav"
+            write_wav(voz, (amp * np.sin(2 * np.pi * 220 * t) * fala).astype(np.float32), sr)
+            plano = EditPlan.from_dict({"music": {"media_id": "m", "enabled": True,
+                                                  "gain_db": -18, "fade_in": 0, "fade_out": 0}})
+            saida = tmp / f"saida_{amp}.wav"
+            R.process_audio(voz, saida, AudioParams(voz_ia=False), plano,
+                            {"m": {"path": str(musica)}}, dur)
+            x, ch = ler(saida)
+            canais.add(ch)
+            tamanhos.add(len(x))
+            seg = slice(int(1.2 * sr), int(1.8 * sr))
+            relacoes.append(nivel(x[seg, 0], 500) - nivel(x[seg, 0], 220))
+            esquerda_700.append(nivel(x[seg, 0], 700) - nivel(x[seg, 0], 500))
+        check(abs(relacoes[0] - relacoes[1]) < 1.5 and -24 < relacoes[0] < -14,
+              f"a música fica na MESMA distância da voz com a voz gravada a -30 dB ou a "
+              f"-8 dB ({relacoes[0]:+.1f} e {relacoes[1]:+.1f} dB) — antes, dependia do "
+              f"volume da gravação")
+        check(canais == {2} and max(esquerda_700) < -40,
+              f"a mistura com música sai em ESTÉREO e a música continua aberta (o 700 Hz "
+              f"da direita não vaza na esquerda: {max(esquerda_700):.0f} dB)")
+        check(tamanhos == {int(sr * dur)},
+              f"e com o comprimento exato ({tamanhos} amostras) — a boca na sincronia")
+
+        prev = Path("frontend/src/components/TrilhaPreview.tsx").read_text(encoding="utf-8")
+        rota = Path("editor/server.py").read_text(encoding="utf-8")
+        check("lufs_voz" in prev and "lufs_musica" in prev and "def _medir_trilha" in rota,
+              "a prévia ao vivo faz a mesma conta (volume medido da voz e da música)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

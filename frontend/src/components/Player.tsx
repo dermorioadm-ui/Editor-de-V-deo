@@ -1215,7 +1215,7 @@ agora neste instante. Dois marcos em instantes diferentes e a janela se move."
         {music?.media_id && onMusicChange && (
           <span className="flex items-center gap-1.5 ml-auto"
                 data-trilha="1"
-                title="o volume da trilha, ouvindo na hora. O que você deixar aqui é o que vai para o arquivo.">
+                title="o volume da trilha em dB ABAIXO DA SUA VOZ, ouvindo na hora. O que você deixar aqui é o que vai para o arquivo.">
             <button className="btn btn-xs"
                     onClick={() => onMusicChange({ muted: !music.muted })}>
               {music.muted ? '♪ muda' : '♪ trilha'}
@@ -1226,6 +1226,9 @@ agora neste instante. Dois marcos em instantes diferentes e a janela se move."
                    onChange={(e) => onMusicChange({ gain_db: +e.target.value })} />
             <span className="font-mono text-[10px] text-slate-400 w-12">
               {music.muted ? 'muda' : `${Math.round(Number(music.gain_db ?? -18))} dB`}
+            </span>
+            <span className="text-[10px] text-slate-500" title="o volume da música é medido em relação à sua voz">
+              abaixo da voz
             </span>
           </span>
         )}

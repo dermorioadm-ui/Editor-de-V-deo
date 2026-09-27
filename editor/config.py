@@ -229,7 +229,7 @@ class AudioParams:
     # separar voz de ruído, rodando nesta máquina, e LIGADA por padrão porque
     # ele pediu ("preciso de uma melhora significativa no som").
     voz_ia: bool = True              # o redutor de ruído por IA (DeepFilterNet)
-    voz_limpeza: str = "forte"       # leve | media | forte | total
+    voz_limpeza: str = "media"       # leve | media | forte | total
     voz_estudio: bool = True         # o tratamento de microfone (EQ + de-esser)
 
 

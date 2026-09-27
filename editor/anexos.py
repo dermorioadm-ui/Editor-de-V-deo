@@ -11,7 +11,7 @@ O motivo de existir deste arquivo é um caminho específico que quebrava a regra
     Um cutaway cuja mídia é MAIS CURTA que a janela pedida faz o ffmpeg entregar
     um segmento curto. render_video_segments grava a duração medida, export
     soma essa duração menor, build_audio_track pede um alvo menor e
-    _resample_exact corta o PCM em samples[:alvo]. O fim da frase simplesmente
+    _no_tamanho corta o PCM em samples[:alvo]. O fim da frase simplesmente
     some. O único sintoma era um aviso de texto invertido; nenhum teste pegava.
 
 As demais travas seguem o mesmo princípio: o render resolve todo conflito

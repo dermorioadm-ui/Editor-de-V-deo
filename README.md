@@ -323,6 +323,16 @@ onde termina, arraste o bloco no trilho, ou as bordas dele.
 > 6 dB a menos de música a cada frase. Agora a voz é tratada sozinha e a
 > música entra depois, no nível que você escolheu.
 
+**O volume da música é "quantos dB abaixo da sua voz".** O Sharkcut mede o
+volume percebido (LUFS) da voz e da música e põe a música exatamente ali —
+com a voz gravada baixa ou alta, a distância é a mesma (-18 dB é o padrão).
+Antes o número valia para o arquivo da música, cru: uma música masterizada
+a -18 dB ficava na altura de uma voz de celular e brigava com a fala. A
+mistura com música sai em **estéreo** (a música aberta, a voz no centro) e a
+música ganha um recorte leve (-3 dB) na faixa em que a voz é entendida
+(1,5–4 kHz): a voz senta por cima sem ninguém mexer no volume. A prévia ao
+vivo faz a mesma conta.
+
 ### Voz de estúdio
 
 "Sai alto, mas não sai com qualidade de microfone." Alto era só o que a
@@ -336,10 +346,11 @@ chiado, o ar-condicionado e o eco da sala junto. Agora, na primeira tela,
    do GitHub (com a assinatura SHA-256 conferida) e roda no processador. **O
    seu vídeo não sai da máquina**: o que se baixa é o programa; a sua voz é
    lida e escrita aqui dentro.
-2. **Tratamento de microfone:** corte do ronco grave, corpo (o grave de
-   microfone perto da boca), menos som de "caixa", presença, e o brilho de
-   estúdio — só com a voz já limpa, para não levantar chiado —, um de-esser
-   leve nos "s", e o compressor e o volume-alvo de sempre.
+2. **Tratamento de microfone:** corte do ronco grave, **corpo** (+3 dB no
+   grave de microfone perto da boca, que o celular não pega), só um toque a
+   menos de "caixa", presença nas consoantes, e o compressor e o volume-alvo
+   de sempre. Sem "brilho" de 10 kHz e sem de-esser automático: os dois
+   acendiam o rastro da limpeza e davam a voz "digitalizada".
 
 A limpeza **começa no instante em que o arquivo chega**, junto com a
 transcrição, em pedaços paralelos nos núcleos do processador, e fica
@@ -347,9 +358,18 @@ guardada: na exportação ela em geral já está pronta. A voz limpa tem o mesmo
 relógio da original (a boca continua na sincronia, medido: 0 ms) e o mesmo
 comprimento; o corte, a velocidade e o encaixe não mudam — só o som.
 
-A força: **forte** (padrão: tira ~30 dB de ruído e guarda um fio do original,
-que é o que evita o som "metalizado" de redutor no talo), **total**, **média**
-ou **leve**; ou **som original** (só no volume certo). No editor, aba
+A força: **média** (padrão: tira até 18 dB de ruído — o chiado some para quem
+ouve e o ar natural da sala fica, que é o que cola a voz na música),
+**leve** (mais natural), **forte** ou **total** (mais seca, mais "processada");
+ou **som original** (só no volume certo).
+
+> **O som "metalizado/digitalizado" tinha outra causa, mais antiga:** o vídeo
+> de cada bloco sai arredondado para o quadro (10 a 30 ms a mais que o áudio,
+> medido em TODO bloco) e o áudio era esticado por interpolação para caber —
+> o tom da voz mudava ~0,2 semitom, diferente em cada bloco, e os agudos
+> oscilavam até 3 dB. Agora o áudio não é esticado: o começo de cada bloco
+> continua exato (a boca na sincronia) e a sobra de até um quadro vira
+> silêncio no fim, na emenda, que já cai na pausa. No editor, aba
 **Áudio › Voz de estúdio**, o botão **ouvir antes e depois** toca 12 s do seu
 vídeo nas duas versões, no mesmo volume, para o ouvido decidir. Se o redutor
 não puder rodar (sem internet na primeira vez, por exemplo), o vídeo sai com

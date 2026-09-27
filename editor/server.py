@@ -1143,6 +1143,8 @@ def api_music_ajuste(pid: str, payload: dict = Body(...)) -> dict:
                         ("ducking", bool), ("enabled", bool), ("muted", bool)):
         if campo in payload:
             m[campo] = conv(payload[campo])
+    if m.get("lufs_musica") is None or m.get("lufs_voz") is None:
+        _medir_trilha(project, m)
     project.plan.music = m
     project.save_plan()
     return {"ok": True, "music": m, "timeline": svc.timeline_summary(project)}
@@ -1886,9 +1888,30 @@ def api_music(pid: str, payload: dict = Body(...)) -> dict:
             tl = svc.timeline_summary(project)["duration"]
             m["out_end"] = round(tl if tl > 0.01 else float(
                 project.info.duration if project.info else 0), 3)
+    if m is not None:
+        _medir_trilha(project, m)
     project.plan.music = m
     project.save_plan()
     return {"ok": True, "music": project.plan.music}
+
+
+def _medir_trilha(project, m: dict) -> None:
+    """O volume percebido da voz e da música (LUFS), para a PRÉVIA ao vivo
+    tocar a trilha na mesma distância da voz que o arquivo vai ter — o
+    ``gain_db`` agora é "quantos dB abaixo da voz". Medido uma vez por
+    música; falhou, a prévia usa o número cru e o arquivo continua certo."""
+    from .audio.loudness import lufs_integrado
+
+    try:
+        caminho = next((x["path"] for x in svc.list_media(project.id)
+                        if x.get("id") == m.get("media_id")), None)
+        if caminho and m.get("lufs_de") != m.get("media_id"):
+            m["lufs_musica"] = lufs_integrado(caminho)
+            m["lufs_de"] = m.get("media_id")
+        if m.get("lufs_voz") is None and project.wav.exists():
+            m["lufs_voz"] = lufs_integrado(project.wav, None)
+    except Exception:  # noqa: BLE001 — medir nunca impede de pôr a música
+        pass
 
 
 # -------------------------------------------------------------------- áudio

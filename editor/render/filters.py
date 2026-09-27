@@ -462,7 +462,8 @@ def curva_de_volume(curva: list[dict] | None, inicio: float) -> str:
 def music_chain(gain_db: float, ducking: bool, duck_amount: float,
                 fade_in: float, fade_out: float, total: float,
                 out_start: float = 0.0, out_end: float | None = None,
-                curva: list[dict] | None = None) -> str:
+                curva: list[dict] | None = None, *, estereo: bool = False,
+                encaixe: bool = False) -> str:
     """Trilha com ducking por sidechain (Parte 9.3).
 
     ``out_start``/``out_end`` posicionam a trilha na linha do tempo — é o que
@@ -480,7 +481,13 @@ def music_chain(gain_db: float, ducking: bool, duck_amount: float,
            else min(float(out_end), total))
     inicio = max(0.0, float(out_start))
     dur = max(0.1, fim - inicio)
-    music = [f"volume={gain_db}dB"]
+    # ESTÉREO: a música fica aberta nos dois lados e a voz no centro — cada
+    # uma no seu lugar, em vez de as duas brigarem no mesmo ponto (a mistura
+    # era mono). ENCAIXE: -3 dB, largo, na faixa em que a voz é entendida
+    # (1,5–4 kHz): a voz senta por cima da música sem ninguém mexer no volume.
+    music = (["aformat=channel_layouts=stereo"] if estereo else []) + [f"volume={gain_db}dB"]
+    if encaixe:
+        music.append("equalizer=f=2500:t=q:w=1.1:g=-3")
     if fade_in > 0:
         music.append(f"afade=t=in:st=0:d={min(fade_in, dur / 2):.2f}")
     if fade_out > 0:
@@ -496,15 +503,17 @@ def music_chain(gain_db: float, ducking: bool, duck_amount: float,
     if automacao:
         music.append(automacao)
     music_chain_str = ",".join(music)
+    # a voz é mono: no estéreo ela vai igual para os dois lados (o centro)
+    voz_in = "[0:a]aformat=channel_layouts=stereo[vz];[vz]" if estereo else "[0:a]"
     if ducking:
         ratio = max(2.0, duck_amount / 2.0)
         return (
             f"[1:a]{music_chain_str}[mus];"
-            f"[0:a]asplit=2[voz][key];"
+            f"{voz_in}asplit=2[voz][key];"
             f"[mus][key]sidechaincompress=threshold=0.06:ratio={ratio:.1f}:"
             f"attack=20:release=350:makeup=1[duck];"
             f"[voz][duck]amix=inputs=2:duration=first:dropout_transition=0:"
             f"normalize=0[aout]"
         )
     return (f"[1:a]{music_chain_str}[mus];"
-            f"[0:a][mus]amix=inputs=2:duration=first:normalize=0[aout]")
+            f"{voz_in}[mus]amix=inputs=2:duration=first:normalize=0[aout]")

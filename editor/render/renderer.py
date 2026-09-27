@@ -1332,33 +1332,33 @@ def render_video_segments(segs: list[VideoSegment], plan: EditPlan,
 
 
 # ------------------------------------------------------------------- áudio
-def _resample_exact(samples: np.ndarray, target: int) -> tuple[np.ndarray, bool]:
-    """Ajusta o PCM ao tamanho exato do bloco de vídeo medido.
+def _no_tamanho(samples: np.ndarray, target: int) -> tuple[np.ndarray, bool]:
+    """Põe o PCM do bloco no tamanho EXATO do vídeo medido — SEM ESTICAR.
 
-    O interp existe para absorver deriva de MILISSEGUNDOS. Quando a fonte tem
-    menos áudio que vídeo (trilha que acaba antes, microfone que caiu), esticar
-    o que sobrou viraria um time-stretch grave e dessincronizante — nesses
-    casos o déficit vira silêncio e o chamador é avisado.
+    Aqui morava um ``np.interp`` que esticava o bloco inteiro para caber: o
+    vídeo de cada bloco sai arredondado para o quadro (medido: 10 a 30 ms a
+    mais que o áudio, em TODO bloco), e esticar 1% por interpolação linear
+    muda o tom da voz em ~0,2 semitom — diferente em cada bloco — e ainda
+    liga um filtro que oscila nos agudos (até 3 dB indo e voltando ao longo do
+    bloco, medido com 8 amostras de diferença). Era o som "metalizado,
+    digitalizado". Agora o áudio fica intacto: o começo é o que segura a boca
+    na sincronia e não muda; a sobra de até um quadro no fim vira silêncio (a
+    emenda já cai na pausa) ou é aparada, com o fade que já existe.
 
-    Devolve (pcm, esticou_demais).
+    Devolve (pcm, faltou_muito) — faltou_muito quando a fonte tem MUITO menos
+    áudio que vídeo (trilha que acaba antes, microfone que caiu): o chamador
+    avisa.
     """
     if target <= 0:
         return np.zeros(0, dtype=np.float32), False
     n = len(samples)
-    if n == target:
-        return samples.astype(np.float32), False
     if n == 0:
         return np.zeros(target, dtype=np.float32), True
-    if abs(n - target) > max(2048, int(target * 0.01)):
-        if n < target:
-            out = np.concatenate([samples.astype(np.float32),
-                                  np.zeros(target - n, dtype=np.float32)])
-        else:
-            out = samples[:target].astype(np.float32)
-        return out, True
-    src_x = np.linspace(0.0, 1.0, n, dtype=np.float64)
-    dst_x = np.linspace(0.0, 1.0, target, dtype=np.float64)
-    return np.interp(dst_x, src_x, samples).astype(np.float32), False
+    faltou_muito = target - n > max(2048, int(target * 0.01))
+    if n >= target:
+        return _fade(samples[:target].astype(np.float32)), False
+    return (np.concatenate([_fade(samples.astype(np.float32)),
+                            np.zeros(target - n, dtype=np.float32)]), faltou_muito)
 
 
 def _fade(samples: np.ndarray, ms: int = FADE_MS) -> np.ndarray:
@@ -1410,13 +1410,13 @@ def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
                              sample_rate=AUDIO_SR, channels=1, filters=af)
         except FFmpegError:
             pcm = np.zeros(target, dtype=np.float32)
-        pcm, stretched = _resample_exact(pcm, target)
+        pcm, stretched = _no_tamanho(pcm, target)
         if stretched and warnings is not None:
             warnings.append(
                 f"o áudio da fonte é mais curto que o vídeo no bloco que começa "
                 f"em {placed.out_start:.1f} s — o que falta virou silêncio em "
                 f"vez de esticar a voz")
-        chunks.append(_fade(pcm))
+        chunks.append(pcm)
         if on_progress:
             on_progress((n + 1) / total, f"áudio: bloco {n + 1}/{total}")
     if not chunks:
@@ -1487,9 +1487,23 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
              and not plan.music.get("muted") else None)
     mpath = sources.get(music.get("media_id"), {}).get("path") if music else None
     stage_src = voz_path
+    canais = 1
     if music and mpath:
         mix_path = dest.with_name(dest.stem + "_mix.wav")
-        graph = F.music_chain(float(music.get("gain_db", -18)),
+        # O VOLUME DA MÚSICA É EM RELAÇÃO À VOZ. Ele era aplicado no arquivo
+        # da música, cru: uma música masterizada (-9 LUFS) a -18 dB ficava na
+        # altura de uma voz gravada no celular (-25 a -30 LUFS) — a trilha
+        # brigava com a fala, e brigava mais ou menos conforme o volume em que
+        # ele gravou. Agora o Sharkcut mede as duas (LUFS) e põe a música
+        # exatamente ``gain_db`` abaixo da voz, qualquer que seja a gravação.
+        from ..audio.loudness import lufs_integrado
+
+        relativo = float(music.get("gain_db", -18))
+        voz_i, mus_i = lufs_integrado(voz_path, None), lufs_integrado(mpath)
+        ganho = (max(-60.0, min(12.0, voz_i + relativo - mus_i))
+                 if voz_i is not None and mus_i is not None else relativo)
+        canais = 2
+        graph = F.music_chain(ganho,
                               # constante, a menos que ele tenha marcado
                               bool(music.get("ducking", False)),
                               float(music.get("duck_amount", 12)),
@@ -1500,7 +1514,7 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               # grava quando o usuário só escolhe o MP3)
                               music.get("out_end") or None,
                               # sem curva da IA: a trilha é constante
-                              None)
+                              None, estereo=True, encaixe=True)
         # A MISTURA EM PONTO FLUTUANTE, NÃO EM 16 BITS. Voz quente mais trilha
         # masterizada somam ACIMA do teto: medido, voz a -0,9 dBFS com trilha
         # a -6 dB dava +2,9 dBFS, e em 16 bits isso virava 54.960 amostras
@@ -1512,7 +1526,7 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
         run([FFMPEG, "-y", "-v", "error", "-i", str(voz_path),
              "-stream_loop", "-1", "-i", str(mpath),
              "-filter_complex", graph, "-map", "[aout]",
-             "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le",
+             "-ac", "2", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le",
              "-t", f"{duration:.6f}", str(mix_path)])
         stage_src = mix_path
 
@@ -1529,27 +1543,40 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
     teto = 10 ** (min(-0.5, float(params.true_peak)) / 20.0)
     limitador = (f"alimiter=limit={teto:.4f}:level=0:latency=1:"
                  f"attack=5:release=60")
-    chain = ",".join(x for x in (loudnorm_second_pass(params, measured),
-                                 limitador) if x)
-    run([FFMPEG, "-y", "-v", "error", "-i", str(stage_src), "-af", chain,
-         "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)])
-
     # Trava o comprimento exato. Qualquer filtro que engula ou acrescente
-    # amostras vira dessincronia acumulada ao longo de dezenas de blocos.
+    # amostras vira dessincronia acumulada ao longo de dezenas de blocos. O
+    # loudnorm sai a 192 kHz: volta para 48 kHz ANTES de contar amostras.
     target = int(round(duration * AUDIO_SR))
-    from ..ffmpeg_utils import read_wav_mono
-
-    samples, sr = read_wav_mono(dest)
-    if abs(len(samples) - target) > 0:
-        if len(samples) > target:
-            samples = samples[:target]
-        else:
-            samples = np.concatenate(
-                [samples, np.zeros(target - len(samples), dtype=np.float32)])
-        write_wav(dest, samples, AUDIO_SR)
+    chain = ",".join(x for x in (loudnorm_second_pass(params, measured),
+                                 limitador, f"aresample={AUDIO_SR}",
+                                 f"apad=whole_len={target}",
+                                 f"atrim=end_sample={target}") if x)
+    run([FFMPEG, "-y", "-v", "error", "-i", str(stage_src), "-af", chain,
+         "-ac", str(canais), "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)])
+    _travar_tamanho(dest, target)
     for resto in {stage_src, voz_path}:
         Path(resto).unlink(missing_ok=True)
     return dest
+
+
+def _travar_tamanho(caminho: Path, alvo: int) -> None:
+    """A rede de segurança do comprimento, para mono e estéreo: se o ffmpeg
+    ainda assim entregar amostras a mais ou a menos, apara ou completa com
+    silêncio no fim, canal por canal."""
+    import wave
+
+    with wave.open(str(caminho), "rb") as w:
+        ch, larg, sr, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+        if n == alvo:
+            return
+        dados = w.readframes(n)
+    quadro = ch * larg
+    dados = dados[:alvo * quadro] + b"\x00" * max(0, (alvo - n) * quadro)
+    with wave.open(str(caminho), "wb") as w:
+        w.setnchannels(ch)
+        w.setsampwidth(larg)
+        w.setframerate(sr)
+        w.writeframes(dados)
 
 
 # -------------------------------------------------------------------- mux

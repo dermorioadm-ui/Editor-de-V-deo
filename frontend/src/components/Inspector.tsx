@@ -216,7 +216,7 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
             </div>
             <label className="label mt-2">
               Volume · <span className="font-mono text-slate-300">
-                {(m.gain_db ?? -18).toFixed(0)} dB</span>
+                {(m.gain_db ?? -18).toFixed(0)} dB abaixo da voz</span>
               {m.muted && <span className="text-amber-400 normal-case ml-1">
                 (no mudo)</span>}
             </label>

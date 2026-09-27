@@ -20,9 +20,9 @@ instante em que o arquivo chega (junto com a transcrição) e, na hora de
 exportar, em geral já está pronta.
 
 A FORÇA: o DeepFilterNet deixa misturar de volta um pouco do original
-(``--atten-lim-db``): "forte" tira até 40 dB de ruído (some para quem ouve)
-e ainda guarda um fio do original, que é o que evita o som "metalizado" de
-redutor no talo; "total" não guarda nada.
+(``--atten-lim-db``): "media" (o padrão) tira até 18 dB de ruído — o chiado
+some para quem ouve e o ar natural da sala fica —, "forte" 28 dB, "total"
+não guarda nada. Quanto mais forte, mais seca e "processada" a voz fica.
 """
 from __future__ import annotations
 
@@ -63,8 +63,12 @@ BINARIOS = {
 }
 
 # o quanto de ruído sai, em dB (o resto é o original misturado de volta)
-LIMPEZA = {"leve": 12, "media": 24, "forte": 40, "total": 100}
-LIMPEZA_PADRAO = "forte"
+LIMPEZA = {"leve": 10, "media": 18, "forte": 28, "total": 100}
+# MÉDIA É O PADRÃO. Com 40 dB (o "forte" de antes) o fundo sumia de todo e a
+# voz ficava seca, com cara de processada — "digitalizada". 18 dB tira o
+# chiado para quem ouve e deixa o ar natural da sala, que é o que cola a voz
+# na música.
+LIMPEZA_PADRAO = "media"
 
 SR = 48000                 # o DeepFilterNet trabalha em 48 kHz
 PEDACO = 30.0              # segundos por pedaço (cada um num processo)
@@ -493,16 +497,17 @@ def _faxina(dias: float = 30.0) -> None:
 def cadeia_de_estudio(limpa: bool) -> list[str]:
     """O tratamento de microfone de estúdio, depois da limpeza.
 
-    - corpo (140 Hz, +2 dB): o "grave de proximidade" de um microfone perto
-      da boca, que o celular a um braço de distância não pega;
-    - lama (350 Hz, -2,5 dB): o som de caixa/sala que embola a voz;
-    - presença (5 kHz, +1,5 dB): as consoantes na frente, sem estridência;
-    - ar (10 kHz, prateleira +2 dB): o brilho de estúdio. SÓ com a voz limpa
-      — sem o redutor, esse agudo levantaria o chiado junto.
+    - corpo (prateleira +3 dB abaixo de ~150 Hz): o grave de proximidade de
+      um microfone perto da boca, que o celular a um braço de distância não
+      pega — é o que faltava ("não tá com corpo");
+    - caixa (300 Hz, -1,5 dB, largo): o som de sala que embola a voz, só um
+      toque — cortar mais afinava a voz;
+    - presença (3,5 kHz, +1,2 dB): as consoantes na frente, sem estridência.
+
+    Sem "ar" (agudo de 10 kHz) e sem de-esser automático: os dois acendiam
+    exatamente onde a limpeza deixa rastro e davam o som "digitalizado".
+    ``limpa`` fica na assinatura para quem chama; a cadeia é a mesma.
     """
-    etapas = ["equalizer=f=140:t=q:w=0.9:g=2",
-              "equalizer=f=350:t=q:w=1.1:g=-2.5",
-              "equalizer=f=5000:t=q:w=1.0:g=1.5"]
-    if limpa:
-        etapas.append("treble=g=2:f=10000:t=q:w=0.7")
-    return etapas
+    return ["bass=g=3:f=150:t=q:w=0.7",
+            "equalizer=f=300:t=q:w=1.0:g=-1.5",
+            "equalizer=f=3500:t=q:w=0.9:g=1.2"]

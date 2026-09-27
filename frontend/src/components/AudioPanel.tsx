@@ -166,12 +166,12 @@ export default function AudioPanel({ onChanged }: Props) {
             voz de estúdio ligada
           </label>
           <select className="field py-1 text-xs w-44" disabled={!vozLigada}
-                  value={params.voz_limpeza ?? 'forte'}
+                  value={params.voz_limpeza ?? 'media'}
                   onChange={(e) => mudarVoz({ voz_limpeza: e.target.value })}>
-            <option value="leve">limpeza leve</option>
-            <option value="media">limpeza média</option>
-            <option value="forte">limpeza forte (padrão)</option>
-            <option value="total">limpeza total</option>
+            <option value="leve">limpeza leve (mais natural)</option>
+            <option value="media">limpeza média (padrão)</option>
+            <option value="forte">limpeza forte</option>
+            <option value="total">limpeza total (mais seca)</option>
           </select>
           <button className="btn btn-xs" disabled={vozOcupada} onClick={ouvirVoz}>
             {vozOcupada ? 'preparando…' : 'ouvir antes e depois'}
@@ -446,7 +446,7 @@ export default function AudioPanel({ onChanged }: Props) {
           // não controlados e continuariam mostrando os números da anterior
           <div key={trilha.media_id}>
             <div className="grid grid-cols-4 gap-2">
-              {([['gain_db', 'volume (dB)'], ['duck_amount', 'ducking (dB)'],
+              {([['gain_db', 'dB abaixo da voz'], ['duck_amount', 'ducking (dB)'],
                  ['fade_in', 'fade in (s)'], ['fade_out', 'fade out (s)']] as const)
                 .map(([key, label]) => (
                   <label key={key} className="block">

@@ -93,6 +93,25 @@ def measure_file(path: str | Path, ceiling_db: float = -1.0,
     return report
 
 
+def lufs_integrado(path: str | Path, ate: float | None = 300.0) -> float | None:
+    """O volume percebido (LUFS integrado) de um arquivo — só o número, sem
+    decodificar nada para a memória. ``ate``: mede só o começo (uma música de
+    10 minutos não precisa ser lida inteira para saber o quanto ela é alta).
+    None quando o arquivo é silêncio digital ou não tem áudio."""
+    cmd = [FFMPEG, "-v", "info", "-nostdin"]
+    if ate:
+        cmd += ["-t", f"{ate:.3f}"]
+    cmd += ["-i", str(path), "-vn", "-af", "aresample=48000,ebur128",
+            "-f", "null", "-"]
+    proc = subprocess.run(cmd, capture_output=True)
+    texto = proc.stderr.decode("utf-8", "replace").rsplit("Summary:", 1)[-1]
+    m = re.search(r"I:\s*(-?[\d.]+)\s*LUFS", texto)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v if v > -69.0 else None
+
+
 def measure_loudnorm(path: str | Path, pre_chain: str, params: AudioParams) -> dict:
     """Primeira passada do loudnorm: mede o material.
 
@@ -161,9 +180,10 @@ def build_pre_chain(params: AudioParams, include_denoise: bool = True,
     if include_denoise and params.denoise_enabled and params.denoise_chain:
         stages.append(params.denoise_chain)
     if estudio:
-        # 12 dB/oitava a partir de 80 Hz: tira o ronco de mesa, de trânsito
-        # e de ar-condicionado que o highpass de 6 dB deixava passar
-        stages.append(f"highpass=f={max(80, int(params.highpass))}:poles=2")
+        # 12 dB/oitava: tira o ronco de mesa, de trânsito e de ar-condicionado
+        # que o highpass de 6 dB deixava passar — sem subir para 80 Hz, que
+        # levava junto o grave que dá corpo à voz
+        stages.append(f"highpass=f={min(75, max(60, int(params.highpass)))}:poles=2")
         stages += cadeia_de_estudio(limpa)
     else:
         stages.append(f"highpass=f={params.highpass}")
@@ -175,10 +195,9 @@ def build_pre_chain(params: AudioParams, include_denoise: bool = True,
     )
     if params.presence_gain:
         stages.append(f"equalizer=f=4000:t=q:w=1.2:g={params.presence_gain}")
+    # o de-esser só entra quando ELE calibra (aba Áudio): o automático
+    # (0,25) deixava os "s" com cara de processado
     deesser = float(params.deesser or 0.0)
-    if estudio and limpa and not deesser:
-        # o "ar" de estúdio acende os "s": um de-esser leve segura
-        deesser = 0.25
     if deesser:
         stages.append(f"deesser=i={min(max(deesser, 0.0), 1.0)}")
     return ",".join(stages)

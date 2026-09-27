@@ -35,7 +35,11 @@ export default function TrilhaPreview({ src, music, playhead, playing, duracao,
 
   // ------------------------------------------------------------ o volume
   const dB = (v: number) => (v <= -40 ? 0 : Math.pow(10, v / 20))
-  let vol = dB(Number(music?.gain_db ?? -18))
+  // o volume é "dB ABAIXO DA VOZ" (o arquivo mede as duas): aqui a prévia
+  // faz a mesma conta com o volume medido da gravação e o da música
+  const rel = Number(music?.gain_db ?? -18)
+  const medido = music?.lufs_voz != null && music?.lufs_musica != null
+  let vol = dB(medido ? Number(music.lufs_voz) + rel - Number(music.lufs_musica) : rel)
   const fadeIn = Math.max(0, Number(music?.fade_in ?? 1))
   const fadeOut = Math.max(0, Number(music?.fade_out ?? 2))
   if (fadeIn > 0 && tRel < fadeIn) vol *= tRel / fadeIn

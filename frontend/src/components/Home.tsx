@@ -68,7 +68,7 @@ export default function Home() {
   // O SOM DA VOZ: a limpeza por IA (DeepFilterNet, neste computador) + o
   // tratamento de microfone de estúdio. 'nao' = o som original, só nivelado.
   const [vozForca, setVozForca] = useState<string>(() => {
-    try { return localStorage.getItem('sharkcut.voz') || 'forte' } catch { return 'forte' }
+    try { return localStorage.getItem('sharkcut.voz2') || 'media' } catch { return 'media' }
   })
   const [resolucao, setResolucao] = useState('source')
   // 30 fps por padrão. Medido num 1920x1080 a 60 fps: baixar a saída para 30
@@ -909,7 +909,7 @@ export default function Home() {
                        value={musicaVol}
                        onChange={(e) => setMusicaVol(+e.target.value)} />
                 <p className="text-[10px] text-slate-600 leading-tight mb-1">
-                  volume {musicaVol} dB · constante do começo ao fim
+                  {musicaVol} dB abaixo da voz · constante
                 </p>
               </>
             )}
@@ -960,12 +960,12 @@ export default function Home() {
             <select className="field w-full py-1.5 text-xs" value={vozForca}
                     onChange={(e) => {
                       setVozForca(e.target.value)
-                      try { localStorage.setItem('sharkcut.voz', e.target.value) } catch { /* sem memória */ }
+                      try { localStorage.setItem('sharkcut.voz2', e.target.value) } catch { /* sem memória */ }
                     }}>
-              <option value="forte">voz de estúdio (recomendado)</option>
-              <option value="total">voz de estúdio — limpeza total</option>
-              <option value="media">voz de estúdio — limpeza média</option>
-              <option value="leve">voz de estúdio — limpeza leve</option>
+              <option value="media">voz de estúdio (recomendado)</option>
+              <option value="leve">voz de estúdio — limpeza leve (mais natural)</option>
+              <option value="forte">voz de estúdio — limpeza forte</option>
+              <option value="total">voz de estúdio — limpeza total (mais seca)</option>
               <option value="nao">som original (só nivelado)</option>
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">

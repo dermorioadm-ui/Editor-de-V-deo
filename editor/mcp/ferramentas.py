@@ -749,7 +749,8 @@ def efeito(c: Cliente, a: dict) -> str:
             "projeto": {"type": "string"},
             "caminho": {"type": "string", "description": "caminho do MP3 na máquina"},
             "volume_db": {"type": "number",
-                          "description": "padrão -18; mais negativo é mais baixo"},
+                          "description": "quantos dB ABAIXO DA VOZ (o Sharkcut mede "
+                                         "as duas); padrão -18; mais negativo é mais baixo"},
         },
         "required": ["projeto", "caminho"],
     },
