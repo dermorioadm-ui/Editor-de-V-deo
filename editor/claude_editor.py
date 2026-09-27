@@ -573,7 +573,7 @@ def _ajuda(caminho: str) -> str:
 # A trava é na lista de ferramentas, não só no pedido: no modo "edicao" as
 # ferramentas de gráfico não existem para ele; no "pos", as de corte não.
 MODOS = ("completo", "edicao", "pos")
-FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos", "compor"}
+FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos", "compor", "arte", "arte_3d"}
 FERRAMENTAS_DE_LEITURA = {"pos_contexto", "transcricao", "ver_projeto", "ver_quadros",
                           "analisar_cena", "estado_do_editor", "marca", "direcao"}
 

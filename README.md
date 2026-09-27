@@ -1,5 +1,8 @@
 # Sharkcut
 
+**Motor criativo:** [artes vetoriais, composições livres e Blender local](MOTOR-CRIATIVO.md).
+**Direção:** [Claude ou Codex com a conta do ChatGPT](DIRECAO.md).
+
 **Sharkcut** é o editor de vídeo local deste repositório: você joga o vídeo
 bruto na página, escolhe um preset, aperta **EDITAR** e recebe o vídeo
 cortado, acelerado e legendado. Depois revisa e ajusta o que ficou fora do

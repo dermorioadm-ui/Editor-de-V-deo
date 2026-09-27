@@ -1609,6 +1609,61 @@ def compor(c: Cliente, a: dict) -> str:
     return json.dumps(r, ensure_ascii=False)
 
 
+@ferramenta(
+    "arte",
+    "Composição VETORIAL NATIVA. catalogo revela recursos e exemplo completo; criar/atualizar aceita "
+    "modelo (fluxo, tipografia, orbita, grafico) OU composicao livre. Elementos: grupo, texto, numero, "
+    "retangulo, elipse, tracado; id único, pai opcional declarado antes. tela=[1000,1000]; x/y em "
+    "unidades dessa prancheta, filhos locais ao grupo. marcos=[{t, x?,y?,escala?,rotacao?,opacidade?, "
+    "largura?,altura?,progresso?,morph?,valor?,curva?}], tempo relativo à composição; curvas linear, "
+    "suave, entrada, saida, organica, salto. Formas têm cor,contorno,espessura,raio; texto tem texto, "
+    "corpo,fonte opcional,negrito; numero usa valor,prefixo,sufixo,casas. tracado usa pontos=[[x,y],...] "
+    "e fechado; progresso desenha o traço, pontos_fim+morph transformam a forma. Cor #RRGGBB ou "
+    "marca/texto/fundo/nenhuma. inicio/fim dos elementos também são relativos. Até 48 elementos, "
+    "60 s. x/y externos normalizados posicionam a composição inteira. Planeje e confira com ver_quadros.",
+    {"properties": {"projeto":{"type":"string"}, "acao":{"type":"string","enum":["catalogo","criar","atualizar"]},
+        "id":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},"fim":{"type":"number"},
+        "modelo":{"type":"string","enum":["fluxo","tipografia","orbita","grafico"]},
+        "composicao":{"type":"object","properties":{"versao":{"type":"integer"},
+            "tela":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
+            "elementos":{"type":"array","maxItems":48,"items":{"type":"object"}}},"required":["elementos"]},
+        "x":{"type":"number"},"y":{"type":"number"},"tamanho":{"type":"number"},
+        "camada":{"type":"string","enum":["frente","atras"]},"estilo":{"type":"string"}},
+     "required":["projeto","acao"]},
+)
+def arte(c: Cliente, a: dict) -> str:
+    import json
+    if a.get("acao")=="catalogo":
+        return json.dumps(c.get(f"/api/projects/{a['projeto']}/arte"),ensure_ascii=False)
+    if a.get("acao")=="atualizar" and not a.get("id"):
+        return "informe id para atualizar a arte existente"
+    r=c.post(f"/api/projects/{a['projeto']}/pos/arte",{**a,"origem":c.origem})
+    return json.dumps(r,ensure_ascii=False)
+
+
+@ferramenta(
+    "arte_3d",
+    "Blender LOCAL opcional, sem serviço pago. Use arte catalogo para ver disponibilidade e esquema. "
+    "criar recebe cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo,posicao,rotacao, "
+    "escala,cor,metalico,rugosidade,texto,marcos:[{t,posicao?,rotacao?,escala?}]}]}. camera.marcos aceita "
+    "{t,posicao?,alvo?,lente?}. Tipos cubo/esfera/torus/ "
+    "cilindro/plano/texto; rotação em graus, t relativo. Câmera/luzes reais; saída com transparência. "
+    "Até 24 objetos/10 s. Retorna job; use consultar com job até ok/erro/cancelado ANTES de revisar. "
+    "Ao terminar, entra na timeline como sobreposição editável. Não executa scripts arbitrários.",
+    {"properties":{"projeto":{"type":"string"},"acao":{"type":"string","enum":["criar","consultar"]},
+        "job":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},
+        "cena":{"type":"object"}},"required":["projeto","acao"]},
+)
+def arte_3d(c: Cliente,a: dict) -> str:
+    import json
+    pid=a["projeto"]
+    if a.get("acao")=="consultar":
+        r=next((j for j in c.get("/api/jobs",project_id=pid) if j["id"]==a.get("job") and j["kind"]=="arte-3d"),None)
+        return json.dumps(r or {"erro":"job 3D não encontrado neste projeto"},ensure_ascii=False)
+    r=c.post(f"/api/projects/{pid}/arte-3d",{**a,"origem":c.origem})
+    return json.dumps(r,ensure_ascii=False)
+
+
 def chamar(c: Cliente, nome: str, argumentos: dict):
     """Executa uma ferramenta e SEMPRE devolve texto (ou conteúdo com imagem).
 

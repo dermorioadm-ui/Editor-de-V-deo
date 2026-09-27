@@ -10,6 +10,7 @@ export const TIPOS_GRAFICO: [string, string][] = [
   ['barra', 'Barra de progresso'], ['logo', 'Logo'],
   ['barras', 'Gráfico de barras (sobe)'], ['linha', 'Gráfico de linha (sobe)'],
   ['rosca', 'Rosca (%)'], ['icone', 'Ícone desenhado'],
+  ['composicao', 'Arte vetorial'],
 ]
 const ESTILOS: [string, string][] = [
   ['vidro', 'Vidro (translúcido)'], ['limpo', 'Sem fundo'],
@@ -124,6 +125,7 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             .filter((t) => t !== '' && !isNaN(+t)).map(Number),
           rotulos: rotulosTxt.split(',').map((t) => t.trim()),
           icone: d.icone ?? '',
+          ...(d.tipo === 'composicao' ? { composicao: d.composicao } : {}),
         }
       } else if (kind === 'cena') {
         dados = { tipo: d.tipo, lado: d.lado ?? '', fundo: d.fundo ?? '', logos: d.logos ?? [],
@@ -161,6 +163,11 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
   const pedeNumero = d.tipo === 'numero' || d.tipo === 'barra' || d.tipo === 'rosca'
   const pedeValores = d.tipo === 'barras' || d.tipo === 'linha'
 
+  const mudarElemento = (id: string, campo: string, valor: string) => {
+    set('composicao', { ...d.composicao, elementos: d.composicao.elementos.map((e: any) =>
+      e.id === id ? { ...e, [campo]: valor } : e) })
+  }
+
   return (
     <section className="card p-3 m-3 space-y-2.5 border-amber-600/60" data-pos-inspector={kind}>
       <div className="flex items-start gap-2">
@@ -179,9 +186,19 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             <span className="label">tipo</span>
             <select className="field w-full text-xs py-1" value={d.tipo} data-campo="tipo"
                     onChange={(e) => set('tipo', e.target.value)}>
-              {TIPOS_GRAFICO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              {TIPOS_GRAFICO.filter(([v]) => v !== 'composicao' || d.tipo === 'composicao')
+                .map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </label>
+          {d.tipo === 'composicao' && <div className="space-y-2" data-arte-textos>
+            <p className="text-xs text-slate-400">Textos da composição. Posição e tamanho abaixo movem a arte inteira.</p>
+            {(d.composicao?.elementos ?? []).filter((e: any) => e.tipo === 'texto').map((e: any) =>
+              <label key={e.id} className="block">
+                <span className="label">{e.id}</span>
+                <textarea className="field w-full text-xs py-1" rows={2} value={e.texto}
+                  onChange={ev => mudarElemento(e.id, 'texto', ev.target.value)} />
+              </label>)}
+          </div>}
           {ehLogo ? (
             <>
               <label className="block">
@@ -204,7 +221,8 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             <span className="label">{d.tipo === 'nome' ? 'nome'
               : d.tipo === 'numero' || d.tipo === 'rosca' ? 'legenda do número'
                 : d.tipo === 'icone' ? 'rótulo embaixo (opcional)'
-                  : pedeValores ? 'título do gráfico' : 'texto'}</span>
+                  : d.tipo === 'composicao' ? 'nome na timeline'
+                    : pedeValores ? 'título do gráfico' : 'texto'}</span>
             <textarea className="field w-full text-xs py-1" rows={2} value={d.texto ?? ''}
                       data-campo="texto" onChange={(e) => set('texto', e.target.value)} />
           </label>
@@ -318,20 +336,20 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
                 {d.cor && <button className="btn btn-xs" onClick={() => set('cor', '')}>padrão</button>}
               </div>
             </label>
-            <label className="block">
+            {d.tipo !== 'composicao' && <label className="block">
               <span className="label">entra</span>
               <select className="field w-full text-xs py-1" value={d.entrada}
                       onChange={(e) => set('entrada', e.target.value)}>
                 {ENTRADAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-            </label>
-            <label className="block">
+            </label>}
+            {d.tipo !== 'composicao' && <label className="block">
               <span className="label">sai</span>
               <select className="field w-full text-xs py-1" value={d.saida}
                       onChange={(e) => set('saida', e.target.value)}>
                 {SAIDAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-            </label>
+            </label>}
           </div>
           )}
           {ehLogo && (

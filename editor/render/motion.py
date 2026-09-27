@@ -35,7 +35,7 @@ from functools import lru_cache
 from pathlib import Path
 
 TIPOS = ("titulo", "tela", "lista", "destaque", "numero", "texto", "nome",
-         "seta", "circulo", "barra", "logo", "barras", "linha", "rosca", "icone", "comparacao")
+         "seta", "circulo", "barra", "logo", "barras", "linha", "rosca", "icone", "comparacao", "composicao")
 ENTRADAS = ("pop", "slide", "subir", "3d", "digitar", "fade", "cinema", "linhas")
 SAIDAS = ("fade", "slide", "pop", "corte")
 ESTILOS = ("escuro", "claro", "neon", "marca", "limpo", "vidro", "editorial")
@@ -1683,7 +1683,11 @@ def eventos(graficos, W: int, H: int, t0: float, dur: float,
                    key=lambda g: float(_v(g, "out_start", 0.0)))
     for i, g in enumerate(todos):
         gs, ge = float(_v(g, "out_start", 0.0)), float(_v(g, "out_end", 0.0))
-        base = 1 + 10 * i          # o gráfico que começa depois fica por cima
+        base = 1 + 100 * i         # espaço para até 48 elementos de arte livre
+        if _v(g, "tipo", "") == "composicao":
+            from . import composicao
+            linhas += composicao.eventos(g, W, H, t0, dur, base, fonte, kit)
+            continue
         for el in elementos(g, W, H, fonte, kit):
             linhas += _eventos_do_elemento(el, gs, ge, t0, t0 + dur + 0.05, base)
     return linhas
@@ -1811,4 +1815,7 @@ def normalizar(d: dict, duracao: float | None = None) -> dict:
     }
     if d.get("id"):
         out["id"] = str(d["id"])[:40]
+    if tipo == "composicao":
+        from . import composicao
+        out["composicao"] = composicao.normalizar(d.get("composicao"), b - a)
     return out

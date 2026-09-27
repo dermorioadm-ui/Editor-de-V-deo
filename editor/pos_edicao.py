@@ -558,11 +558,12 @@ def tirar(project, ids: list[str] | None = None, tudo: bool = False,
     plan = project.plan
     alvo = set(ids or [])
     n = 0
-    for nome in ("graficos", "camadas", "transicoes", "cenas"):
+    for nome in ("graficos", "camadas", "transicoes", "cenas", "overlays"):
         antes = getattr(plan, nome)
         fica = [x for x in antes
                 if not ((x.id in alvo)
-                        or (tudo and (not origem or getattr(x, "origem", "") == origem)))]
+                        or (tudo and (nome != "overlays" or getattr(x, "origem", ""))
+                            and (not origem or getattr(x, "origem", "") == origem)))]
         n += len(antes) - len(fica)
         setattr(plan, nome, fica)
     return n

@@ -26,6 +26,9 @@ const patch = <T>(url: string, body?: unknown) =>
 const del = <T>(url: string) => req<T>(url, { method: 'DELETE' })
 
 export const api = {
+  artes: (id: string) => req<any>(`/api/projects/${id}/arte`),
+  criarArte: (id: string, dados: any) => post<any>(`/api/projects/${id}/pos/arte`, dados),
+  criarArte3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/arte-3d`, dados),
   health: () => req<any>('/api/health'),
   browse: (path: string) => req<any>(`/api/browse?path=${encodeURIComponent(path)}`),
   locate: (name: string, size: number) =>

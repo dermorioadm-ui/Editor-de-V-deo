@@ -39,6 +39,15 @@ DIREÇÃO CRIATIVA — você responde pela edição inteira, não por enfeitar a
    fechamento. Leia analisar_cena antes, respeite rosto/legenda e ajuste a
    composição ao espaço livre. Use grafico/cena para afinar o resultado.
    B-roll precisa mostrar algo específico da fala; não é preenchimento.
+   Para cenas novas, consulte arte(acao=catalogo): o motor nativo compõe
+   formas, tipografia, números, traços e grupos com movimentos independentes.
+   Crie composições com intenção; os modelos são exemplos editáveis. Pode
+   desenhar mecanismos, diagramas, infográficos, órbitas e morph de formas.
+   Prefira cor=marca/texto e a fonte do kit. Não cubra a pessoa com um painel
+   opaco. Coloque composição atrás da pessoa ou no espaço livre quando couber.
+   arte_3d usa Blender LOCAL, quando disponível: geometria, texto extrudado,
+   câmera e luzes. Consulte o job até terminar antes de conferir/exportar.
+   Nunca diga que há tracking ou rotoscopia livre: esses recursos não existem.
 7. CONFIRA de verdade: ver_quadros no início, meio e fim de cada momento
    planejado (direcao ler informa os tempos). Confira tipografia, contraste,
    rosto, legenda, continuidade e marca; corrija e confira novamente.
@@ -147,6 +156,9 @@ def registrar_quadros(project, tempos: list[float], renderizada: str | None = No
 
 
 def estado(project) -> dict:
+    from .jobs import get_queue
+    pendentes = [j.id for j in get_queue().list(project.id)
+                 if j.kind == "arte-3d" and j.status in ("fila", "rodando")]
     plano = project.analysis.get("direcao") or {}
     fotos = project.analysis.get("direcao_quadros") or {}
     sig = assinatura(project)
@@ -155,14 +167,16 @@ def estado(project) -> dict:
     faltam = [t for t in esperados if not any(abs(t - v) <= 0.18 for v in vistos)]
     revisao = plano.get("revisao") or {}
     duracao_ok = abs(plano.get("duracao", -1) - _duracao(project)) <= 0.05
-    return {**plano, "tempos_conferir": esperados, "faltam_quadros": faltam,
+    return {**plano, "tempos_conferir": esperados, "faltam_quadros": faltam, "renders_pendentes": pendentes,
             "montagem_mudou": bool(plano) and not duracao_ok,
-            "aprovada": bool(plano and duracao_ok and not faltam
+            "aprovada": bool(plano and duracao_ok and not faltam and not pendentes
                              and revisao.get("assinatura") == sig)}
 
 
 def revisar(project, parecer: str) -> dict:
     est = estado(project)
+    if est["renders_pendentes"]:
+        raise ValueError("aguarde a arte 3D terminar antes de revisar: " + ", ".join(est["renders_pendentes"]))
     if not est.get("momentos"):
         raise ValueError("registre o plano com direcao planejar antes da revisão")
     if est["montagem_mudou"]:

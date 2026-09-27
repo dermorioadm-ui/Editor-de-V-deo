@@ -4,6 +4,7 @@ import { timecode } from '../lib/format'
 import { getPlayhead, setPlayhead, toast, useStore } from '../state/store'
 import { EFEITOS_CAMADA, TIPOS_CENA, TIPOS_GRAFICO, TIPOS_TRANSICAO } from './PosInspector'
 import DiretorPanel from './DiretorPanel'
+import ArtesPanel from './ArtesPanel'
 
 const NOME_TIPO = Object.fromEntries(TIPOS_GRAFICO)
 const NOME_EFEITO = Object.fromEntries(EFEITOS_CAMADA)
@@ -68,12 +69,15 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
   const camadas = view.camadas ?? []
   const transicoes = view.transicoes ?? []
   const cenas = (view as any).cenas ?? []
+  const artes3d = (view.overlays ?? []).filter((o: any) => o.origem)
   const autores = ['claude', 'codex'].map(origem => ({ origem,
     nome: origem === 'codex' ? 'Codex' : 'Claude',
-    total: [...graficos, ...camadas, ...transicoes, ...cenas].filter((x: any) => x.origem === origem).length,
+    total: [...graficos, ...camadas, ...transicoes, ...cenas, ...artes3d].filter((x: any) => x.origem === origem).length,
   }))
 
   const itens = [
+    ...artes3d.map((o: any) => ({ kind: 'overlay', id: o.id, t: o.out_start, fim: o.out_end,
+      rotulo: 'Arte 3D local', extra: 'sobreposição · ajuste na aba Mídia', origem: o.origem })),
     ...cenas.map((c: any) => ({ kind: 'cena', id: c.id, t: c.out_start, fim: c.out_end,
       rotulo: `Cena: ${NOME_CENA[c.tipo] ?? c.tipo}`, extra: c.lado || '', origem: c.origem })),
     ...graficos.map((g: any) => ({ kind: 'grafico', id: g.id, t: g.out_start, fim: g.out_end,
@@ -130,6 +134,7 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
 
   return (
     <div className="p-3 space-y-3" data-pos-panel="1">
+      <ArtesPanel onChanged={onChanged} onSelect={onSelect} snapshot={snapshot} />
       <div>
         <h2 className="text-sm font-semibold text-slate-100">Pós-edição</h2>
         <p className="text-[11px] text-slate-400 leading-snug">

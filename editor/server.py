@@ -2495,6 +2495,8 @@ def _pos_mudar(pid: str, fn) -> dict:
         item = fn(pos_edicao, project)
     except KeyError as exc:
         raise HTTPException(404, str(exc).strip("'\"")) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     project.save_plan()
     return {"ok": True, "item": item.to_dict() if hasattr(item, "to_dict") else item,
             **_pos(project)}
@@ -2856,6 +2858,43 @@ def api_compor(pid: str, payload: dict = Body(...)) -> dict:
         return compor(_project(pid), payload)
     except (ValueError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/projects/{pid}/arte")
+def api_arte_catalogo(pid: str) -> dict:
+    from . import artes
+    _project(pid)
+    return artes.catalogo()
+
+
+@app.post("/api/projects/{pid}/pos/arte")
+def api_arte(pid: str, payload: dict = Body(...)) -> dict:
+    from . import artes
+    try:
+        return artes.por(_project(pid), payload)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/arte-3d")
+def api_arte_3d(pid: str, payload: dict = Body(...)) -> dict:
+    from . import blender_local
+    p = _project(pid)
+    try:
+        cena = blender_local.normalizar(payload.get("cena"))
+        inicio = blender_local.numero(payload.get("inicio", 0), "inicio", 0, svc.duracao_de_saida(p))
+        if inicio + cena["duracao"] > svc.duracao_de_saida(p) + 0.001:
+            raise ValueError("3D não cabe na montagem")
+        if not blender_local.executavel():
+            raise ValueError("Blender não encontrado. " + blender_local.estado()["instalacao"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    dados = {**payload, "cena": cena, "inicio": inicio}
+    with _submeter_lock:
+        for job in get_queue().list(pid):
+            if job.kind == "arte-3d" and job.status in ("fila", "rodando"):
+                raise HTTPException(409, f"Aguarde o render 3D {job.id} antes de criar outra cena.")
+        return get_queue().submit("arte-3d", pid, lambda ctx: blender_local.trabalho(pid, dados, ctx)).to_dict()
 
 
 @app.post("/api/projects/{pid}/diretor")

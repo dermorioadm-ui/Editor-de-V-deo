@@ -203,6 +203,7 @@ class Overlay:
     # EFEITOS: [{"kind": ..., ...}] aplicados na cadeia da própria sobreposição.
     effects: list = field(default_factory=list)
     enabled: bool = True
+    origem: str = ""                # arte gerada localmente, preserva autoria
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -262,6 +263,7 @@ class Grafico:
     valores: list = field(default_factory=list)    # barras/linha: os números
     rotulos: list = field(default_factory=list)    # barras/linha: o nome de cada um
     icone: str = ""                 # icone: check, seta_cima, casa, cadeado...
+    composicao: dict = field(default_factory=dict)  # arte vetorial nativa, versão 1
     enabled: bool = True
     origem: str = ""                # "claude" quando veio da pós-edição pelo MCP
 

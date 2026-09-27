@@ -181,3 +181,18 @@ esclarecer, provar ou orientar o olhar. Silêncio visual também é uma decisão
 Respeite as ressalvas da fala, sem transformar hipótese em promessa. No modo
 de acabamento, preserve cortes e ordem. Nunca recrie itens manualmente
 ajustados apenas para uniformizar o estilo.
+
+## 9. Composição livre e Blender local
+
+Consulte `arte acao=catalogo`. O motor tem formas, traçados, grupos,
+tipografia e números com keyframes independentes. Os modelos fluxo,
+tipografia, orbita e grafico são pontos de partida, não o limite das cenas.
+Construa uma composição para a ideia. Use cores da marca, preserve a pessoa
+e a faixa da legenda e confira os quadros. Não transforme números de exemplo
+em afirmações do vídeo. Não cubra a pessoa com painel opaco.
+
+`arte_3d` usa Blender local opcional. Consulte a disponibilidade primeiro;
+crie a cena com objetos, materiais e câmera em dados; aguarde o job concluir
+antes de revisar. O resultado é uma sobreposição com alfa. Não afirme que
+há rastreamento, rotoscopia livre, importação MOGRT ou avaliação do som apenas
+porque o render terminou. A documentação completa está em MOTOR-CRIATIVO.md.

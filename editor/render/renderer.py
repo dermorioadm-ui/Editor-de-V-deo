@@ -1027,7 +1027,7 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         # a pós-edição só entra na chave quando EXISTE no trecho: o trecho
         # sem gráfico nem transição mantém a chave de antes, e o cache de
         # quem atualizou o Sharkcut continua valendo
-        **({"graficos": seg_graficos, "fonte_graficos": plan.style.font}
+        **({"graficos": seg_graficos, "fonte_graficos": plan.style.font, "motion_v": 2}
            if seg_graficos else {}),
         **({"transicao": [seg.trans_entra, seg.trans_sai]}
            if seg.trans_entra or seg.trans_sai else {}),
