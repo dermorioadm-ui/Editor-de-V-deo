@@ -18,6 +18,10 @@ export default function AudioPanel({ onChanged }: Props) {
   // separado do `busy` da análise: medir o áudio leva segundos e não pode
   // travar o botão de trocar a música
   const [trocando, setTrocando] = useState(false)
+  // voz de estúdio: o estado do redutor, a prévia antes/depois e qual tocar
+  const [voz, setVoz] = useState<any>(null)
+  const [vozPrevia, setVozPrevia] = useState<any>(null)
+  const [vozOcupada, setVozOcupada] = useState(false)
 
   useEffect(() => { setParams(project?.plan?.audio ?? {}) }, [project?.plan?.audio])
   useEffect(() => {
@@ -32,6 +36,18 @@ export default function AudioPanel({ onChanged }: Props) {
   useEffect(() => {
     api.musicas().then(setMusicas).catch(() => setMusicas([]))
   }, [project?.plan?.music?.media_id])
+
+  // enquanto a voz está sendo limpa (começa quando o arquivo chega), o
+  // número anda aqui
+  useEffect(() => {
+    if (!project) return
+    let vivo = true
+    const olhar = () => api.vozEstado(project.id)
+      .then((v) => { if (vivo) setVoz(v) }).catch(() => {})
+    olhar()
+    const t = window.setInterval(olhar, 3000)
+    return () => { vivo = false; window.clearInterval(t) }
+  }, [project?.id])
 
   if (!project) return null
 
@@ -48,15 +64,15 @@ export default function AudioPanel({ onChanged }: Props) {
       const m = await api.addMedia(project.id, caminho, 'audio')
       const antes = trilha ?? {}
       await api.setMusic(project.id, {
-        gain_db: -18, ducking: true, duck_amount: 12, fade_in: 1, fade_out: 2,
+        gain_db: -18, ducking: false, duck_amount: 12, fade_in: 1, fade_out: 2,
         out_start: 0,
         ...antes,
         media_id: m?.id ?? m?.media?.id, enabled: true, muted: false,
       })
       await onChanged()
       toast('ok', trilha ? 'Música trocada' : 'Música no vídeo',
-        trilha ? 'O volume e o ducking que você ajustou continuam valendo.'
-          : 'Já entra abaixando na fala.')
+        trilha ? 'O volume que você ajustou continua valendo.'
+          : 'Volume constante do começo ao fim — mude só o volume, se quiser.')
     } catch (e: any) {
       toast('error', 'A música não entrou', String(e.message ?? e))
     } finally { setTrocando(false) }
@@ -107,8 +123,82 @@ export default function AudioPanel({ onChanged }: Props) {
   const before = preview?.before
   const after = preview?.after
 
+  const vozLigada = params.voz_ia !== false
+  const mudarVoz = async (mudanca: any) => {
+    const novo = { ...params, ...mudanca }
+    setParams(novo)
+    await api.params(project.id, { audio: novo })
+    setVozPrevia(null)
+    await onChanged()
+  }
+  const ouvirVoz = async () => {
+    setVozOcupada(true)
+    try {
+      const r = await api.vozPrevia(project.id, {
+        voz_ia: params.voz_ia, voz_estudio: params.voz_estudio,
+        voz_limpeza: params.voz_limpeza,
+      })
+      setVozPrevia(r)
+      if (r.aviso) toast('warn', 'A prévia saiu sem a limpeza', r.aviso)
+    } catch (e: any) {
+      toast('error', 'A prévia da voz falhou', String(e.message ?? e))
+    } finally { setVozOcupada(false) }
+  }
+
   return (
     <div className="p-4 space-y-5 max-w-4xl">
+      <section className="card p-3" data-voz-estudio="1">
+        <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
+          Voz de estúdio
+        </h3>
+        <p className="hint mb-3">
+          Uma IA treinada para separar voz de ruído (DeepFilterNet) tira o chiado, o
+          ar-condicionado e o eco da sala; depois, o tratamento de microfone de estúdio
+          (corpo, menos &ldquo;caixa&rdquo;, presença e brilho). Roda aqui, no seu
+          computador — o arquivo não sai da máquina. A limpeza começa quando o vídeo
+          chega e fica guardada.
+        </p>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={vozLigada}
+                   onChange={(e) => mudarVoz({ voz_ia: e.target.checked,
+                                               voz_estudio: e.target.checked })} />
+            voz de estúdio ligada
+          </label>
+          <select className="field py-1 text-xs w-44" disabled={!vozLigada}
+                  value={params.voz_limpeza ?? 'forte'}
+                  onChange={(e) => mudarVoz({ voz_limpeza: e.target.value })}>
+            <option value="leve">limpeza leve</option>
+            <option value="media">limpeza média</option>
+            <option value="forte">limpeza forte (padrão)</option>
+            <option value="total">limpeza total</option>
+          </select>
+          <button className="btn btn-xs" disabled={vozOcupada} onClick={ouvirVoz}>
+            {vozOcupada ? 'preparando…' : 'ouvir antes e depois'}
+          </button>
+          <span className="text-slate-500">
+            {!voz ? '' : !voz.suportado ? 'sem redutor para este sistema'
+              : voz.andamento != null ? `limpando a voz… ${Math.round(voz.andamento * 100)}%`
+                : voz.pronta ? 'voz limpa pronta ✓'
+                  : voz.falha ? `falhou: ${voz.falha}`
+                    : !voz.instalado ? `o redutor (${voz.tamanho_mb} MB) baixa na primeira vez`
+                      : 'limpa na exportação'}
+          </span>
+        </div>
+        {vozPrevia && (
+          <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
+            <div>
+              <div className="label">antes (o som de antes, no mesmo volume)</div>
+              <audio controls src={vozPrevia.antes} className="w-full" />
+            </div>
+            <div>
+              <div className="label">depois (voz de estúdio)</div>
+              <audio controls src={vozPrevia.depois} className="w-full" />
+            </div>
+          </div>
+        )}
+      </section>
+
       <section className="card p-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
           Estágio anti-estouro
@@ -348,7 +438,7 @@ export default function AudioPanel({ onChanged }: Props) {
         </div>
         {!trilha && (
           <p className="hint">
-            Sem música. Ela entra abaixando sozinha quando você fala.
+            Sem música. Ela entra com o volume constante do começo ao fim.
           </p>
         )}
         {trilha && (
@@ -372,13 +462,13 @@ export default function AudioPanel({ onChanged }: Props) {
                 ))}
             </div>
             <label className="flex items-center gap-1.5 text-xs mt-2">
-              <input type="checkbox" defaultChecked={trilha.ducking}
+              <input type="checkbox" defaultChecked={trilha.ducking === true}
                      onChange={async (e) => {
                        await api.setMusic(project.id,
                          { ...trilha, ducking: e.target.checked })
                        await onChanged()
                      }} />
-              abaixar na fala (ducking por sidechain)
+              abaixar na fala (desligado: a música fica constante)
             </label>
           </div>
         )}

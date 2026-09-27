@@ -380,6 +380,45 @@ def _achar(lista, iid: str):
     return next((x for x in lista if x.id == iid), None)
 
 
+# os tipos que não têm cartão: a tela cheia (não há ninguém atrás), o logo
+# (imagem) e as marcações (seta, círculo)
+_SEM_CARTAO = ("tela", "logo", "seta", "circulo")
+
+
+def _no_lado_livre(project, g: dict) -> bool:
+    """O gráfico está inteiro dentro de uma moldura e do lado LIVRE dela (o
+    lado sem a pessoa)?"""
+    info = getattr(project, "info", None)
+    W, H = (info.display_size if info else (1920, 1080))
+    retrato = H > W
+    a, b = float(g.get("out_start", 0.0)), float(g.get("out_end", 0.0))
+    x, y = float(g.get("x", 0.5)), float(g.get("y", 0.5))
+    for c in project.plan.cenas or []:
+        if not c.enabled or c.tipo != "moldura":
+            continue
+        if not (c.out_start - 0.05 <= a and b <= c.out_end + 0.05):
+            continue
+        lado = c.lado if c.lado in CN.LADOS else ("baixo" if retrato else "direita")
+        if retrato:
+            lado = {"direita": "baixo", "esquerda": "cima"}.get(lado, lado)
+            return y < 0.5 if lado == "baixo" else y > 0.5
+        lado = {"baixo": "direita", "cima": "esquerda"}.get(lado, lado)
+        return x < 0.5 if lado == "direita" else x > 0.5
+    return False
+
+
+def _sem_cartao_solido(project, novo: dict) -> dict:
+    """"Uma coisa que eu não gostei são os cards sólidos que aparecem em cima
+    de mim." Na pós do Claude, cartão sólido (escuro, claro, marca, neon) por
+    cima da pessoa vira VIDRO — a imagem continua aparecendo por trás. O
+    sólido só fica onde não há ninguém atrás: a tela cheia e o lado livre da
+    moldura. Na tela, à mão, a escolha é dele e fica."""
+    if (novo.get("origem") != "claude" or novo.get("estilo") not in MG.SOLIDOS
+            or novo.get("tipo") in _SEM_CARTAO or _no_lado_livre(project, novo)):
+        return novo
+    return {**novo, "estilo": "vidro"}
+
+
 def _conferir_grafico(project, novo: dict) -> dict:
     """O nome da marca na grafia exata, e o logo pedido tem de existir."""
     kit = MK.do_projeto(project)
@@ -389,6 +428,7 @@ def _conferir_grafico(project, novo: dict) -> dict:
     novo["itens"] = [({**it, "texto": MK.corrigir_grafia(it.get("texto", ""), kit)}
                       if isinstance(it, dict) else MK.corrigir_grafia(it, kit))
                      for it in novo.get("itens") or []]
+    novo = _sem_cartao_solido(project, novo)
     if novo.get("tipo") == "logo":
         disponiveis = sorted(MK.logos(kit))
         if novo.get("logo") not in disponiveis:

@@ -311,9 +311,49 @@ Três jeitos: arraste o MP3 para o trilho **Trilha** (A1), clique no **+** do
 trilho, ou vá em **Mídia → + música**. Os dois últimos abrem a janela do
 Windows. O arquivo **não é copiado nem enviado**: o editor só guarda o caminho.
 
-Depois, no painel da direita: volume, **mudo**, e o *ducking* (a trilha abaixa
-sozinha quando você fala). Para mudar onde ela entra e onde termina, arraste o
-bloco no trilho, ou as bordas dele.
+Depois, no painel da direita: volume e **mudo**. **A trilha é constante** do
+começo ao fim: ela NÃO abaixa quando você fala e a IA não mexe no volume dela
+— quem mexe é você, só no volume. (Se um dia quiser que ela abaixe na fala,
+marque **abaixar quando você fala**; vem desmarcado. Projetos antigos, que
+abaixavam, voltaram para o constante sozinhos.) Para mudar onde ela entra e
+onde termina, arraste o bloco no trilho, ou as bordas dele.
+
+> Por que ela "sumia" mesmo sem o abaixamento: o compressor da voz rodava por
+> cima da mistura inteira, e cada frase sua apertava a música junto — medido,
+> 6 dB a menos de música a cada frase. Agora a voz é tratada sozinha e a
+> música entra depois, no nível que você escolheu.
+
+### Voz de estúdio
+
+"Sai alto, mas não sai com qualidade de microfone." Alto era só o que a
+cadeia antiga fazia: o compressor e o volume-alvo levantavam a voz — e o
+chiado, o ar-condicionado e o eco da sala junto. Agora, na primeira tela,
+**Som da voz → voz de estúdio** (ligado por padrão):
+
+1. **Limpeza por IA, no seu computador.** O [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)
+   — uma rede treinada só para separar voz de ruído — tira chiado, ruído e
+   boa parte do eco. É um programa de 27 MB que o Sharkcut baixa **uma vez**
+   do GitHub (com a assinatura SHA-256 conferida) e roda no processador. **O
+   seu vídeo não sai da máquina**: o que se baixa é o programa; a sua voz é
+   lida e escrita aqui dentro.
+2. **Tratamento de microfone:** corte do ronco grave, corpo (o grave de
+   microfone perto da boca), menos som de "caixa", presença, e o brilho de
+   estúdio — só com a voz já limpa, para não levantar chiado —, um de-esser
+   leve nos "s", e o compressor e o volume-alvo de sempre.
+
+A limpeza **começa no instante em que o arquivo chega**, junto com a
+transcrição, em pedaços paralelos nos núcleos do processador, e fica
+guardada: na exportação ela em geral já está pronta. A voz limpa tem o mesmo
+relógio da original (a boca continua na sincronia, medido: 0 ms) e o mesmo
+comprimento; o corte, a velocidade e o encaixe não mudam — só o som.
+
+A força: **forte** (padrão: tira ~30 dB de ruído e guarda um fio do original,
+que é o que evita o som "metalizado" de redutor no talo), **total**, **média**
+ou **leve**; ou **som original** (só no volume certo). No editor, aba
+**Áudio › Voz de estúdio**, o botão **ouvir antes e depois** toca 12 s do seu
+vídeo nas duas versões, no mesmo volume, para o ouvido decidir. Se o redutor
+não puder rodar (sem internet na primeira vez, por exemplo), o vídeo sai com
+a voz original e um aviso — nunca sem som.
 
 **Trocar de música** a qualquer hora: na primeira tela, com uma música já
 escolhida, o botão vira **trocar MP3…** e a lista **trocar por uma guardada…**
@@ -770,7 +810,7 @@ A trilha tem faixas separadas, e cada uma aceita itens:
 | **Vídeo** | o take principal, já cortado |
 | **B-roll** | vídeo **por cima da fala** (b-roll), cobrindo o quadro inteiro, com o seu áudio por baixo; e também vídeo ou imagem numa **janela** (picture-in-picture) — o vídeo entra sem o áudio dele, a fala continua |
 | **Desfoque** | proteção de rosto e documento |
-| **Trilha** | música de fundo, com ducking automático na fala |
+| **Trilha** | música de fundo, com volume constante (mude só o volume) |
 | **Gráficos** | a pós-edição: títulos, telas de tópico, listas, números, nome |
 | **Camadas** | fundo desfocado, holofote, 3D, pessoa recortada e as transições nas emendas |
 
@@ -796,6 +836,10 @@ b-rolls. A IA (com a chave do Gemini) lê a fala e escolhe onde dá para
 ilustrar, quanto cada um dura e o que mostrar; sem a chave, a regra do
 programa escolhe uma frase por intervalo, a que melhor se ilustra. O começo
 (o gancho) e o fim ficam com o seu rosto, e a fala continua por baixo.
+
+**Quanto cada b-roll dura:** logo embaixo, **cada b-roll: 2, 3, 4, 5, 6 ou 8
+segundos** (4 por padrão), ou *o programa decide*. Vale para o automático,
+para o b-roll que o Claude põe e para o que você soltar à mão no trilho.
 
 **De onde vem o vídeo:** por padrão, do **Pexels e do Pixabay**, com as
 chaves grátis que você cadastrou. É de graça e não tem limite que um anúncio
@@ -1333,9 +1377,8 @@ bloco a bloco, e responde três coisas:
 **A trilha toca na prévia, com o volume na mão.** Embaixo do player há o
 controle da trilha: um botão de mudo e um slider de volume que você mexe
 ouvindo o resultado na hora. A prévia ao vivo toca a música junto com a fala,
-com a mesma conta do arquivo — ganho em dB, fade de entrada e saída, a curva
-de nível que a IA escreveu e o abaixamento na fala (aproximado pela legenda
-corrente; no arquivo é sidechain disparado pela voz).
+com a mesma conta do arquivo — ganho em dB e fade de entrada e saída (e o
+abaixamento na fala, só se você marcou).
 
 > Antes disto a música simplesmente **não tocava** — nem na prévia nem no
 > arquivo. A primeira tela gravava `out_end: 0` (você só escolheu o MP3, não
@@ -1702,10 +1745,28 @@ Com a marca ligada:
   legenda (mesmo que o Whisper ouça "hóspede pay") e já na transcrição (o
   Whisper recebe o vocabulário da marca antes de transcrever);
 - os estilos pintam com as cores dela: **vidro** (painel translúcido, a imagem
-  aparece por trás), **claro** (cartão branco com destaque coral), **cor da
-  marca** (cartão coral de letra branca); sem negrito, canto largo, sombra
-  longa e quase invisível — o que a identidade pede;
+  aparece por trás — o padrão), **claro** (cartão branco com destaque coral),
+  **cor da marca** (cartão coral de letra branca); sem negrito, canto largo,
+  sombra longa e quase invisível — o que a identidade pede;
+- **nada de cartão sólido por cima de você.** Na pós do Claude, cartão cheio
+  (escuro, claro, marca, neon) em cima da pessoa vira vidro sozinho; o sólido
+  só fica na tela cheia e no lado livre da moldura. O que você escolher à
+  mão, na aba Pós, fica como você escolheu;
 - o Claude lê o kit (`marca`) antes de pôr qualquer coisa.
+
+**Gráficos de dados, animados** ("tá falando gráfico, gráfico vai subindo"):
+
+| tipo | o que faz |
+|---|---|
+| **barras** | as colunas sobem uma a uma, o número contando em cima de cada uma, a última na cor da marca |
+| **linha** | a linha se desenha da esquerda para a direita, subindo, com a área em vidro embaixo e o ponto que acende na ponta, com o valor final contando |
+| **rosca** | o anel enche até a porcentagem, com o número no meio |
+| **ícone** | um desenho que se escreve no traço (check, x, seta, casa, cadeado, chave, dinheiro, relógio, estrela, alerta, calendário, pessoa, gráfico) num disco de vidro — o check sai no verde de confirmação da marca e o alerta no laranja |
+
+O Claude usa sempre que a fala traz número, crescimento, comparação ou um
+sim/não (só com números que você falou). Na aba **Pós** há atalhos (*gráfico
+subindo*, *gráfico de linha*, *rosca %*, *ícone ✓*) e, no inspetor, os
+números separados por `;` e os nomes por vírgula.
 
 Um kit é uma pasta `marcas/<nome>/` com um `marca.json`, `logos/` e
 `fontes/`; os seus ficam em `%LOCALAPPDATA%\Editor de Video\marcas\`.

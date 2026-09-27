@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 
 os.environ["EDITOR_DATA_DIR"] = tempfile.mkdtemp(prefix="editor-reg-")
+# a voz de estúdio (rede de IA) só roda no teste dela
+os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -352,6 +354,8 @@ def main() -> int:
     testar_trilha_toca_do_comeco_ao_fim()
     testar_pos_edicao_no_encode()
     testar_marca_logos_cenas()
+    testar_voz_de_estudio_trilha_constante_e_broll_fixo()
+    testar_graficos_de_dados_e_sem_cartao_solido()
 
     print()
     if FALHAS:
@@ -6407,8 +6411,8 @@ def testar_trilha_toca_do_comeco_ao_fim() -> None:
           "e o que se ajusta ali é gravado no plano")
     check("Math.pow(10, v / 20)" in trilha_tsx,
           "o volume da prévia usa a mesma conta em dB do render")
-    check("faixa?.db" in trilha_tsx and "duck_amount" in trilha_tsx,
-          "e respeita a curva da IA e o abaixamento na fala")
+    check("faixa?.db" not in trilha_tsx and "music?.ducking === true" in trilha_tsx,
+          "e é constante: sem curva da IA, e só abaixa na fala se ele marcar")
 
 
 
@@ -8079,6 +8083,492 @@ def testar_marca_logos_cenas() -> None:
     ok(np.abs(quadro(original, 0.4) - quadro(v, 0.4)).mean() < 2.0,
           "antes da cena, o quadro é o original — e a cena atravessa a emenda dos trechos")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _deep_filter_falso(pasta, modo: str = "inverte") -> "Path":
+    """Um deep-filter de mentira, com a MESMA linha de comando do de verdade
+    (-D -a N -o saida entrada.wav) e o mesmo defeito de fábrica (a saída sai
+    1440 amostras mais curta). ``inverte`` devolve o sinal com a polaridade
+    trocada: é uma impressão digital que atravessa o EQ, o compressor e o
+    loudnorm e prova, no arquivo exportado, que a voz veio da versão limpa."""
+    import sys as _sys
+    from pathlib import Path
+
+    p = Path(pasta) / "deep-filter-falso"
+    p.write_text(f"""#!{_sys.executable}
+import sys, wave, numpy as np
+from pathlib import Path
+a = sys.argv[1:]
+if {modo!r} == "falha":
+    sys.stderr.write("modelo corrompido"); sys.exit(3)
+saida = Path(a[a.index("-o") + 1]); entrada = Path(a[-1])
+w = wave.open(str(entrada)); n = w.getnframes(); sr = w.getframerate()
+x = np.frombuffer(w.readframes(n), dtype="<i2").astype(np.int32); w.close()
+y = (-x if {modo!r} == "inverte" else x // 2)[:max(0, n - 1440)]
+y = np.clip(y, -32767, 32767).astype("<i2")
+saida.mkdir(parents=True, exist_ok=True)
+o = wave.open(str(saida / entrada.name), "wb"); o.setnchannels(1); o.setsampwidth(2)
+o.setframerate(sr); o.writeframes(y.tobytes()); o.close()
+""", encoding="utf-8")
+    p.chmod(0o755)
+    return p
+
+
+def testar_voz_de_estudio_trilha_constante_e_broll_fixo() -> None:
+    """O pedido: "melhorar a qualidade do som... sem som metalizado, sem
+    chiado", "a música de fundo some quando eu falo, gosto dela constante" e
+    "escolher o tempo dos b-rolls na primeira tela".
+
+    A voz: o redutor por IA (DeepFilterNet) roda em pedaços paralelos, e a
+    costura dos pedaços tem de ser invisível e do MESMO comprimento; a voz
+    limpa tem de ter o MESMO relógio do arquivo (senão a boca sai de
+    sincronia); e o arquivo exportado tem de sair da voz limpa — conferido
+    pela polaridade invertida de um redutor de mentira. Com o redutor de
+    verdade (quando dá para baixar), o chiado cai de fato.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from editor import projects as svc
+    from editor.audio import voz
+    from editor.audio.loudness import build_pre_chain
+    from editor.config import FFMPEG, AudioParams, ExportParams
+    from editor.ffmpeg_utils import decode_pcm, extract_wav, read_wav_mono, write_wav
+    from editor.models import Clip, EditPlan
+    from editor.render import renderer as R
+
+    def lag(x, y) -> int:
+        n = min(len(x), len(y))
+        X = np.fft.rfft(x[:n], 2 * n)
+        Y = np.fft.rfft(y[:n], 2 * n)
+        c = np.fft.irfft(X * np.conj(Y))
+        k = int(np.argmax(np.abs(c)))
+        return k if k < n else k - 2 * n
+
+    def db(x) -> float:
+        return 20 * np.log10(float(np.sqrt(np.mean(np.asarray(x, np.float64) ** 2))) + 1e-12)
+
+    tmp = Path(tempfile.mkdtemp(prefix="voz_"))
+    antes_env = os.environ.get("SHARKCUT_VOZ_IA")
+    orig_inst, orig_bin = voz.instalado, voz.caminho_do_binario
+    projeto = None
+    try:
+        os.environ["SHARKCUT_VOZ_IA"] = "1"
+        sr = 48000
+        rng = np.random.default_rng(11)
+
+        # 1) A COSTURA DOS PEDAÇOS: com um redutor que só divide por 2, a voz
+        # "limpa" de 70 s em pedaços paralelos tem de ser exatamente a metade
+        # da original, amostra por amostra, inclusive nas emendas
+        falso = _deep_filter_falso(tmp, "metade")
+        voz.instalado = lambda: True
+        voz.caminho_do_binario = lambda: falso
+        n = 70 * sr
+        sinal = (0.3 * np.sin(2 * np.pi * 180 * np.arange(n) / sr)
+                 * (0.5 + 0.5 * np.sin(2 * np.pi * 0.7 * np.arange(n) / sr))
+                 + rng.normal(0, 0.02, n)).astype(np.float32)
+        longo = tmp / "longo.wav"
+        write_wav(longo, sinal, sr)
+        feito = voz.limpar(longo, tmp / "longo_limpo.wav", "forte", trabalhadores=3)
+        y, _ = read_wav_mono(feito)
+        x, _ = read_wav_mono(longo)
+        pedacos = voz._pedacos(n, 3)
+        check(len(pedacos) >= 3,
+              f"70 s viram {len(pedacos)} pedaços (um processo por núcleo)")
+        check(len(y) == len(x),
+              f"a voz limpa tem o MESMO comprimento da original ({len(y)} = {len(x)}), "
+              f"mesmo com o redutor devolvendo 1440 amostras a menos")
+        erro = float(np.max(np.abs(y - x / 2)))
+        check(erro < 2e-4,
+              f"e a costura é invisível: diferença máxima {erro:.6f} contra a "
+              f"metade exata do sinal, emendas incluídas")
+
+        # 2) O CACHE: a mesma gravação não é limpa duas vezes; a força conta
+        k1 = voz.chave(longo, "forte")
+        check(k1 != voz.chave(longo, "leve") and k1 == voz.chave(longo, "forte"),
+              "a chave do cache muda com a força e só com ela")
+
+        # 3) O RELÓGIO: uma gravação cujo áudio começa DEPOIS do vídeo
+        base = tmp / "base.wav"
+        t = np.arange(int(4 * sr)) / sr
+        write_wav(base, (0.3 * np.sin(2 * np.pi * 300 * t) * (np.sin(2 * np.pi * 1.3 * t) > 0)
+                         + rng.normal(0, 0.01, len(t))).astype(np.float32), sr)
+        atrasado = tmp / "atrasado.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=gray:s=160x120:r=30:d=6", "-itsoffset", "0.137",
+                        "-i", str(base), "-map", "0:v", "-map", "1:a",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        "-t", "5", str(atrasado)], check=True)
+        referencia = decode_pcm(atrasado, 1.0, 3.0, 16000, 1)
+        w16 = tmp / "a16.wav"
+        extract_wav(atrasado, w16, 16000, 1)
+        pelo_wav = decode_pcm(w16, 1.0, 3.0, 16000, 1)
+        d = lag(referencia, pelo_wav)
+        check(abs(d) <= 16,
+              f"o WAV da transcrição tem o relógio do arquivo ({d / 16:.1f} ms) — "
+              f"sem o first_pts ficava ~115 ms adiantado e o corte comia palavra")
+        voz.caminho_do_binario = lambda: _deep_filter_falso(tmp, "metade")
+        limpo = voz.fonte_limpa(atrasado, "forte")
+        pelo_limpo = decode_pcm(limpo, 1.0, 3.0, 16000, 1)
+        d = lag(referencia, pelo_limpo)
+        check(abs(d) <= 16,
+              f"e a voz limpa também ({d / 16:.1f} ms): o render lê o bloco com "
+              f"os mesmos tempos e a boca continua na sincronia")
+
+        # 4) A CADEIA: estúdio só na voz, e o "ar" só com a voz limpa
+        a = AudioParams()
+        c_limpa = build_pre_chain(a, limpa=True)
+        c_crua = build_pre_chain(a, limpa=False)
+        velho = build_pre_chain(AudioParams(voz_estudio=False))
+        check(a.voz_ia and a.voz_estudio and a.voz_limpeza == "forte",
+              "voz de estúdio LIGADA por padrão, limpeza forte")
+        check("highpass=f=80:poles=2" in c_limpa and "equalizer=f=140" in c_limpa
+              and "equalizer=f=350" in c_limpa and "treble=" in c_limpa
+              and "deesser=" in c_limpa,
+              "a cadeia de estúdio: corta o ronco, dá corpo, tira a caixa, abre o ar "
+              "e segura os 's'")
+        check("treble=" not in c_crua,
+              "sem a limpeza, o agudo não sobe (levantaria o chiado junto)")
+        check("equalizer=f=140" not in velho and "highpass=f=75" in velho,
+              "e desligada, volta a cadeia de antes")
+
+        # 5) A TRILHA É CONSTANTE: com a voz entrando e saindo, a música fica
+        # no mesmo nível — antes o compressor da voz rodava por cima da
+        # mistura e apertava a música junto a cada frase
+        dur = 8.0
+        t = np.arange(int(sr * dur)) / sr
+        fala = ((np.floor(t) % 2) == 1).astype(np.float32)
+        vozwav = tmp / "vozfala.wav"
+        write_wav(vozwav, (0.5 * np.sin(2 * np.pi * 220 * t) * fala).astype(np.float32), sr)
+        trilha = tmp / "trilha.wav"
+        write_wav(trilha, (0.6 * np.sin(2 * np.pi * 1500 * t)).astype(np.float32), sr)
+        plano = EditPlan.from_dict({"music": {"media_id": "m", "enabled": True,
+                                              "gain_db": -10, "ducking": True,
+                                              "curva": [{"inicio": 0, "fim": 8, "db": -20}],
+                                              "fade_in": 0, "fade_out": 0}})
+        check(plano.music["ducking"] is False and "curva" not in plano.music
+              and plano.music.get("trilha_v") == 2,
+              "projeto antigo (ducking ligado, curva da IA) volta para a trilha constante")
+        refeito = EditPlan.from_dict(plano.to_dict())
+        refeito.music["ducking"] = True
+        check(EditPlan.from_dict(refeito.to_dict()).music["ducking"] is True,
+              "e depois disso, se ele MARCAR 'abaixar na fala', a escolha fica")
+        saida = tmp / "mix.wav"
+        R.process_audio(vozwav, saida, AudioParams(), plano, {"m": {"path": str(trilha)}}, dur)
+        mix, _ = read_wav_mono(saida)
+
+        def nivel_da_musica(seg) -> float:
+            esp = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+            f = np.fft.rfftfreq(len(seg), 1 / sr)
+            return 20 * np.log10(float(esp[(f > 1400) & (f < 1600)].max()) + 1e-12)
+
+        com_voz = [nivel_da_musica(mix[int((s + 0.2) * sr):int((s + 0.8) * sr)]) for s in (1, 3, 5)]
+        sem_voz = [nivel_da_musica(mix[int((s + 0.2) * sr):int((s + 0.8) * sr)]) for s in (2, 4, 6)]
+        dif = abs(np.mean(com_voz) - np.mean(sem_voz))
+        check(dif < 1.0,
+              f"a música tem o mesmo nível com e sem fala (diferença {dif:.2f} dB)")
+        codigo = Path("editor/render/renderer.py").read_text(encoding="utf-8")
+        check('bool(music.get("ducking", False))' in codigo,
+              "o render só abaixa a trilha se ele marcou")
+        from editor.ai import cortes
+        check("musica" not in cortes.ESQUEMA["properties"],
+              "e a IA não escreve mais curva de volume na trilha")
+
+        # 6) O B-ROLL NA DURAÇÃO ESCOLHIDA
+        from editor import broll_auto as BA
+        slots = [{"inicio": 5, "fim": 6, "busca": "chave"},
+                 {"inicio": 15, "fim": 25, "busca": "porta"},
+                 {"inicio": 30, "busca": "casa"}]
+        fixos = BA.validar(slots, 60.0, 10, fixa=4.0)
+        check(len(fixos) == 3 and all(abs(s["fim"] - s["inicio"] - 4.0) < 1e-6 for s in fixos),
+              f"com 4 s escolhidos, todo b-roll dura 4 s "
+              f"({[round(s['fim'] - s['inicio'], 2) for s in fixos]})")
+        falas = [{"start": float(i), "end": float(i) + 1.5,
+                  "text": f"a fechadura eletrônica da casa número {i}"} for i in range(3, 55, 4)]
+        regra = BA.pela_regra(falas, 60.0, "muito", set(), 3.0)
+        check(regra and all(abs(s["fim"] - s["inicio"] - 3.0) < 1e-6 for s in regra),
+              "a regra do programa também usa a duração escolhida")
+        check("exatamente 3 segundos" in BA.pedido_para_ia(falas, 60.0, 4, "", 3.0),
+              "e o pedido à IA diz quanto cada um dura")
+
+        dv = 12.0
+        fonte = write_video(tmp / "fonte.mp4", build([(0.3, 11.5)], dv), dv, 180, 320, 30)
+        cena = write_video(tmp / "cena.mp4", build([(0.1, 5.9)], 6.0), 6.0, 180, 320, 30)
+        projeto = svc.create(str(fonte), "voz", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=dv)]
+        projeto.save_plan()
+        cliente = TestClient(app)
+        r = cliente.post(f"/api/projects/{projeto.id}/params",
+                         json={"broll": {"duracao": 3}})
+        check(r.status_code == 200 and svc.load(projeto.id).plan.broll.get("duracao") == 3.0,
+              "a primeira tela grava a duração do b-roll no projeto")
+        cliente.post(f"/api/projects/{projeto.id}/params", json={"broll": {"duracao": 7}})
+        check(svc.load(projeto.id).plan.broll.get("duracao") == 0.0,
+              "uma duração fora da lista vira 'o programa decide'")
+        cliente.post(f"/api/projects/{projeto.id}/params", json={"broll": {"duracao": 3}})
+        r = cliente.post(f"/api/projects/{projeto.id}/brolls",
+                         json={"paths": [str(cena)], "at": 2.0})
+        postos = r.json().get("postos") or []
+        check(r.status_code == 200 and postos
+              and abs(postos[0]["out_end"] - postos[0]["out_start"] - 3.0) < 0.05,
+              f"e o b-roll solto sem duração entra com os 3 s dele "
+              f"({[round(p['out_end'] - p['out_start'], 2) for p in postos]})")
+        from editor.claude_editor import pedido as pedido_claude
+        check("B-ROLL DURA 3 s" in pedido_claude(svc.load(projeto.id)),
+              "o Claude recebe a duração escolhida")
+
+        # 7) NO ARQUIVO: a voz exportada vem da versão limpa (polaridade
+        # invertida pelo redutor de mentira) e, se o redutor falha, o vídeo
+        # sai com a voz original e um aviso — nunca sem som
+        p = svc.load(projeto.id)
+        p.plan.cutaways = []
+        p.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                     preset="ultrafast", crf=30)
+        p.save_plan()
+        from tests.e2e import Ctx
+
+        def exportar(nome: str) -> tuple[float, list]:
+            r = svc.export(svc.load(projeto.id), Ctx(quiet=True),
+                           {"filename": nome, "overwrite": True, "output_dir": str(tmp)})
+            a = decode_pcm(r["output"], 1.0, 9.0, 16000, 1)
+            b = decode_pcm(fonte, 1.0, 9.0, 16000, 1)
+            n2 = min(len(a), len(b))
+            X = np.fft.rfft(a[:n2], 2 * n2)
+            Y = np.fft.rfft(b[:n2], 2 * n2)
+            c = np.fft.irfft(X * np.conj(Y))
+            k = int(np.argmax(np.abs(c[:400].tolist() + c[-400:].tolist())))
+            pico = (c[:400].tolist() + c[-400:].tolist())[k]
+            return pico / (np.linalg.norm(a[:n2]) * np.linalg.norm(b[:n2]) + 1e-12), \
+                list(r.get("warnings") or [])
+
+        voz.caminho_do_binario = lambda: _deep_filter_falso(tmp, "inverte")
+        corr, _ = exportar("limpa.mp4")
+        check(corr < -0.3,
+              f"o arquivo exportado sai da voz LIMPA (correlação {corr:.2f}, "
+              f"negativa = a impressão digital do redutor)")
+        p = svc.load(projeto.id)
+        p.plan.audio.voz_ia = False
+        p.save_plan()
+        corr, _ = exportar("crua.mp4")
+        check(corr > 0.3,
+              f"e com a voz de estúdio desligada, da original ({corr:.2f})")
+        p = svc.load(projeto.id)
+        p.plan.audio.voz_ia = True
+        p.plan.audio.voz_limpeza = "media"
+        p.save_plan()
+        voz.caminho_do_binario = lambda: _deep_filter_falso(tmp, "falha")
+        corr, avisos = exportar("falhou.mp4")
+        check(corr > 0.3 and any("SEM a limpeza" in a for a in avisos),
+              f"redutor quebrado: o vídeo sai com a voz original e o aviso "
+              f"({corr:.2f}; {[a[:50] for a in avisos]})")
+
+        # 8) O REDUTOR DE VERDADE, quando dá para baixar (27–36 MB, uma vez)
+        voz.instalado, voz.caminho_do_binario = orig_inst, orig_bin
+        try:
+            voz.baixar()
+            real = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"  (pulado: o redutor de verdade não baixou — {exc})")
+            real = False
+        espeak = shutil.which("espeak-ng")
+        if real and espeak:
+            fala_wav = tmp / "fala.wav"
+            subprocess.run([espeak, "-v", "pt-br", "-s", "150", "-w", str(fala_wav),
+                            "Olá, hoje eu vou te mostrar como proteger o seu imóvel de "
+                            "temporada. Ninguém dorme sem assinar."], check=True)
+            limpa_ref = tmp / "ref.wav"
+            subprocess.run([FFMPEG, "-y", "-v", "error", "-i", str(fala_wav), "-af",
+                            "aresample=48000,adelay=700,apad=pad_dur=1", "-ac", "1",
+                            "-ar", "48000", str(limpa_ref)], check=True)
+            ref = decode_pcm(limpa_ref)
+            ruido = rng.normal(0, 1, len(ref)).astype(np.float32)
+            ruido = np.convolve(ruido, np.ones(8) / 8, mode="same") * 0.05
+            suja = tmp / "suja.wav"
+            write_wav(suja, (ref + ruido).astype(np.float32), 48000)
+            saida = voz.limpar(suja, tmp / "suja_limpa.wav", "forte")
+            y = decode_pcm(saida)
+            antes_s = db(decode_pcm(suja)[int(0.05 * sr):int(0.6 * sr)])
+            depois_s = db(y[int(0.05 * sr):int(0.6 * sr)])
+            check(len(y) == len(ref), "o redutor de verdade devolve o mesmo comprimento")
+            check(abs(lag(y, ref)) <= 48,
+                  f"e o mesmo relógio (atraso {lag(y, ref) / 48:.1f} ms)")
+            check(depois_s < antes_s - 15,
+                  f"e o chiado cai de verdade: {antes_s:.1f} → {depois_s:.1f} dB")
+            fala_a = db(ref[int(1.0 * sr):int(4.0 * sr)])
+            fala_d = db(y[int(1.0 * sr):int(4.0 * sr)])
+            check(abs(fala_a - fala_d) < 4,
+                  f"sem comer a voz ({fala_a:.1f} → {fala_d:.1f} dB)")
+        elif real:
+            print("  (pulado: sem espeak-ng para gerar fala de verdade)")
+    finally:
+        voz.instalado, voz.caminho_do_binario = orig_inst, orig_bin
+        if antes_env is None:
+            os.environ.pop("SHARKCUT_VOZ_IA", None)
+        else:
+            os.environ["SHARKCUT_VOZ_IA"] = antes_env
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_graficos_de_dados_e_sem_cartao_solido() -> None:
+    """ "Tá falando gráfico, gráfico vai subindo" e "não gostei dos cards
+    sólidos que aparecem em cima de mim".
+
+    Cada gráfico novo é MEDIDO no quadro, não no JSON: a barra de destaque só
+    existe depois de subir; a linha, no meio do desenho, está na metade da
+    esquerda e não na da direita; a rosca de 75% está pintada aos 90° e não
+    aos 330°; o check da marca sai no verde de confirmação. E o mesmo
+    gráfico atravessando uma emenda sai IGUAL dos dois lados.
+    """
+    import math
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import marca as MK
+    from editor import pos_edicao as PE
+    from editor.config import FFMPEG
+    from editor.mcp import ferramentas as FT
+    from editor.models import Cena, EditPlan
+    from editor.render import motion as MG
+
+    kit = MK.carregar("hospedepay")
+    W, H = 540, 960
+    fontsdir = str(Path("marcas/hospedepay/fontes").resolve())
+    tmp = Path(tempfile.mkdtemp(prefix="dados_"))
+
+    def quadro(graficos, t: float, t0: float = 0.0, dur: float = 20.0) -> np.ndarray:
+        ass = tmp / "g.ass"
+        ok_ = MG.escrever(ass, graficos, W, H, t0, dur, fonte=MG.fonte_do_kit(kit, "Arial"),
+                          kit=kit)
+        vf = f"ass={ass}:fontsdir={fontsdir}" if ok_ else "null"
+        cru = subprocess.run(
+            [FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+             f"color=c=0x404850:s={W}x{H}:r=30:d={dur}", "-ss", f"{t - t0:.3f}",
+             "-vf", vf, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+            capture_output=True, check=True).stdout
+        return np.frombuffer(cru, np.uint8).reshape(H, W, 3).astype(int)
+
+    def perto(px, hexa: str, tol: int = 40) -> bool:
+        alvo = [int(hexa[i:i + 2], 16) for i in (1, 3, 5)]
+        return all(abs(int(a) - b) <= tol for a, b in zip(px, alvo))
+
+    def conta(img, hexa: str, caixa=None, tol: int = 40) -> int:
+        x0, y0, x1, y1 = caixa or (0, 0, W, H)
+        alvo = np.array([int(hexa[i:i + 2], 16) for i in (1, 3, 5)])
+        return int(np.sum(np.all(np.abs(img[y0:y1, x0:x1] - alvo) <= tol, axis=2)))
+
+    coral = kit["cores"]["marca"]
+    try:
+        # normalizar: números com vírgula, rótulos, ícone fora da lista, vidro padrão
+        n = MG.normalizar({"tipo": "barras", "valores": ["1,5", 2, "x", 3.25],
+                           "rotulos": ["a", "b"], "icone": "foguete"})
+        check(n["valores"] == [1.5, 2.0, 3.25] and n["rotulos"] == ["a", "b"]
+              and n["icone"] == "" and n["estilo"] == "vidro",
+              f"normalizar: '1,5' vira 1.5, lixo sai, ícone inventado não entra, "
+              f"vidro é o padrão ({n['valores']}, {n['estilo']})")
+
+        # BARRAS: a de destaque (a última, coral) só existe depois de subir
+        barras = [MG.normalizar({"tipo": "barras", "out_start": 0, "out_end": 5,
+                                 "valores": [10, 20, 40], "rotulos": ["a", "b", "c"],
+                                 "texto": "Reservas", "y": 0.35})]
+        cedo, tarde = quadro(barras, 0.35), quadro(barras, 3.0)
+        check(conta(cedo, coral) < 30 and conta(tarde, coral) > 800,
+              f"barras: a coluna de destaque SOBE (coral: {conta(cedo, coral)} px no "
+              f"começo → {conta(tarde, coral)} px depois)")
+
+        # LINHA: no meio do desenho, só a metade esquerda está desenhada
+        linha = [MG.normalizar({"tipo": "linha", "out_start": 0, "out_end": 6,
+                                "valores": [1, 2, 3, 4, 5, 6], "y": 0.35})]
+        # o desenho leva 1,5 s a partir de 0,3 s: aos 1,0 s está no começo
+        meio, fim = quadro(linha, 1.0), quadro(linha, 4.0)
+        lado_e, lado_d = (0, 0, W // 2 - 40, H), (W // 2 + 80, 0, W, H)
+        e_meio, e_fim = conta(meio, coral, lado_e, 50), conta(fim, coral, lado_e, 50)
+        d_meio, d_fim = conta(meio, coral, lado_d, 50), conta(fim, coral, lado_d, 50)
+        check(e_fim > 200 and e_meio > e_fim * 0.6 and d_fim > 200 and d_meio < d_fim * 0.4,
+              f"linha: ela se desenha da esquerda para a direita (esquerda "
+              f"{e_meio}/{e_fim} px, direita {d_meio}/{d_fim} px no meio/no fim)")
+
+        # ROSCA de 75%: pintada aos 90° (3 h) e não aos 330° (perto das 11 h)
+        rosca = [MG.normalizar({"tipo": "rosca", "out_start": 0, "out_end": 5,
+                                "numero": 75, "texto": "assinam", "y": 0.35})]
+        img = quadro(rosca, 3.5)
+        els = MG.elementos(rosca[0], W, H, MG.fonte_do_kit(kit, "Arial"), kit)
+        u = min(W, H)
+        R = u * 0.15
+        # o centro é onde está o número contando (camada 4, centrado)
+        topo = [e for e in els if e.an == 5 and e.camada == 4][0]
+        cx, cy = topo.x, topo.y
+        rm = R - R * 0.24 / 2
+
+        def no_anel(graus):
+            a = math.radians(graus - 90)
+            return img[int(cy + rm * math.sin(a)), int(cx + rm * math.cos(a))]
+
+        check(perto(no_anel(90), coral, 50) and perto(no_anel(200), coral, 50)
+              and not perto(no_anel(330), coral, 60),
+              f"rosca de 75%: pintada aos 90° e aos 200°, vazia aos 330° "
+              f"({no_anel(90).tolist()}, {no_anel(330).tolist()})")
+
+        # ÍCONE: o check da marca é verde (confirma); o alerta, laranja
+        ic = [MG.normalizar({"tipo": "icone", "icone": "check", "out_start": 0,
+                             "out_end": 3, "x": 0.3, "y": 0.3}),
+              MG.normalizar({"tipo": "icone", "icone": "alerta", "out_start": 0,
+                             "out_end": 3, "x": 0.7, "y": 0.3})]
+        img = quadro(ic, 1.5)
+        verde, laranja = kit["cores"]["confirma"], kit["cores"]["alerta"]
+        check(conta(img, verde, (0, 0, W // 2, H)) > 150
+              and conta(img, laranja, (W // 2, 0, W, H)) > 150,
+              "ícones: o check sai no verde de confirmação e o alerta no laranja da marca")
+
+        # A EMENDA: o mesmo quadro visto de dois trechos diferentes é igual
+        a = quadro(barras, 1.2, 0.0)
+        b = quadro(barras, 1.2, 1.0, 5.0)
+        dif = float(np.abs(a - b).mean())
+        check(dif < 1.0,
+              f"a barra que atravessa a emenda sai igual nos dois trechos (dif {dif:.2f})")
+
+        # SEM CARTÃO SÓLIDO POR CIMA DELE (só na pós do Claude)
+        class _P:
+            pass
+
+        proj = _P()
+        proj.plan = EditPlan()
+        proj.info = type("I", (), {"display_size": (1920, 1080)})()
+        base = {"tipo": "titulo", "texto": "oi", "estilo": "claro", "out_start": 1,
+                "out_end": 3, "x": 0.5, "y": 0.2}
+        check(PE._sem_cartao_solido(proj, {**base, "origem": "claude"})["estilo"] == "vidro",
+              "cartão sólido do Claude por cima da pessoa vira vidro")
+        check(PE._sem_cartao_solido(proj, {**base, "origem": ""})["estilo"] == "claro",
+              "o que ELE escolhe na tela fica como ele escolheu")
+        check(PE._sem_cartao_solido(proj, {**base, "tipo": "tela", "origem": "claude"})["estilo"]
+              == "claro", "a tela cheia pode ser sólida (não há ninguém atrás)")
+        proj.plan.cenas = [Cena(tipo="moldura", out_start=0.5, out_end=4.0, lado="direita")]
+        check(PE._sem_cartao_solido(proj, {**base, "x": 0.26, "origem": "claude"})["estilo"]
+              == "claro"
+              and PE._sem_cartao_solido(proj, {**base, "x": 0.8, "origem": "claude"})["estilo"]
+              == "vidro",
+              "na moldura, sólido só no lado livre (x 0.26 fica; x 0.8, em cima dele, vira vidro)")
+
+        esquema = FT._ESQUEMA_GRAFICO
+        check({"barras", "linha", "rosca", "icone"} <= set(esquema["tipo"]["enum"])
+              and "valores" in esquema and "rotulos" in esquema and "icone" in esquema,
+              "o Claude enxerga os gráficos de dados pelo MCP")
+        skill = Path("habilidades/sharkcut-motion/SKILL.md").read_text(encoding="utf-8")
+        check("tipo=barras" in skill and "cartão sólido" in skill,
+              "e a habilidade de motion ensina a usá-los e proíbe cartão sólido")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

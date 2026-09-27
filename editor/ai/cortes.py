@@ -161,20 +161,6 @@ Seja econômico: se tudo é ênfase, nada é. Num vídeo de 2 minutos, algo entr
 3 e 8 marcações. O programa escolhe os valores exatos dentro do que a lente
 e a resolução permitem — você diz onde aperta e onde solta.
 
-=== "musica" — onde a trilha sobe e onde ela some ===
-Só preencha se o vídeo tiver trilha. O programa já abaixa a música sozinho
-quando alguém fala (isso é reflexo, não intenção). O que você decide é a
-INTENÇÃO:
-
-- "alto"   — gancho e fechamento: a música empurra.
-- "normal" — o padrão. Não precisa marcar, é o que vale onde você não falar.
-- "baixo"  — embaixo de explicação densa, número, passo a passo: a trilha não
-  pode disputar atenção com a informação.
-- "fora"   — em cima do preço, da garantia e do CTA. Silêncio de trilha faz a
-  frase pesar.
-
-Poucas faixas, largas. Três a cinco num vídeo inteiro.
-
 Responda somente o JSON do esquema. Em TODAS as listas, "de" e "ate" são
 índices de palavra INCLUSIVOS. Em "remover", "tipo" é "refeito", "copy" ou "vicio" e
 "motivo" tem no máximo 12 palavras e explica para o usuário, não para você."""
@@ -205,17 +191,6 @@ ESQUEMA = {
             "required": ["de", "ate", "secao"],
             "propertyOrdering": ["de", "ate", "secao"],
         }},
-        "musica": {"type": "ARRAY", "items": {
-            "type": "OBJECT",
-            "properties": {
-                "de": {"type": "INTEGER"},
-                "ate": {"type": "INTEGER"},
-                "nivel": {"type": "STRING",
-                          "enum": ["alto", "normal", "baixo", "fora"]},
-            },
-            "required": ["de", "ate", "nivel"],
-            "propertyOrdering": ["de", "ate", "nivel"],
-        }},
         "camera": {"type": "ARRAY", "items": {
             "type": "OBJECT",
             "properties": {
@@ -228,7 +203,7 @@ ESQUEMA = {
         }},
     },
     "required": ["leitura", "remover", "secoes"],
-    "propertyOrdering": ["leitura", "remover", "secoes", "camera", "musica"],
+    "propertyOrdering": ["leitura", "remover", "secoes", "camera"],
 }
 
 

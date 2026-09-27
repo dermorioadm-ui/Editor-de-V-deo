@@ -7,8 +7,8 @@ import { useEffect, useRef } from 'react'
  * sidechain), mas a prévia ao vivo toca só o áudio da gravação: quem mexia no
  * volume não ouvia nada mudar e só descobria o resultado quando o MP4 ficava
  * pronto. Aqui um segundo elemento de áudio segue o cursor e aplica a MESMA
- * conta do render — ganho em dB, fade de entrada e saída, a curva de nível
- * que a IA escreveu, e o abaixamento na fala.
+ * conta do render — ganho em dB, fade de entrada e saída e, só se ele
+ * marcar, o abaixamento na fala.
  *
  * O ducking é aproximação, não igualdade: no arquivo ele é sidechain
  * disparado pela voz; aqui é a legenda corrente que diz "tem alguém falando".
@@ -40,12 +40,8 @@ export default function TrilhaPreview({ src, music, playhead, playing, duracao,
   const fadeOut = Math.max(0, Number(music?.fade_out ?? 2))
   if (fadeIn > 0 && tRel < fadeIn) vol *= tRel / fadeIn
   if (fadeOut > 0 && tRel > dur - fadeOut) vol *= Math.max(0, (dur - tRel) / fadeOut)
-  // a curva que a IA escreveu vem em tempo de SAÍDA
-  for (const faixa of (music?.curva ?? [])) {
-    const a = Number(faixa?.inicio ?? 0); const b = Number(faixa?.fim ?? 0)
-    if (playhead >= a && playhead <= b) { vol *= dB(Number(faixa?.db ?? 0)); break }
-  }
-  if (music?.ducking !== false && falando) {
+  // sem curva da IA: a trilha é constante (só o volume dele manda)
+  if (music?.ducking === true && falando) {
     vol *= dB(-Math.abs(Number(music?.duck_amount ?? 12)))
   }
   if (mudoGeral || music?.muted || music?.enabled === false || !dentro) vol = 0

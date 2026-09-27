@@ -687,9 +687,12 @@ GUIA_DA_POS = (
     "PÓS-EDIÇÃO seguindo a HABILIDADE DE MOTION (no fim deste pedido): marca → "
     "pos_contexto → analisar_cena → um PLANO por momento do vídeo → cenas "
     "(moldura, vidro3d), gráficos (títulos e listas em vidro, logo de lado, "
-    "texto atrás da pessoa), poucas transições → ver_quadros em tudo. Um "
-    "elemento por ideia, entrando quando é falado, nunca em cima da legenda, "
-    "nunca cobrindo o rosto.")
+    "texto atrás da pessoa, e GRÁFICOS DE DADOS animados — barras que sobem, "
+    "linha que se desenha, rosca, ícones desenhados — sempre que a fala tem "
+    "número, crescimento, comparação ou um 'sim/não'), poucas transições → "
+    "ver_quadros em tudo. NUNCA cartão sólido por cima dele (vidro ou sem "
+    "fundo). Um elemento por ideia, entrando quando é falado, nunca em cima da "
+    "legenda, nunca cobrindo o rosto.")
 
 # A HABILIDADE: o manual de motion design que o Claude segue na pós-edição.
 # É um arquivo no formato de skill do Claude Code (habilidades/sharkcut-motion/
@@ -866,6 +869,14 @@ def pedido(project, modo: str = "completo") -> str:
                         "OLHANDO e broll_do_banco para pôr — termos em português que tenham "
                         "a ver com o assunto do vídeo inteiro. Sem chave do banco, "
                         "broll_automatico.")
+    try:
+        dura_br = float(br.get("duracao") or 0.0)
+    except (TypeError, ValueError):
+        dura_br = 0.0
+    if dura_br > 0:
+        linhas.append(f"B-ROLL DURA {dura_br:g} s: é a escolha dele na primeira tela. "
+                      f"Todo b-roll que você puser (broll, broll_do_banco) leva "
+                      f"dura={dura_br:g} — o padrão das ferramentas já é esse.")
     passos = ["pos_contexto e transcricao (TODAS as palavras, de 400 em 400)."]
     passos.append("\n".join(REVISAO))
     passos.append("SÓ SE O DONO PEDIU: respiro (fôlego do corte de silêncio), ritmo "

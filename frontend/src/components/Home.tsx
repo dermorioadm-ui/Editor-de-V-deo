@@ -59,6 +59,17 @@ export default function Home() {
   const [brollFonte, setBrollFonte] = useState<string>(() => {
     try { return localStorage.getItem('sharkcut.brollFonte') || 'banco' } catch { return 'banco' }
   })
+  // QUANTOS SEGUNDOS CADA B-ROLL, por padrão ("4 segundos, 2, 3, 5..."). 0 =
+  // o programa decide por frase. Vale para o automático, para o do Claude e
+  // para o que ele soltar à mão depois.
+  const [brollDur, setBrollDur] = useState<number>(() => {
+    try { return Number(localStorage.getItem('sharkcut.brollDur') || 4) } catch { return 4 }
+  })
+  // O SOM DA VOZ: a limpeza por IA (DeepFilterNet, neste computador) + o
+  // tratamento de microfone de estúdio. 'nao' = o som original, só nivelado.
+  const [vozForca, setVozForca] = useState<string>(() => {
+    try { return localStorage.getItem('sharkcut.voz') || 'forte' } catch { return 'forte' }
+  })
   const [resolucao, setResolucao] = useState('source')
   // 30 fps por padrão. Medido num 1920x1080 a 60 fps: baixar a saída para 30
   // corta 34% do trabalho de renderização inteiro, e num vídeo de alguém
@@ -298,7 +309,10 @@ export default function Home() {
       // b-roll automático: entra depois da montagem, e o vídeo sai com ele
       broll: { auto: brollAuto !== 'nao',
                frequencia: brollAuto === 'nao' ? 'medio' : brollAuto,
-               fonte: brollFonte, assunto: brollAssunto.trim() },
+               fonte: brollFonte, assunto: brollAssunto.trim(),
+               duracao: brollDur },
+      audio: { voz_ia: vozForca !== 'nao', voz_estudio: vozForca !== 'nao',
+               voz_limpeza: vozForca === 'nao' ? 'forte' : vozForca },
     }
   }
 
@@ -345,7 +359,7 @@ export default function Home() {
           const m = await api.addMedia(project.id, musica, 'audio')
           await api.setMusic(project.id, {
             media_id: m?.id ?? m?.media?.id, gain_db: musicaVol,
-            ducking: true, duck_amount: 12, fade_in: 1, fade_out: 2,
+            ducking: false, duck_amount: 12, fade_in: 1, fade_out: 2,
             // SEM out_end: a trilha vai até o fim do vídeo. Mandar 0 fazia o
             // render entender "termina no instante zero" e a música tocava
             // 0,1 s — ela simplesmente não existia no arquivo.
@@ -895,7 +909,7 @@ export default function Home() {
                        value={musicaVol}
                        onChange={(e) => setMusicaVol(+e.target.value)} />
                 <p className="text-[10px] text-slate-600 leading-tight mb-1">
-                  volume {musicaVol} dB · abaixa sozinha na fala
+                  volume {musicaVol} dB · constante do começo ao fim
                 </p>
               </>
             )}
@@ -941,6 +955,27 @@ export default function Home() {
             )}
           </div>
 
+          <div className="w-52" data-voz-home="1">
+            <label className="label">Som da voz</label>
+            <select className="field w-full py-1.5 text-xs" value={vozForca}
+                    onChange={(e) => {
+                      setVozForca(e.target.value)
+                      try { localStorage.setItem('sharkcut.voz', e.target.value) } catch { /* sem memória */ }
+                    }}>
+              <option value="forte">voz de estúdio (recomendado)</option>
+              <option value="total">voz de estúdio — limpeza total</option>
+              <option value="media">voz de estúdio — limpeza média</option>
+              <option value="leve">voz de estúdio — limpeza leve</option>
+              <option value="nao">som original (só nivelado)</option>
+            </select>
+            <p className="text-[10px] text-slate-600 leading-tight">
+              {vozForca === 'nao'
+                ? 'sem limpeza: o som da gravação, só no volume certo'
+                : 'tira chiado, ruído e eco com IA, aqui no seu computador — '
+                  + 'o arquivo não sai da máquina'}
+            </p>
+          </div>
+
           <div className="w-40">
             <label className="label">Legenda</label>
             <select className="field w-full py-1.5 text-xs"
@@ -968,6 +1003,18 @@ export default function Home() {
               <option value="pouco">pouco (1 a cada ~20 s)</option>
               <option value="medio">médio (1 a cada ~12 s)</option>
               <option value="muito">muito (1 a cada ~7 s)</option>
+            </select>
+            <select className="field w-full py-1.5 text-xs mt-1" value={brollDur}
+                    data-broll-dur="1"
+                    title="quanto cada b-roll cobre — vale para o automático, para o do Claude e para os que você puser à mão"
+                    onChange={(e) => {
+                      setBrollDur(+e.target.value)
+                      try { localStorage.setItem('sharkcut.brollDur', e.target.value) } catch { /* sem memória */ }
+                    }}>
+              {[2, 3, 4, 5, 6, 8].map((s) => (
+                <option key={s} value={s}>cada b-roll: {s} segundos</option>
+              ))}
+              <option value={0}>cada b-roll: o programa decide</option>
             </select>
             <p className="text-[10px] text-slate-600 leading-tight">
               {brollAuto === 'nao'

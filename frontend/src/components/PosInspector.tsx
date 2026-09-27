@@ -8,10 +8,20 @@ export const TIPOS_GRAFICO: [string, string][] = [
   ['destaque', 'Destaque'], ['numero', 'Número'], ['texto', 'Texto'],
   ['nome', 'Nome (lower third)'], ['seta', 'Seta'], ['circulo', 'Círculo'],
   ['barra', 'Barra de progresso'], ['logo', 'Logo'],
+  ['barras', 'Gráfico de barras (sobe)'], ['linha', 'Gráfico de linha (sobe)'],
+  ['rosca', 'Rosca (%)'], ['icone', 'Ícone desenhado'],
 ]
 const ESTILOS: [string, string][] = [
-  ['vidro', 'Vidro (translúcido)'], ['claro', 'Claro'], ['marca', 'Cor da marca'],
-  ['escuro', 'Escuro'], ['neon', 'Neon'], ['limpo', 'Sem fundo'],
+  ['vidro', 'Vidro (translúcido)'], ['limpo', 'Sem fundo'],
+  ['claro', 'Claro (cartão sólido)'], ['marca', 'Cor da marca (sólido)'],
+  ['escuro', 'Escuro (sólido)'], ['neon', 'Neon (sólido)'],
+]
+export const ICONES: [string, string][] = [
+  ['check', 'check (confirmado)'], ['x', 'x (errado)'], ['seta_cima', 'seta para cima'],
+  ['seta_baixo', 'seta para baixo'], ['casa', 'casa'], ['cadeado', 'cadeado'],
+  ['chave', 'chave'], ['dinheiro', 'dinheiro'], ['relogio', 'relógio'],
+  ['estrela', 'estrela'], ['alerta', 'alerta'], ['calendario', 'calendário'],
+  ['pessoa', 'pessoa'], ['grafico', 'gráfico subindo'],
 ]
 export const TIPOS_CENA: [string, string][] = [
   ['moldura', 'Moldura (o vídeo de um lado)'], ['vidro3d', 'Camadas de vidro 3D'],
@@ -60,6 +70,9 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
   const item = lista.find((x: any) => x.id === id)
   const [d, setD] = useState<any>(null)
   const [itensTxt, setItensTxt] = useState('')
+  // barras e linha: os números e os nomes, separados por vírgula/ponto e vírgula
+  const [valoresTxt, setValoresTxt] = useState('')
+  const [rotulosTxt, setRotulosTxt] = useState('')
   const [quadro, setQuadro] = useState<string | null>(null)
   const [carregando, setCarregando] = useState(false)
   const [salvando, setSalvando] = useState(false)
@@ -73,6 +86,8 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
     if (!item) return
     setD({ ...item, dura: +((item.out_end ?? 0) - (item.out_start ?? 0)).toFixed(2) })
     setItensTxt((item.itens ?? []).map((i: any) => (typeof i === 'string' ? i : i.texto)).join('\n'))
+    setValoresTxt((item.valores ?? []).join('; '))
+    setRotulosTxt((item.rotulos ?? []).join(', '))
     setQuadro(null)
   }, [item?.id, item?.out_start, item?.out_end, JSON.stringify(item ?? {})])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -103,6 +118,11 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
           entrada: d.entrada, saida: d.saida, camada: d.camada,
           numero: +d.numero, prefixo: d.prefixo, sufixo: d.sufixo, angulo: +d.angulo,
           logo: d.logo ?? '', opacidade: +(d.opacidade ?? 1),
+          // "1,5; 2; 3,2" ou "1.5 2 3.2": a vírgula decimal é a nossa
+          valores: valoresTxt.split(/[;\s]+/).map((t) => t.trim().replace(',', '.'))
+            .filter((t) => t !== '' && !isNaN(+t)).map(Number),
+          rotulos: rotulosTxt.split(',').map((t) => t.trim()),
+          icone: d.icone ?? '',
         }
       } else if (kind === 'cena') {
         dados = { tipo: d.tipo, lado: d.lado ?? '', fundo: d.fundo ?? '', logos: d.logos ?? [],
@@ -137,7 +157,8 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
     : kind === 'camada' ? 'Camada' : kind === 'cena' ? 'Cena' : 'Transição'
   const ehLogo = kind === 'grafico' && d.tipo === 'logo'
   const pedeItens = d.tipo === 'lista' || d.tipo === 'tela'
-  const pedeNumero = d.tipo === 'numero' || d.tipo === 'barra'
+  const pedeNumero = d.tipo === 'numero' || d.tipo === 'barra' || d.tipo === 'rosca'
+  const pedeValores = d.tipo === 'barras' || d.tipo === 'linha'
 
   return (
     <section className="card p-3 m-3 space-y-2.5 border-amber-600/60" data-pos-inspector={kind}>
@@ -179,7 +200,10 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             </>
           ) : (
           <label className="block">
-            <span className="label">{d.tipo === 'nome' ? 'nome' : d.tipo === 'numero' ? 'legenda do número' : 'texto'}</span>
+            <span className="label">{d.tipo === 'nome' ? 'nome'
+              : d.tipo === 'numero' || d.tipo === 'rosca' ? 'legenda do número'
+                : d.tipo === 'icone' ? 'rótulo embaixo (opcional)'
+                  : pedeValores ? 'título do gráfico' : 'texto'}</span>
             <textarea className="field w-full text-xs py-1" rows={2} value={d.texto ?? ''}
                       data-campo="texto" onChange={(e) => set('texto', e.target.value)} />
           </label>
@@ -198,11 +222,36 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
                         data-campo="itens" onChange={(e) => setItensTxt(e.target.value)} />
             </label>
           )}
-          {(pedeNumero || d.tipo === 'tela') && (
+          {d.tipo === 'icone' && (
+            <label className="block">
+              <span className="label">desenho</span>
+              <select className="field w-full text-xs py-1" value={d.icone || 'check'}
+                      data-campo="icone" onChange={(e) => set('icone', e.target.value)}>
+                {ICONES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+          )}
+          {pedeValores && (
+            <>
+              <label className="block">
+                <span className="label">números, em ordem (separe com ;)</span>
+                <input className="field w-full text-xs py-1" value={valoresTxt}
+                       data-campo="valores" placeholder="12; 19; 27; 41"
+                       onChange={(e) => setValoresTxt(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className="label">nomes de cada um (separe com vírgula)</span>
+                <input className="field w-full text-xs py-1" value={rotulosTxt}
+                       data-campo="rotulos" placeholder="jan, fev, mar, abr"
+                       onChange={(e) => setRotulosTxt(e.target.value)} />
+              </label>
+            </>
+          )}
+          {(pedeNumero || pedeValores || d.tipo === 'tela') && (
             <div className="grid grid-cols-3 gap-2">
               {pedeNumero && (
                 <label className="block">
-                  <span className="label">{d.tipo === 'barra' ? '% cheio' : 'número'}</span>
+                  <span className="label">{d.tipo === 'barra' || d.tipo === 'rosca' ? '% cheio' : 'número'}</span>
                   <input className="field w-full text-xs py-1" type="number" value={d.numero ?? 0}
                          onChange={(e) => set('numero', e.target.value)} />
                 </label>
@@ -213,7 +262,7 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
                        placeholder={d.tipo === 'tela' ? 'PARTE 1' : 'R$ '}
                        onChange={(e) => set('prefixo', e.target.value)} />
               </label>
-              {pedeNumero && (
+              {(pedeNumero || pedeValores) && (
                 <label className="block">
                   <span className="label">depois</span>
                   <input className="field w-full text-xs py-1" value={d.sufixo ?? ''} placeholder="%"

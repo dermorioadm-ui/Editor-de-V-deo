@@ -224,6 +224,13 @@ class AudioParams:
     denoise_chain: str = ""
     presence_gain: float = 0.0
     deesser: float = 0.0
+    # VOZ DE ESTÚDIO (audio/voz.py). O denoise acima é o do ffmpeg, genérico,
+    # e continua desligado; isto é outra coisa: uma rede treinada só para
+    # separar voz de ruído, rodando nesta máquina, e LIGADA por padrão porque
+    # ele pediu ("preciso de uma melhora significativa no som").
+    voz_ia: bool = True              # o redutor de ruído por IA (DeepFilterNet)
+    voz_limpeza: str = "forte"       # leve | media | forte | total
+    voz_estudio: bool = True         # o tratamento de microfone (EQ + de-esser)
 
 
 @dataclass

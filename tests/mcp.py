@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,9 @@ from editor.models import Clip
 from editor.server import app
 from tests.fake_whisper import install
 from tests.synth import build, write_video
+
+# a voz de estúdio (rede de IA) só roda no teste dela
+os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
 
 FALHAS: list[str] = []
 
@@ -106,6 +110,8 @@ def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
     check(len(plano.graficos) == 1 and plano.graficos[0].origem == "claude"
           and plano.graficos[0].entrada == "3d",
           f"grafico põe um título de verdade no plano ({texto})")
+    check(plano.graficos[0].estilo == "vidro" and "trocado por vidro" in texto,
+          "o cartão 'claro' do Claude por cima da pessoa vira vidro, e ele é avisado")
     gid = plano.graficos[0].id
     F.chamar(cliente, "grafico", {"projeto": pid, "id": gid, "texto": "NOVO"})
     check(svc.load(pid).plan.graficos[0].texto == "NOVO"
@@ -184,11 +190,24 @@ def testar_pos_edicao(cliente: Cliente, tc: TestClient, pid: str) -> None:
     com = _jpeg_para_rgb(base64.b64decode(imagens[0]["data"]))
     sem = _jpeg_para_rgb(base64.b64decode(imagens[1]["data"]))
     h, w, _ = com.shape
-    # o painel claro do título: centro em (0,5; 0,2), corpo pelo lado menor
-    faixa = lambda q: q[int(h * 0.19):int(h * 0.21), int(w * 0.42):int(w * 0.58)].mean()  # noqa: E731
-    check(faixa(com) > faixa(sem) + 40,
-          f"no quadro do título, o painel claro está lá ({faixa(com):.0f} contra "
-          f"{faixa(sem):.0f} sem gráfico) — o quadro é o encode de verdade")
+    # o MESMO instante sem o gráfico: a diferença tem de estar no painel de
+    # vidro do título (centro em 0,5; 0,2) e em nenhum outro lugar
+    p_ = svc.load(pid)
+    p_.plan.graficos[0].enabled = False
+    p_.save_plan()
+    r3 = F.chamar(cliente, "ver_quadros", {"projeto": pid, "tempos": [1.5], "lado": 240})
+    sem = _jpeg_para_rgb(base64.b64decode(
+        [x for x in r3["content"] if x["type"] == "image"][0]["data"]))
+    p_ = svc.load(pid)
+    p_.plan.graficos[0].enabled = True
+    p_.save_plan()
+    regiao = (slice(int(h * 0.1), int(h * 0.3)), slice(int(w * 0.3), int(w * 0.7)))
+    fora = (slice(int(h * 0.6), h), slice(0, w))
+    dif = float(np.abs(com[regiao].astype(int) - sem[regiao].astype(int)).mean())
+    resto = float(np.abs(com[fora].astype(int) - sem[fora].astype(int)).mean())
+    check(dif > 8 and resto < 3,
+          f"no quadro do título, o painel de vidro e o texto estão lá (diferença "
+          f"{dif:.0f} no título, {resto:.1f} no resto) — o quadro é o encode de verdade")
     check(min(w, h) == 180,
           f"no tamanho pedido, sem ampliar a fonte de 180 px ({w}x{h})")
     rota = tc.get(f"/api/projects/{pid}/pos/quadro.jpg", params={"t": 1.0, "lado": 240})

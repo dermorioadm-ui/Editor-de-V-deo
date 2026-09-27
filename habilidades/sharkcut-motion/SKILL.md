@@ -1,6 +1,6 @@
 ---
 name: sharkcut-motion
-description: Pós-edição de vídeo falado (VSL, anúncio, conteúdo) no Sharkcut, com motion design moderno e dentro da identidade da marca — moldura com explicação ao lado, camadas de vidro em 3D, logos e textos atrás da pessoa, títulos e listas em vidro que entram com a fala. Use sempre que for fazer a pós-edição (gráficos, cenas, logos, transições) de um vídeo pelo MCP do Sharkcut.
+description: Pós-edição de vídeo falado (VSL, anúncio, conteúdo) no Sharkcut, com motion design moderno e dentro da identidade da marca — moldura com explicação ao lado, camadas de vidro em 3D, logos e textos atrás da pessoa, gráficos de dados animados (barras que sobem, linha que se desenha, rosca, ícones desenhados), títulos e listas em vidro que entram com a fala. Use sempre que for fazer a pós-edição (gráficos, cenas, logos, transições) de um vídeo pelo MCP do Sharkcut.
 ---
 
 # Motion design no Sharkcut
@@ -30,9 +30,18 @@ mesmo encode do vídeo, então não há "rascunho": o que você põe é o que sa
   Antes da fala é spoiler; depois, é atraso.
 - **Texto curto, na voz da marca.** Título de 2 a 5 palavras. Nada de frase
   inteira na tela — a fala já está na legenda.
-- **Transparência e profundidade.** Sobre a imagem, prefira `estilo=vidro`
-  (translúcido, a imagem aparece por trás). Texto ou logo ATRÁS da pessoa
+- **Nada de cartão sólido por cima dele.** Ele disse, com todas as letras:
+  "não gostei dos cards sólidos que aparecem em cima de mim". Sobre a imagem,
+  só `estilo=vidro` (translúcido, a imagem aparece por trás) ou `limpo` (só
+  o texto, com sombra). `escuro`, `claro`, `marca` e `neon` são cartões
+  cheios: o Sharkcut troca por vidro sozinho, exceto em `tipo=tela` e no lado
+  livre de uma moldura (onde não há ninguém atrás).
+- **Transparência e profundidade.** Texto ou logo ATRÁS da pessoa
   (`camada=atras`) é o efeito que faz parar o dedo: use no gancho e na virada.
+- **Falou número, mostre o gráfico andando.** "Tá falando gráfico, gráfico
+  vai subindo." Todo número, crescimento, comparação ou antes/depois que a
+  fala traz vira um gráfico de dados animado (§2b) — é o que mais faz o vídeo
+  parecer editado por gente grande.
 - **Ritmo de planos.** Alterne: vídeo cheio → cena (moldura ou vidro) → vídeo
   cheio com um destaque. Uma CENA forte a cada 20–40 s; entre duas cenas,
   pelo menos 3 s de vídeo cheio — exceto a dupla vidro3d → moldura.
@@ -64,6 +73,31 @@ mesmo encode do vídeo, então não há "rascunho": o que você põe é o que sa
   seguida, moldura com a explicação do lado livre.
 - Nada de gráfico por cima do vidro3d: a cena já é o gráfico.
 
+## 2b. Gráficos de dados e ícones (animados, em vidro)
+
+Todos entram com a fala e se montam na frente dela — o número contando, a
+barra subindo, o traço se desenhando. Use SÓ números que a fala diz.
+
+- `tipo=barras` — colunas que sobem uma a uma, o número contando em cima de
+  cada uma, a última em destaque (a cor da marca). `valores` em ordem,
+  `rotulos` curtos (jan, fev… / antes, depois / 2023, 2024), `prefixo`/
+  `sufixo` ("R$ ", "%", " mil"), `texto` = título curto. Para: "saí de 12
+  para 41 reservas", comparação entre opções, crescimento mês a mês. 3–5 s.
+- `tipo=linha` — a linha que se desenha da esquerda para a direita, subindo,
+  com a área em vidro embaixo, o ponto que acende na ponta e o valor final
+  contando. Para: evolução, "o faturamento foi subindo", tendência. 3–5 s.
+- `tipo=rosca` — o anel que enche até `numero` (%) com o número no meio e
+  a legenda embaixo (`texto`). Para: porcentagem, "9 em cada 10", taxa. 3–4 s.
+- `tipo=icone` — um ícone DESENHADO no traço, num disco de vidro: `icone`
+  = check (confirmado — verde da marca), x (errado), alerta (cuidado —
+  laranja da marca), seta_cima, seta_baixo, casa, cadeado, chave, dinheiro,
+  relogio, estrela, calendario, pessoa, grafico. `texto` = rótulo curto
+  embaixo. Para: sim/não, benefícios um a um (dois ou três ícones lado a
+  lado, x 0.25 / 0.5 / 0.75, entrando um depois do outro), avisos. 2–3 s.
+- Onde: no lado livre (x≈0.26 com a moldura à direita) ou no topo (y
+  0.25–0.35 no vertical), nunca no rosto nem na faixa da legenda. Dentro
+  de uma moldura é o lugar mais bonito para eles.
+
 ## 3. Receitas por momento do vídeo
 
 - **Gancho (0–5 s):** texto grande ATRÁS da pessoa (`titulo`, `tamanho`
@@ -75,10 +109,14 @@ mesmo encode do vídeo, então não há "rascunho": o que você põe é o que sa
   anúncio.
 - **Nome da pessoa:** `nome` no começo se ela se apresenta.
 - **Explicação:** moldura + lista em vidro.
-- **Número / preço / prova:** `numero` (prefixo "R$ ", sufixo "%") `estilo`
-  claro ou marca, `entrada=pop`; ou `destaque` na palavra que carrega a frase.
+- **Número / preço / prova:** `numero` (prefixo "R$ ", sufixo "%") em
+  `estilo=vidro`, `entrada=pop`; `rosca` para porcentagem; `barras`/`linha`
+  quando há mais de um número (antes → depois, mês a mês); ou `destaque` na
+  palavra que carrega a frase.
 - **Mudança de assunto:** uma transição na emenda (poucas, uma a cada 15–30 s).
-- **CTA (final):** `destaque` ou `titulo` `estilo=marca` com o verbo da ação, e
+- **Sim / não, benefícios:** `icone` (check, x, cadeado, casa…) com rótulo de
+  uma ou duas palavras, um por benefício falado.
+- **CTA (final):** `destaque` ou `titulo` `estilo=vidro` com o verbo da ação, e
   a assinatura da marca (`logo=assinatura_branca` sobre imagem escura ou
   `assinatura` sobre clara) centralizada acima da legenda, `tamanho` 1.2–1.6.
 
@@ -88,9 +126,9 @@ mesmo encode do vídeo, então não há "rascunho": o que você põe é o que sa
   certo). Nunca o nome em caixa alta.
 - Cores só as do kit: a cor da marca é destaque/título/preço; cor de
   confirmação só para "assinado/aprovado"; cor de alerta só para "cuidado".
-- Estilos com marca: `vidro` (sobre imagem), `claro` (cartão branco, destaque
-  na cor da marca), `marca` (cartão na cor da marca, letra branca — para CTA,
-  preço, destaque). Evite `neon` e `escuro` com marca ligada.
+- Estilos com marca: `vidro` (sobre imagem — o padrão, com o destaque na cor
+  da marca), `limpo` (texto solto). `claro` e `marca` (cartões cheios) só em
+  `tipo=tela` ou no lado livre da moldura. Nunca `neon` nem `escuro` com marca.
 - **Regra dos logos:** logo de plataforma (Airbnb, Booking…) só enquanto a fala
   é sobre a plataforma — e NUNCA ao lado do logo da marca na mesma cena ou no
   mesmo instante. No vidro3d sobre plataformas, a placa do meio leva os logos

@@ -146,12 +146,27 @@ def loudnorm_second_pass(params: AudioParams, measured: dict) -> str:
     )
 
 
-def build_pre_chain(params: AudioParams, include_denoise: bool = True) -> str:
-    """Tudo antes do loudnorm."""
+def build_pre_chain(params: AudioParams, include_denoise: bool = True,
+                    limpa: bool = False) -> str:
+    """Tudo antes do loudnorm — é o tratamento da VOZ, só dela.
+
+    ``limpa``: a voz já passou pelo redutor de ruído por IA. Com ela limpa o
+    tratamento de estúdio pode abrir o agudo (o "ar"); sem, esse agudo
+    levantaria o chiado junto.
+    """
+    from .voz import cadeia_de_estudio
+
+    estudio = bool(getattr(params, "voz_estudio", False))
     stages: list[str] = []
     if include_denoise and params.denoise_enabled and params.denoise_chain:
         stages.append(params.denoise_chain)
-    stages.append(f"highpass=f={params.highpass}")
+    if estudio:
+        # 12 dB/oitava a partir de 80 Hz: tira o ronco de mesa, de trânsito
+        # e de ar-condicionado que o highpass de 6 dB deixava passar
+        stages.append(f"highpass=f={max(80, int(params.highpass))}:poles=2")
+        stages += cadeia_de_estudio(limpa)
+    else:
+        stages.append(f"highpass=f={params.highpass}")
     stages.append(
         f"acompressor=threshold={params.comp_threshold}dB:"
         f"ratio={params.comp_ratio}:attack={params.comp_attack}:"
@@ -160,14 +175,19 @@ def build_pre_chain(params: AudioParams, include_denoise: bool = True) -> str:
     )
     if params.presence_gain:
         stages.append(f"equalizer=f=4000:t=q:w=1.2:g={params.presence_gain}")
-    if params.deesser:
-        stages.append(f"deesser=i={min(max(params.deesser, 0.0), 1.0)}")
+    deesser = float(params.deesser or 0.0)
+    if estudio and limpa and not deesser:
+        # o "ar" de estúdio acende os "s": um de-esser leve segura
+        deesser = 0.25
+    if deesser:
+        stages.append(f"deesser=i={min(max(deesser, 0.0), 1.0)}")
     return ",".join(stages)
 
 
-def build_chain(params: AudioParams, include_denoise: bool = True) -> str:
+def build_chain(params: AudioParams, include_denoise: bool = True,
+                limpa: bool = False) -> str:
     """A cadeia da Parte 9.1, na ordem: highpass -> compressor -> loudnorm."""
-    pre = build_pre_chain(params, include_denoise)
+    pre = build_pre_chain(params, include_denoise, limpa)
     tail = (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
             f"LRA={params.lra}")
     return f"{pre},{tail}" if pre else tail

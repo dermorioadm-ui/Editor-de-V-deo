@@ -35,6 +35,8 @@ import urllib.request
 from pathlib import Path
 
 os.environ.setdefault("EDITOR_DATA_DIR", tempfile.mkdtemp(prefix="editor-claude-"))
+# a voz de estúdio (rede de IA) só roda no teste dela
+os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
 
 from editor import projects as svc                              # noqa: E402
 from tests.fake_whisper import install                          # noqa: E402

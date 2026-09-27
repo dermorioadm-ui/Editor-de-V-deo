@@ -274,11 +274,11 @@ export default function MediaPanel({ onChanged, snapshot, safeZone }: Props) {
                             onClick={async () => {
                               snapshot()
                               await api.setMusic(project.id, {
-                                media_id: m.id, gain_db: -18, ducking: true,
+                                media_id: m.id, gain_db: -18, ducking: false,
                                 duck_amount: 12, fade_in: 1, fade_out: 2, enabled: true,
                               })
                               await onChanged()
-                              toast('ok', 'Trilha ligada com ducking por sidechain')
+                              toast('ok', 'Trilha ligada, com volume constante')
                             }}>
                       usar como trilha
                     </button>

@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 
 os.environ.setdefault("EDITOR_DATA_DIR", tempfile.mkdtemp(prefix="editor-oneclick-"))
+# a voz de estúdio (rede de IA) só roda no teste dela
+os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
 
 from fastapi.testclient import TestClient                      # noqa: E402
 

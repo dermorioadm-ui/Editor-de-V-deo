@@ -63,17 +63,24 @@ def _falas(project) -> list[dict]:
 
 
 # ------------------------------------------------------------------ onde
-def validar(slots: list[dict], duracao: float, maximo: int) -> list[dict]:
-    """Ordena, prende nos limites e tira sobreposição e o que ficou curto."""
+def validar(slots: list[dict], duracao: float, maximo: int,
+            fixa: float = 0.0) -> list[dict]:
+    """Ordena, prende nos limites e tira sobreposição e o que ficou curto.
+
+    ``fixa``: a duração que ele escolheu na primeira tela. Com ela, TODO
+    b-roll dura exatamente isso (a IA e a regra só escolhem onde começa)."""
     fim_livre = duracao - LIVRE_NO_FIM
     saida: list[dict] = []
     for s in sorted(slots, key=lambda x: float(x.get("inicio") or 0.0)):
         a = max(LIVRE_NO_COMECO, float(s.get("inicio") or 0.0))
-        b = min(fim_livre, float(s.get("fim") or a + DUR_PADRAO), a + MAX_DUR)
         if saida and a < saida[-1]["fim"] + 0.3:
             a = saida[-1]["fim"] + 0.3
+        if fixa > 0:
+            b = min(fim_livre, a + fixa)
+        else:
+            b = min(fim_livre, float(s.get("fim") or a + DUR_PADRAO), a + MAX_DUR)
         busca = " ".join(str(s.get("busca") or "").split())[:60]
-        if b - a < MIN_DUR * 0.75 or not busca:
+        if b - a < min(MIN_DUR, fixa or MIN_DUR) * 0.75 or not busca:
             continue
         en = [" ".join(str(x or "").split())[:60] for x in (s.get("buscas_en") or [])]
         if s.get("busca_en"):
@@ -90,7 +97,7 @@ def validar(slots: list[dict], duracao: float, maximo: int) -> list[dict]:
 
 
 def pela_regra(falas: list[dict], duracao: float, frequencia: str,
-               biblioteca: set[str] | None = None) -> list[dict]:
+               biblioteca: set[str] | None = None, fixa: float = 0.0) -> list[dict]:
     """Sem IA: uma frase por intervalo; as palavras dela são a busca.
 
     Em cada intervalo (o tamanho vem da frequência), escolhe a frase que
@@ -127,12 +134,12 @@ def pela_regra(falas: list[dict], duracao: float, frequencia: str,
         f, termos = max(opcoes, key=lambda ft: nota(*ft))
         # a busca é a palavra que a biblioteca tem, se tiver; senão a primeira
         termos = sorted(termos, key=lambda t: not (_palavras(t) & biblioteca))
-        dur = min(max(f["end"] - f["start"], MIN_DUR), DUR_PADRAO + 0.5)
+        dur = fixa or min(max(f["end"] - f["start"], MIN_DUR), DUR_PADRAO + 0.5)
         slots.append({"inicio": f["start"], "fim": f["start"] + dur,
                       "busca": termos[0], "alternativas": termos[1:],
                       "porque": f"fala: “{f['text'][:80]}”"})
         cursor = f["start"] + passo
-    return validar(slots, duracao, quantos(duracao, frequencia))
+    return validar(slots, duracao, quantos(duracao, frequencia), fixa)
 
 
 INSTRUCAO = """Você edita vídeos de anúncio falados em português (uma pessoa \
@@ -194,8 +201,11 @@ ESQUEMA = {
 
 
 def pedido_para_ia(falas: list[dict], duracao: float, n: int,
-                   assunto: str = "") -> str:
+                   assunto: str = "", fixa: float = 0.0) -> str:
     linhas = [f"Duração do vídeo: {duracao:.1f} s. Quero cerca de {n} b-roll(s)."]
+    if fixa > 0:
+        linhas.append(f"CADA b-roll dura exatamente {fixa:g} segundos (escolha do "
+                      f"dono do vídeo): fim = início + {fixa:g}.")
     if assunto:
         linhas.append(f"O dono do vídeo disse que o assunto é: {assunto}")
     linhas += ["", "A fala inteira, frase a frase, com os tempos em segundos:"]
@@ -205,7 +215,7 @@ def pedido_para_ia(falas: list[dict], duracao: float, n: int,
 
 
 def pela_ia(chave: str, modelo: str, falas: list[dict], duracao: float,
-            frequencia: str, assunto: str = "") -> dict:
+            frequencia: str, assunto: str = "", fixa: float = 0.0) -> dict:
     """O plano da IA: o contexto do vídeo e, dentro dele, cada b-roll."""
     from .ai import gemini
 
@@ -214,11 +224,12 @@ def pela_ia(chave: str, modelo: str, falas: list[dict], duracao: float,
         return {"slots": [], "tema": "", "cenario": ""}
     escolhido = gemini.escolher_modelo(chave, modelo)
     resposta = gemini.gerar_json(chave, escolhido["id"], INSTRUCAO,
-                                 pedido_para_ia(falas, duracao, n, assunto), ESQUEMA,
+                                 pedido_para_ia(falas, duracao, n, assunto, fixa),
+                                 ESQUEMA,
                                  temperatura=0.3,
                                  maximo=min(escolhido.get("saida") or 8192, 8192))
     return {"slots": validar(list(resposta.get("brolls") or []), duracao,
-                             int(n * 1.5) + 1),
+                             int(n * 1.5) + 1, fixa),
             "tema": str(resposta.get("tema") or "")[:300],
             "cenario": str(resposta.get("cenario") or "")[:400],
             "modelo": escolhido["id"]}
@@ -309,11 +320,15 @@ def planejar(project, frequencia: str, usar_ia: bool = True) -> dict:
     duracao = duracao_de_saida(project)
     falas = _falas(project)
     assunto = str((project.plan.broll or {}).get("assunto") or "").strip()[:200]
+    try:
+        fixa = max(0.0, float((project.plan.broll or {}).get("duracao") or 0.0))
+    except (TypeError, ValueError):
+        fixa = 0.0
     aviso = ""
     if usar_ia and chave_guardada():
         try:
             r = pela_ia(chave_guardada(), db.get_setting("gemini_model", "") or "",
-                        falas, duracao, frequencia, assunto)
+                        falas, duracao, frequencia, assunto, fixa)
             if r["slots"]:
                 return {**r, "quem": "ia", "aviso": "", "assunto": assunto}
             aviso = "a IA não sugeriu nenhum ponto; usei a regra do programa"
@@ -323,7 +338,7 @@ def planejar(project, frequencia: str, usar_ia: bool = True) -> dict:
     elif usar_ia:
         aviso = ("sem a chave do Gemini, a busca é pelas palavras da frase — com a "
                  "chave, a IA lê o vídeo inteiro e busca dentro do assunto")
-    slots = pela_regra(falas, duracao, frequencia, palavras_da_biblioteca())
+    slots = pela_regra(falas, duracao, frequencia, palavras_da_biblioteca(), fixa)
     return {"slots": slots, "quem": "regra", "aviso": aviso, "tema": assunto,
             "cenario": "", "assunto": assunto}
 

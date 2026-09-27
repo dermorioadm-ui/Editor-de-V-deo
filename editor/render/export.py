@@ -17,7 +17,7 @@ SYNC_TOLERANCE = 0.030      # acima disso o vídeo é reescalado por timestamp
 
 
 def _hash_audio(plan: EditPlan, timeline, clip_durations: dict,
-                sources: dict) -> str:
+                sources: dict, limpas: dict | None = None) -> str:
     """A identidade da FAIXA DE ÁUDIO. Se não muda, não se refaz.
 
     Entra tudo que decide como o áudio soa: quais pedaços da fonte tocam, em
@@ -48,9 +48,56 @@ def _hash_audio(plan: EditPlan, timeline, clip_durations: dict,
         "audio": plan.audio.__dict__,
         "musica": plan.music,
         "fontes": {k: v.get("path") for k, v in sorted(sources.items())},
+        # a voz limpa entra na chave: se o redutor não baixou numa exportação
+        # e baixou na seguinte, o áudio tem de ser refeito com ela
+        "limpas": {k: Path(v).name for k, v in sorted((limpas or {}).items())},
     }
     return hashlib.sha1(json.dumps(payload, sort_keys=True,
                                    default=str).encode()).hexdigest()[:16]
+
+
+def _vozes_limpas(plan: EditPlan, timeline, sources: dict, report,
+                  cancel, avisos: list) -> dict:
+    """fonte -> WAV com a voz limpa, para cada gravação que toca no vídeo.
+
+    Em geral já está pronta: a limpeza começa quando o arquivo chega. Se não
+    está (ou o redutor ainda não foi baixado), é feita aqui, com o número na
+    tela. Falhou? O vídeo sai com a voz original e um aviso — nunca sem som.
+    """
+    if not getattr(plan.audio, "voz_ia", False):
+        return {}
+    from ..audio import voz
+
+    if not voz.suportado():
+        return {}
+    usadas = []
+    for p in timeline:
+        c = p.clip
+        if c.kind == "photo" or c.audio == "mute" or c.source in usadas:
+            continue
+        if sources.get(c.source, {}).get("path"):
+            usadas.append(c.source)
+    limpas: dict[str, str] = {}
+    for i, fonte in enumerate(usadas):
+        caminho = sources[fonte]["path"]
+        base = 0.66 + 0.10 * i / len(usadas)
+        topo = 0.66 + 0.10 * (i + 1) / len(usadas)
+        report(0.0, "voz de estúdio: limpando o ruído (IA, neste computador)",
+               base, topo)
+        try:
+            limpas[fonte] = str(voz.fonte_limpa(
+                caminho, plan.audio.voz_limpeza,
+                progresso=lambda f: report(f, f"voz de estúdio: limpando o "
+                                              f"ruído {f * 100:.0f}%", base, topo),
+                cancelar=cancel))
+        except Exception as exc:  # noqa: BLE001 — sai com a voz original
+            if cancel and cancel():
+                raise
+            aviso = (f"a voz saiu SEM a limpeza de ruído por IA ({exc}). "
+                     f"Exporte de novo para tentar outra vez.")
+            if aviso not in avisos:
+                avisos.append(aviso)
+    return limpas
 
 
 def export_project(
@@ -177,8 +224,11 @@ def export_project(
     # no zoom, no filtro. Sem cache, cada retoque pagava o áudio do vídeo
     # inteiro de novo, e era o que sobrava de "exportar tudo a cada ação"
     # depois que os trechos de vídeo já vinham do cache.
-    report(0.0, "montando o áudio", 0.66, 0.80)
-    chave_audio = _hash_audio(plan, measured_timeline, clip_durations, sources)
+    limpas = _vozes_limpas(plan, measured_timeline, sources, report, cancel,
+                           pre_warnings)
+    report(0.0, "montando o áudio", 0.76, 0.80)
+    chave_audio = _hash_audio(plan, measured_timeline, clip_durations, sources,
+                              limpas)
     processed = work / "audio.wav"
     marca = work / "audio.key"
     reusa = (processed.exists() and marca.exists()
@@ -187,14 +237,16 @@ def export_project(
         report(1.0, "o áudio não mudou — reaproveitado", 0.66, 0.86)
     else:
         track = build_audio_track(plan, measured_timeline, sources, clip_durations,
-                                  on_progress=lambda f, m: report(f, m, 0.66, 0.78),
-                                  warnings=pre_warnings)
+                                  on_progress=lambda f, m: report(f, m, 0.76, 0.80),
+                                  warnings=pre_warnings, limpas=limpas)
         raw_wav = work / "audio_raw.wav"
         write_wav(raw_wav, track, AUDIO_SR)
-        report(0.0, "processando o áudio (highpass → compressor → loudnorm)",
+        report(0.0, ("tratando a voz (estúdio → compressor → loudnorm)"
+                     if plan.audio.voz_estudio else
+                     "processando o áudio (highpass → compressor → loudnorm)"),
                0.80, 0.86)
         process_audio(raw_wav, processed, plan.audio, plan, sources,
-                      duration=len(track) / AUDIO_SR)
+                      duration=len(track) / AUDIO_SR, limpa=bool(limpas))
         marca.write_text(chave_audio, encoding="utf-8")
     audio_info = probe(processed)
 

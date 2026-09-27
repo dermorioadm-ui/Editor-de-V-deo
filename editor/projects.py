@@ -429,6 +429,21 @@ def sources_for(project: Project) -> dict:
 BASE_POR_FONTE = 100_000
 
 
+def aquecer_voz(project: Project, fontes: list) -> None:
+    """A voz de estúdio começa a ser limpa AGORA, junto com a transcrição —
+    "na hora que envia o arquivo". Roda em segundo plano; quando a exportação
+    chegar, em geral ela já está pronta. Nada aqui pode parar a análise."""
+    audio = project.plan.audio
+    if not getattr(audio, "voz_ia", False):
+        return
+    try:
+        from .audio import voz
+
+        voz.aquecer([str(f) for f in fontes], audio.voz_limpeza)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def analisar_midia(project: Project, media_id: str, ctx) -> dict:
     """Envelope e transcrição de uma gravação ACRESCENTADA ao projeto.
 
@@ -464,6 +479,7 @@ def analisar_midia(project: Project, media_id: str, ctx) -> dict:
     base = ordem * BASE_POR_FONTE
 
     ctx.stage("audio", f"extraindo o áudio de {midia.get('name') or 'anexo'}")
+    aquecer_voz(project, [caminho])
     destino_wav = project.wav_de(media_id)
     extract_wav(caminho, destino_wav, 16000, 1,
                 on_progress=lambda f: ctx.progress(0.02 + f * 0.18,
@@ -535,6 +551,7 @@ def analyze(project: Project, ctx) -> dict:
     from .transcribe import detect_device, transcribe
 
     info = project.info or probe(project.source_path)
+    aquecer_voz(project, [project.source_path])
     ctx.stage("audio", "extraindo áudio (WAV mono 16 kHz)")
     extract_wav(project.source_path, project.wav, 16000, 1,
                 on_progress=lambda f: ctx.progress(0.02 + f * 0.10,
@@ -913,15 +930,11 @@ def auto_edit(project: Project, ctx) -> dict:
     # resposta ruim, as listas vêm vazias e a regra do programa decide inteira.
     secoes_ia = (relatorio_ia or {}).get("secoes") or None
     camera_ia = (relatorio_ia or {}).get("camera") or None
-    # A TRILHA também obedece ao que ela leu: alto no gancho, baixo embaixo da
-    # explicação densa, fora em cima do preço. O ducking continua onde estava —
-    # ele é reflexo (abaixa quando alguém fala); isto aqui é intenção.
-    curva_musica = (relatorio_ia or {}).get("musica") or []
+    # A TRILHA NÃO OBEDECE MAIS À IA. Ela escrevia uma curva (alto no gancho,
+    # some em cima do preço) e ele não gostou: a música fica constante e quem
+    # mexe é ele, só no volume. A leitura "musica" da IA é ignorada.
     if project.plan.music:
-        if curva_musica:
-            project.plan.music["curva"] = curva_musica
-        else:
-            project.plan.music.pop("curva", None)
+        project.plan.music.pop("curva", None)
     result = build_auto_plan(words, env, project.plan.cut, project.plan.speed,
                              takes, extra_removed=manual_removed | repetidas,
                              markers=sorted(marcadores),
@@ -1831,7 +1844,7 @@ def build_tracks(project: "Project", blocks: list[dict],
             "media_id": m.get("media_id"), "movable": True, "resizable": True,
             "gain_db": float(m.get("gain_db", -18)),
             "muted": bool(m.get("muted")),
-            "ducking": bool(m.get("ducking", True)),
+            "ducking": bool(m.get("ducking", False)),
             "detail": ("MUDA" if m.get("muted")
                        else f"{m.get('gain_db', -18):g} dB"
                        + (", abaixa na fala" if m.get("ducking") else "")),
@@ -1869,7 +1882,7 @@ def build_tracks(project: "Project", blocks: list[dict],
          "hint": "proteção de rosto e documento."},
         {"id": "A1", "label": "Trilha", "kind": "audio", "accepts": ["audio"],
          "items": musica,
-         "hint": "música de fundo, com ducking automático na fala."},
+         "hint": "música de fundo, com volume constante (mude só o volume)."},
         {"id": "G1", "label": "Gráficos", "kind": "grafico", "accepts": [],
          "acao": "", "items": graficos,
          "hint": "títulos, telas de tópico, listas, números — a pós-edição. "
@@ -2504,6 +2517,21 @@ DURACAO_DO_BROLL = 5.0
 # um vão menor que isto entre duas coberturas não vira b-roll: um plano de
 # meio segundo pisca, não ilustra nada
 MIN_BROLL = 1.0
+# as durações que a primeira tela oferece ("quantos segundos cada um, por
+# padrão: 4, 2, 3, 5..."); 0 = o programa decide por frase
+DURACOES_DO_BROLL = (2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
+
+
+def duracao_do_broll(project: Project) -> float:
+    """Quanto cada b-roll cobre neste vídeo: o que ele escolheu na primeira
+    tela, ou os 5 s de sempre."""
+    try:
+        d = float((project.plan.broll or {}).get("duracao") or 0.0)
+    except (TypeError, ValueError):
+        d = 0.0
+    return d if d > 0 else DURACAO_DO_BROLL
+
+
 _EXT_IMAGEM = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
 
@@ -2651,7 +2679,7 @@ def broll_do_banco(project: Project, ctx, pedido: dict) -> dict:
     ctx.progress(0.95, "pondo no vídeo", "banco")
     res = inserir_brolls(load(project.id), caminhos,
                          float(pedido.get("at") or 0.0),
-                         float(pedido.get("duracao") or DURACAO_DO_BROLL))
+                         float(pedido.get("duracao") or duracao_do_broll(project)))
     return {**res, "recusados": falhas + res["recusados"], "creditos": creditos}
 
 

@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 
 os.environ.setdefault("EDITOR_DATA_DIR", tempfile.mkdtemp(prefix="editor-test-"))
+# a voz de estúdio (rede de IA) só roda no teste dela
+os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
 
 from editor import projects as svc                      # noqa: E402
 from editor.audio.clap import build_discarded_takes, detect_claps  # noqa: E402

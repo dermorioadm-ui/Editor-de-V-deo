@@ -236,7 +236,8 @@ class Grafico:
 
     id: str = field(default_factory=lambda: new_id("g_"))
     tipo: str = "texto"             # titulo | lista | destaque | numero | texto
-    #                                 nome | seta | circulo | barra | tela
+    #                                 nome | seta | circulo | barra | tela | logo
+    #                                 barras | linha | rosca | icone
     out_start: float = 0.0          # linha do tempo de SAÍDA
     out_end: float = 3.0
     texto: str = ""
@@ -245,7 +246,7 @@ class Grafico:
     x: float = 0.5                  # centro, fração da largura (nome: borda
     y: float = 0.5                  # esquerda; seta: a PONTA) e da altura
     tamanho: float = 1.0            # multiplica o corpo padrão do tipo
-    estilo: str = "escuro"          # paleta: escuro | claro | neon | marca | limpo
+    estilo: str = "vidro"           # paleta: vidro | limpo | escuro | claro | neon | marca
     cor: str = ""                   # a cor de destaque (#RRGGBB); vazio = do estilo
     entrada: str = "pop"            # pop | slide | subir | 3d | digitar | fade
     saida: str = "fade"             # fade | slide | pop | corte
@@ -258,6 +259,9 @@ class Grafico:
     logo: str = ""                  # logo: o nome do logo (do kit da marca ou
     #                                 um PNG que o usuário pôs: "airbnb"...)
     opacidade: float = 1.0          # logo: 0,1 a 1 (transparente a sólido)
+    valores: list = field(default_factory=list)    # barras/linha: os números
+    rotulos: list = field(default_factory=list)    # barras/linha: o nome de cada um
+    icone: str = ""                 # icone: check, seta_cima, casa, cadeado...
     enabled: bool = True
     origem: str = ""                # "claude" quando veio da pós-edição pelo MCP
 
@@ -359,11 +363,31 @@ class Subtitle:
         return asdict(self)
 
 
+# A TRILHA É CONSTANTE. Ela abaixava sozinha quando ele falava (ducking) e a
+# IA ainda escrevia uma curva de volume por cima ("alto no gancho, some no
+# preço"). Ele não quis nenhuma das duas: "gosto dela constante e, se eu
+# quiser editar, eu edito o volume somente". Plano gravado antes desta versão
+# (sem a marca) volta para o constante UMA vez; depois disso, o "abaixar na
+# fala" só liga se ele marcar a caixa.
+TRILHA_VERSAO = 2
+
+
+def trilha_constante(m: dict | None) -> dict | None:
+    if not isinstance(m, dict):
+        return m
+    m = dict(m)
+    if m.get("trilha_v") != TRILHA_VERSAO:
+        m["ducking"] = False
+        m["trilha_v"] = TRILHA_VERSAO
+    m.pop("curva", None)
+    return m
+
+
 @dataclass
 class MusicTrack:
     media_id: str = ""
     gain_db: float = -18.0
-    ducking: bool = True
+    ducking: bool = False
     duck_amount: float = 12.0
     fade_in: float = 1.0
     fade_out: float = 2.0
@@ -494,7 +518,7 @@ class EditPlan:
         plan.overlays = [_from_dict(Overlay, o) for o in data.get("overlays", [])]
         plan.blurs = [_from_dict(BlurRegion, b) for b in data.get("blurs", [])]
         plan.subtitles = [_from_dict(Subtitle, s) for s in data.get("subtitles", [])]
-        plan.music = data.get("music")
+        plan.music = trilha_constante(data.get("music"))
         plan.cut = _from_dict(CutParams, data.get("cut")) or CutParams()
         plan.speed = _from_dict(SpeedParams, data.get("speed")) or SpeedParams()
         plan.style = _from_dict(SubtitleStyle, data.get("style")) or SubtitleStyle()

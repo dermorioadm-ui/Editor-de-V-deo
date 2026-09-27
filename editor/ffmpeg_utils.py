@@ -238,11 +238,20 @@ def extract_wav(
     on_progress: Callable[[float], None] | None = None,
     duration: float | None = None,
 ) -> Path:
-    """WAV mono 16 kHz — é o que o whisper e a análise de sinal consomem."""
+    """WAV mono 16 kHz — é o que o whisper e a análise de sinal consomem.
+
+    O TEMPO DO WAV É O TEMPO DO ARQUIVO. Quando a faixa de áudio começa depois
+    do vídeo (medido: 115 ms num MP4 com o áudio atrasado), a extração crua
+    joga fora esse vão e o WAV fica ADIANTADO: a palavra que toca aos 2,000 s
+    aparecia aos 1,885 s na transcrição. O render busca o áudio pelo tempo do
+    arquivo (-ss), então o corte calculado no WAV caía 115 ms antes do certo —
+    e comia o começo da palavra seguinte. ``first_pts=0`` preenche o vão com
+    silêncio: segundo X no WAV é segundo X no arquivo. Sem vão, nada muda.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        FFMPEG, "-y", "-i", str(src), "-vn",
+        FFMPEG, "-y", "-i", str(src), "-vn", "-af", "aresample=first_pts=0",
         "-ac", str(channels), "-ar", str(sample_rate),
         "-c:a", "pcm_s16le", "-f", "wav", str(dest),
     ]

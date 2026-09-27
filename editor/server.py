@@ -626,6 +626,13 @@ def aplicar_receita(project, payload: dict) -> None:
             # o assunto do vídeo em poucas palavras: dá à busca o contexto que
             # uma frase solta não tem ("segurança de Airbnb")
             atual["assunto"] = " ".join(str(pedido["assunto"] or "").split())[:200]
+        if "duracao" in pedido:
+            # quantos segundos cada b-roll cobre (0 = o programa decide)
+            try:
+                d = float(pedido["duracao"] or 0.0)
+            except (TypeError, ValueError):
+                d = 0.0
+            atual["duracao"] = d if d in svc.DURACOES_DO_BROLL else 0.0
         plan.broll = atual
     if "look" in payload:
         from .render.looks import BY_ID
@@ -1612,7 +1619,7 @@ def api_brolls(pid: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(400, "mande a lista de vídeos em 'paths'")
     try:
         at = float(payload.get("at") or 0.0)
-        dura = float(payload.get("duracao") or svc.DURACAO_DO_BROLL)
+        dura = float(payload.get("duracao") or svc.duracao_do_broll(project))
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "'at' e 'duracao' são segundos") from exc
     res = svc.inserir_brolls(project, [str(c) for c in caminhos[:50]], at, dura)
@@ -1864,9 +1871,15 @@ def api_blur_delete(pid: str, bid: str) -> dict:
 
 @app.post("/api/projects/{pid}/music")
 def api_music(pid: str, payload: dict = Body(...)) -> dict:
+    from .models import TRILHA_VERSAO
+
     project = _project(pid)
     m = dict(payload) if payload.get("media_id") else None
     if m is not None:
+        # quem manda o objeto é a tela: o que vier em "ducking" é escolha dele
+        m["ducking"] = bool(m.get("ducking", False))
+        m["trilha_v"] = TRILHA_VERSAO
+        m.pop("curva", None)
         m.setdefault("out_start", 0.0)
         if not m.get("out_end"):
             # "até o fim" fica EXPLÍCITO: item sem fim não tem borda para pegar
@@ -1898,7 +1911,98 @@ def api_audio_analysis(pid: str) -> dict:
         "snr": round(snr(samples, env), 2),
         "sibilance": round(sibilance(samples, sr), 4),
         "denoise_enabled": project.plan.audio.denoise_enabled,
+        "voz": _estado_da_voz(project),
     }
+
+
+def _estado_da_voz(project) -> dict:
+    from .audio import voz
+
+    a = project.plan.audio
+    fonte = project.source_path
+    return {**voz.estado(), "ligada": bool(a.voz_ia), "limpeza": a.voz_limpeza,
+            "estudio": bool(a.voz_estudio),
+            "pronta": bool(voz.pronta(fonte, a.voz_limpeza)),
+            "andamento": voz.andamento(fonte, a.voz_limpeza),
+            "falha": voz.falha(fonte, a.voz_limpeza)}
+
+
+@app.get("/api/voz")
+def api_voz() -> dict:
+    from .audio import voz
+
+    return voz.estado()
+
+
+@app.get("/api/projects/{pid}/audio/voz")
+def api_voz_do_projeto(pid: str) -> dict:
+    return _estado_da_voz(_project(pid))
+
+
+_PREVIAS_DA_VOZ = ("antes", "depois")
+
+
+@app.post("/api/projects/{pid}/audio/voz-previa")
+def api_voz_previa(pid: str, payload: dict = Body(default={})) -> dict:
+    """ANTES E DEPOIS, para o ouvido decidir. Um trecho de 12 s da gravação
+    sai duas vezes, com o MESMO volume final (as duas passam pelo loudnorm):
+    "antes" com o tratamento antigo, "depois" limpo pela IA e com o
+    tratamento de estúdio. Nada sai da máquina."""
+    from .audio import voz
+    from .audio.loudness import build_pre_chain
+    from .ffmpeg_utils import run
+
+    project = _project(pid)
+    params = AudioParams(**{**project.plan.audio.__dict__,
+                            **{k: v for k, v in payload.items()
+                               if k in AudioParams.__dataclass_fields__}})
+    limpeza = params.voz_limpeza if params.voz_limpeza in voz.LIMPEZA else voz.LIMPEZA_PADRAO
+    dur_total = float(project.info.duration if project.info else 0.0)
+    try:
+        inicio = float(payload.get("inicio")) if payload.get("inicio") is not None \
+            else max(0.0, min(dur_total * 0.3, dur_total - 12.0))
+    except (TypeError, ValueError):
+        inicio = 0.0
+    duracao = max(3.0, min(20.0, float(payload.get("duracao") or 12.0)))
+    pasta = project.dir / "voz_previa"
+    pasta.mkdir(parents=True, exist_ok=True)
+    trecho = pasta / "trecho.wav"
+    run([_config.FFMPEG, "-y", "-v", "error", "-ss", f"{inicio:.3f}",
+         "-t", f"{duracao:.3f}", "-i", str(project.source_path), "-vn",
+         "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(trecho)])
+    alvo = (f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:"
+            f"LRA={params.lra}")
+    antigo = AudioParams(**{**params.__dict__, "voz_estudio": False})
+    run([_config.FFMPEG, "-y", "-v", "error", "-i", str(trecho), "-af",
+         f"{build_pre_chain(antigo)},{alvo}", "-ar", "48000",
+         str(pasta / "antes.wav")])
+    limpo = trecho
+    aviso = ""
+    if params.voz_ia and voz.suportado():
+        try:
+            voz.baixar()
+            limpo = voz.limpar(trecho, pasta / "limpo.wav", limpeza)
+        except Exception as exc:  # noqa: BLE001
+            aviso = f"a limpeza por IA não rodou: {exc}"
+    cadeia = build_pre_chain(params, limpa=limpo is not trecho)
+    run([_config.FFMPEG, "-y", "-v", "error", "-i", str(limpo), "-af",
+         f"{cadeia},{alvo}" if cadeia else alvo, "-ar", "48000",
+         str(pasta / "depois.wav")])
+    import time as _time
+
+    carimbo = int(_time.time())
+    return {"inicio": round(inicio, 2), "duracao": duracao, "limpeza": limpeza,
+            "aviso": aviso,
+            "antes": f"/api/projects/{pid}/audio/voz-previa/antes?v={carimbo}",
+            "depois": f"/api/projects/{pid}/audio/voz-previa/depois?v={carimbo}"}
+
+
+@app.get("/api/projects/{pid}/audio/voz-previa/{qual}")
+def api_voz_previa_arquivo(pid: str, qual: str, request: Request) -> Response:
+    if qual not in _PREVIAS_DA_VOZ:
+        raise HTTPException(404, "prévia desconhecida")
+    return _range_response(_project(pid).dir / "voz_previa" / f"{qual}.wav",
+                           request)
 
 
 @app.post("/api/projects/{pid}/audio/preview")
@@ -3250,7 +3354,8 @@ def api_banco_usar(pid: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(400, "id de b-roll inválido")
     pedido = {"ids": [str(x) for x in ids][:12],
               "at": float(payload.get("at") or 0.0),
-              "duracao": float(payload.get("duracao") or svc.DURACAO_DO_BROLL),
+              "duracao": float(payload.get("duracao")
+                               or svc.duracao_do_broll(svc.load(pid))),
               "termo": str(payload.get("termo") or "")[:100],
               # o id de um b-roll que já existe: o baixado entra NO LUGAR dele
               "substituir": str(payload.get("substituir") or "")}

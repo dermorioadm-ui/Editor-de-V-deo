@@ -452,7 +452,9 @@ def anexar(c: Cliente, a: dict) -> str:
                          "description": "vídeos, na ordem em que devem entrar"},
             "em": {"type": "number", "description": "segundo em que o primeiro entra"},
             "dura": {"type": "number",
-                     "description": "quanto cada um cobre no máximo (padrão 5 s)"},
+                     "description": "quanto cada um cobre no máximo (padrão: a "
+                                    "duração que ele escolheu na primeira tela; "
+                                    "5 s se não escolheu)"},
         },
         "required": ["projeto", "caminhos", "em"],
     },
@@ -545,7 +547,9 @@ def buscar_broll(c: Cliente, a: dict):
                     "description": "ids de buscar_broll, na ordem em que entram"},
             "em": {"type": "number", "description": "segundo em que o primeiro entra"},
             "dura": {"type": "number",
-                     "description": "quanto cada um cobre no máximo (padrão 5 s)"},
+                     "description": "quanto cada um cobre no máximo (padrão: a "
+                                    "duração que ele escolheu na primeira tela; "
+                                    "5 s se não escolheu)"},
         },
         "required": ["projeto", "ids", "em"],
     },
@@ -738,7 +742,8 @@ def efeito(c: Cliente, a: dict) -> str:
 
 @ferramenta(
     "trilha",
-    "Põe uma música de fundo. A música abaixa sozinha quando alguém fala.",
+    "Põe uma música de fundo, com volume CONSTANTE do começo ao fim (ela não "
+    "abaixa na fala — é o que o usuário quer). Só o volume é ajustável.",
     {
         "properties": {
             "projeto": {"type": "string"},
@@ -757,8 +762,8 @@ def trilha(c: Cliente, a: dict) -> str:
     if a.get("volume_db") is not None:
         corpo["gain_db"] = float(a["volume_db"])
     c.post(f"/api/projects/{pid}/ops/music", corpo)
-    return (f"trilha posta a {corpo.get('gain_db', -18)} dB, abaixando sozinha "
-            f"na fala.")
+    return f"trilha posta a {corpo.get('gain_db', -18)} dB, constante."
+
 
 
 @ferramenta(
@@ -1269,7 +1274,8 @@ _ESQUEMA_GRAFICO = {
     "id": {"type": "string", "description": "para MUDAR um gráfico que já existe"},
     "tipo": {"type": "string",
              "enum": ["titulo", "tela", "lista", "destaque", "numero", "texto",
-                      "nome", "seta", "circulo", "barra", "logo"],
+                      "nome", "seta", "circulo", "barra", "logo", "barras",
+                      "linha", "rosca", "icone"],
              "description": "titulo: título com barra de destaque; tela: TELA "
                             "CHEIA de tópico/capítulo (cobre o vídeo; aceita "
                             "prefixo 'PARTE 2' e itens); lista: tópicos que "
@@ -1283,7 +1289,17 @@ _ESQUEMA_GRAFICO = {
                             "IMAGEM de um logo (campo logo = o nome, veja a "
                             "ferramenta marca), no centro (x,y), com opacidade — "
                             "de lado (x 0.08 ou 0.92) e transparente é o padrão "
-                            "bonito; camada=atras o põe ATRÁS da pessoa"},
+                            "bonito; camada=atras o põe ATRÁS da pessoa. "
+                            "GRÁFICOS DE DADOS (animados, em vidro): barras = "
+                            "colunas que SOBEM uma a uma com o número contando "
+                            "(valores + rotulos; a última em destaque); linha = "
+                            "a linha que se DESENHA subindo, com o valor final "
+                            "contando (valores, prefixo/sufixo); rosca = anel que "
+                            "enche até 'numero' % com o número no meio (texto = "
+                            "legenda); icone = ícone DESENHADO no traço (campo "
+                            "icone: check, x, seta_cima, seta_baixo, casa, "
+                            "cadeado, chave, dinheiro, relogio, estrela, alerta, "
+                            "calendario, pessoa, grafico; texto = rótulo)"},
     "inicio": {"type": "number", "description": "segundo do vídeo final"},
     "fim": {"type": "number", "description": "segundo do vídeo final"},
     "texto": {"type": "string"},
@@ -1296,10 +1312,13 @@ _ESQUEMA_GRAFICO = {
     "x": {"type": "number", "description": "0–1, centro na largura"},
     "y": {"type": "number", "description": "0–1, centro na altura"},
     "tamanho": {"type": "number", "description": "0.4–2.5 (1 = normal)"},
-    "estilo": {"type": "string", "enum": ["escuro", "claro", "neon", "marca", "limpo", "vidro"],
-               "description": "com marca ligada: marca = cartão na cor da marca, "
-                              "claro = cartão branco com destaque da marca, vidro = "
-                              "painel translúcido (a imagem aparece por trás)"},
+    "estilo": {"type": "string", "enum": ["vidro", "limpo", "escuro", "claro", "neon", "marca"],
+               "description": "vidro (PADRÃO) = painel translúcido, a imagem "
+                              "aparece por trás; limpo = só o texto, com sombra. "
+                              "escuro/claro/marca/neon são CARTÕES SÓLIDOS: ele não "
+                              "quer cartão sólido por cima dele — o Sharkcut troca "
+                              "por vidro, exceto em tipo=tela e no lado livre de "
+                              "uma moldura"},
     "cor": {"type": "string", "description": "#RRGGBB da cor de destaque"},
     "entrada": {"type": "string", "enum": ["pop", "slide", "subir", "3d", "digitar", "fade"]},
     "saida": {"type": "string", "enum": ["fade", "slide", "pop", "corte"]},
@@ -1311,6 +1330,17 @@ _ESQUEMA_GRAFICO = {
     "angulo": {"type": "number", "description": "seta: 0 direita, 90 baixo, 180 esquerda, -90 cima"},
     "logo": {"type": "string", "description": "tipo logo: o nome do logo (veja marca)"},
     "opacidade": {"type": "number", "description": "tipo logo: 0.1–1 (padrão 1)"},
+    "valores": {"type": "array", "items": {"type": "number"},
+                "description": "barras/linha: os números, em ordem (até 8) — só os "
+                               "que a fala diz; nunca invente número"},
+    "rotulos": {"type": "array", "items": {"type": "string"},
+                "description": "barras/linha: o nome de cada valor (jan, fev… ou "
+                               "'antes', 'depois'), curtos"},
+    "icone": {"type": "string",
+              "enum": ["check", "x", "seta_cima", "seta_baixo", "casa", "cadeado",
+                       "chave", "dinheiro", "relogio", "estrela", "alerta",
+                       "calendario", "pessoa", "grafico"],
+              "description": "tipo icone: qual desenho"},
 }
 
 
@@ -1328,7 +1358,7 @@ def grafico(c: Cliente, a: dict) -> str:
     corpo = {k: a[k] for k in ("tipo", "texto", "subtexto", "x", "y", "tamanho",
                                "estilo", "cor", "entrada", "saida", "camada",
                                "numero", "prefixo", "sufixo", "angulo", "logo",
-                               "opacidade")
+                               "opacidade", "valores", "rotulos", "icone")
              if a.get(k) is not None}
     if a.get("inicio") is not None:
         corpo["out_start"] = float(a["inicio"])
@@ -1350,9 +1380,13 @@ def grafico(c: Cliente, a: dict) -> str:
         return (f"logo {g['id']} ({g['logo']}) de {g['out_start']:.2f} a {g['out_end']:.2f} s, "
                 f"opacidade {g['opacidade']}{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}. "
                 f"Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
+    troca = ""
+    if a.get("estilo") and a.get("estilo") != g.get("estilo"):
+        troca = (f" Estilo {a['estilo']} trocado por {g.get('estilo')}: cartão sólido "
+                 f"por cima da pessoa, não (é o que ele pediu).")
     return (f"gráfico {g['id']} ({g['tipo']}) de {g['out_start']:.2f} a "
-            f"{g['out_end']:.2f} s{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}. "
-            f"Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
+            f"{g['out_end']:.2f} s{' — ATRÁS da pessoa' if g['camada'] == 'atras' else ''}."
+            f"{troca} Confira com ver_quadros em {min(g['out_end'], g['out_start'] + 1.0):.2f}.")
 
 
 @ferramenta(

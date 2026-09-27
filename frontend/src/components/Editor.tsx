@@ -1089,7 +1089,7 @@ export default function Editor() {
                           // trocar de música não devolve o volume e o ducking
                           // ao padrão: o que ele ajustou continua valendo
                           gain_db: antes.gain_db ?? -18,
-                          ducking: antes.ducking ?? true,
+                          ducking: antes.ducking ?? false,
                           duck_amount: antes.duck_amount ?? 12,
                           fade_in: antes.fade_in ?? 1, fade_out: antes.fade_out ?? 2,
                           muted: antes.muted ?? false, enabled: true,
@@ -1146,7 +1146,7 @@ export default function Editor() {
                       // o que ele ajustou, inclusive onde ela toca
                       const antes = project.plan?.music?.media_id ? project.plan.music : {}
                       await api.setMusic(project.id, {
-                        gain_db: -18, ducking: true, duck_amount: 12,
+                        gain_db: -18, ducking: false, duck_amount: 12,
                         fade_in: 1, fade_out: 2, out_start: 0,
                         out_end: timeline?.duration ?? 0,
                         ...antes,
@@ -1156,7 +1156,7 @@ export default function Editor() {
                       toast('ok', antes.media_id ? 'Música trocada' : 'Música no trilho',
                         antes.media_id
                           ? 'O volume e o ducking que você ajustou continuam valendo.'
-                          : 'Já entra abaixando na fala. O volume fica embaixo do '
+                          : 'Volume constante do começo ao fim. O volume fica embaixo do '
                             + 'player e na aba Áudio.')
                     } catch (e: any) {
                       toast('warn', 'Use a aba Mídia', String(e.message ?? e))

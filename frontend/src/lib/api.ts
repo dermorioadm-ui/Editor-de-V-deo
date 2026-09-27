@@ -304,6 +304,10 @@ export const api = {
   audioAnalysis: (id: string) => req<any>(`/api/projects/${id}/audio/analysis`),
   audioPreview: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/audio/preview`, payload),
+  // a voz de estúdio: estado do redutor e a prévia antes/depois (12 s)
+  vozEstado: (id: string) => req<any>(`/api/projects/${id}/audio/voz`),
+  vozPrevia: (id: string, payload: any) =>
+    post<any>(`/api/projects/${id}/audio/voz-previa`, payload),
   // a exportação AUTOMÁTICA: mesmo arquivo, sobrescrevendo, com cache
   exportFinal: (id: string) => post<Job>(`/api/projects/${id}/export-final`, {}),
   // o que é o arquivo, ANTES de criar o projeto — a primeira tela precisa da

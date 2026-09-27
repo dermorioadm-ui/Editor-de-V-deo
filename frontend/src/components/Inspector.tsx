@@ -228,13 +228,13 @@ export default function Inspector({ onChanged, snapshot, onToggleTake }: Props) 
                      await onChanged()
                    }} />
             <label className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-1">
-              <input type="checkbox" checked={m.ducking ?? true}
+              <input type="checkbox" checked={m.ducking === true}
                      onChange={async (e) => {
                        await api.ajustarMusica(project.id,
                          { ducking: e.target.checked })
                        await onChanged()
                      }} />
-              abaixar sozinha quando você fala
+              abaixar quando você fala (padrão: constante)
             </label>
             <p className="hint mt-1">
               Arraste o bloco no trilho para escolher onde ela toca, e as bordas

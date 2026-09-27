@@ -1371,8 +1371,14 @@ def _fade(samples: np.ndarray, ms: int = FADE_MS) -> np.ndarray:
 
 def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
                       clip_durations: dict, on_progress: Callable | None = None,
-                      warnings: list | None = None) -> np.ndarray:
-    """Monta o áudio em PCM, cada bloco com a duração EXATA do vídeo medido."""
+                      warnings: list | None = None,
+                      limpas: dict | None = None) -> np.ndarray:
+    """Monta o áudio em PCM, cada bloco com a duração EXATA do vídeo medido.
+
+    ``limpas``: fonte -> WAV com a voz já limpa pelo redutor (audio/voz.py).
+    Ele tem o MESMO relógio do arquivo original (segundo X lá é segundo X
+    aqui), então o bloco é lido com os mesmos tempos — só o som é outro.
+    """
     chunks: list[np.ndarray] = []
     total = max(len(timeline), 1)
     for n, placed in enumerate(timeline):
@@ -1387,6 +1393,7 @@ def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
         if not path:
             chunks.append(np.zeros(target, dtype=np.float32))
             continue
+        path = (limpas or {}).get(clip.source) or path
         af = None
         if abs(clip.speed - 1.0) > 1e-4:
             af = _atempo(clip.speed)
@@ -1424,29 +1431,43 @@ def _atempo(speed: float) -> str:
 
 
 def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
-                  plan: EditPlan, sources: dict, duration: float) -> Path:
+                  plan: EditPlan, sources: dict, duration: float,
+                  limpa: bool = False) -> Path:
     """Cadeia da Parte 9.1 aplicada UMA vez sobre a faixa inteira.
 
     O loudnorm roda em duas passadas (mede, depois aplica em modo linear).
     A passada única erra o alvo em mais de 1 LU e ainda encurta a faixa —
     medi 3200 amostras a menos numa faixa de 31 s.
 
-    Com trilha, o mix (voz + música com ducking) é montado ANTES da medição:
+    Com trilha, o mix (voz já tratada + música) é montado ANTES da medição:
     medir só a voz e normalizar o mix erraria o alvo e o pico exatamente no
     caso em que há mais energia na faixa.
     """
     from ..audio.loudness import (build_pre_chain, loudnorm_second_pass,
                                   measure_loudnorm)
 
+    # A VOZ É TRATADA SOZINHA, ANTES DA MÚSICA. Antes a trilha entrava na
+    # mistura e o compressor da voz rodava por cima das duas: cada frase dele
+    # apertava a música junto (ela "sumia" quando ele falava, mesmo sem
+    # ducking) e o EQ de voz mexia no timbre da música. Agora: voz -> EQ de
+    # estúdio -> compressor -> de-esser; só então a música, constante; e o
+    # loudnorm + teto sobre a mistura pronta.
+    pre = build_pre_chain(params, limpa=limpa)
+    voz_path = dest.with_name(dest.stem + "_voz.wav")
+    run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
+         *(["-af", pre] if pre else []),
+         "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le", str(voz_path)])
+
     # "mudo" desliga a trilha sem perder o ajuste: o usuário testa com e sem
     music = (plan.music if plan.music and plan.music.get("enabled")
              and not plan.music.get("muted") else None)
     mpath = sources.get(music.get("media_id"), {}).get("path") if music else None
-    stage_src = raw_wav
+    stage_src = voz_path
     if music and mpath:
         mix_path = dest.with_name(dest.stem + "_mix.wav")
         graph = F.music_chain(float(music.get("gain_db", -18)),
-                              bool(music.get("ducking", True)),
+                              # constante, a menos que ele tenha marcado
+                              bool(music.get("ducking", False)),
                               float(music.get("duck_amount", 12)),
                               float(music.get("fade_in", 1.0)),
                               float(music.get("fade_out", 2.0)), duration,
@@ -1454,7 +1475,8 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
                               # 0 = até o fim do vídeo (é o que a primeira tela
                               # grava quando o usuário só escolhe o MP3)
                               music.get("out_end") or None,
-                              music.get("curva"))
+                              # sem curva da IA: a trilha é constante
+                              None)
         # A MISTURA EM PONTO FLUTUANTE, NÃO EM 16 BITS. Voz quente mais trilha
         # masterizada somam ACIMA do teto: medido, voz a -0,9 dBFS com trilha
         # a -6 dB dava +2,9 dBFS, e em 16 bits isso virava 54.960 amostras
@@ -1463,15 +1485,14 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
         # só que mais baixa. Era o "som estourando" com trilha. Em 32 bits
         # flutuantes a soma passa de 1,0 sem clipar, e quem traz de volta para
         # baixo do teto é o loudnorm, sem distorcer.
-        run([FFMPEG, "-y", "-v", "error", "-i", str(raw_wav),
+        run([FFMPEG, "-y", "-v", "error", "-i", str(voz_path),
              "-stream_loop", "-1", "-i", str(mpath),
              "-filter_complex", graph, "-map", "[aout]",
              "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_f32le",
              "-t", f"{duration:.6f}", str(mix_path)])
         stage_src = mix_path
 
-    pre = build_pre_chain(params)
-    measured = measure_loudnorm(stage_src, pre, params)
+    measured = measure_loudnorm(stage_src, "", params)
     # O TETO, POR ÚLTIMO. O loudnorm mira o pico, mas não o GARANTE: em modo
     # linear, quando o ganho necessário passaria do teto, ele volta sozinho
     # para o modo dinâmico, e o limitador interno dele pode passar um pouco.
@@ -1484,7 +1505,7 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
     teto = 10 ** (min(-0.5, float(params.true_peak)) / 20.0)
     limitador = (f"alimiter=limit={teto:.4f}:level=0:latency=1:"
                  f"attack=5:release=60")
-    chain = ",".join(x for x in (pre, loudnorm_second_pass(params, measured),
+    chain = ",".join(x for x in (loudnorm_second_pass(params, measured),
                                  limitador) if x)
     run([FFMPEG, "-y", "-v", "error", "-i", str(stage_src), "-af", chain,
          "-ac", "1", "-ar", str(AUDIO_SR), "-c:a", "pcm_s16le", str(dest)])
@@ -1502,8 +1523,8 @@ def process_audio(raw_wav: Path, dest: Path, params: AudioParams,
             samples = np.concatenate(
                 [samples, np.zeros(target - len(samples), dtype=np.float32)])
         write_wav(dest, samples, AUDIO_SR)
-    if stage_src is not raw_wav:
-        Path(stage_src).unlink(missing_ok=True)
+    for resto in {stage_src, voz_path}:
+        Path(resto).unlink(missing_ok=True)
     return dest
 
 
