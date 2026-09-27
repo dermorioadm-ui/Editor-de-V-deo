@@ -9,6 +9,7 @@ import asyncio
 import mimetypes
 import platform
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import (Body, FastAPI, File, Form, HTTPException, Query, Request,
@@ -308,14 +309,23 @@ def api_envelope(pid: str, points: int = 4000) -> dict:
 
 
 # --------------------------------------------------------------------- jobs
+_submeter_lock = threading.RLock()
+_DIRECAO_JOBS = {"diretor", "claude", "clique-unico"}
+
+
 def _run(kind: str, pid: str, fn, paralelo: bool = False) -> dict:
     # dois cliques no mesmo botão não podem virar dois jobs: o segundo
     # re-analisaria tudo e apagaria as decisões manuais feitas após o primeiro
-    for existing in get_queue().list(pid):
-        if existing.kind == kind and existing.status in ("fila", "rodando"):
-            return existing.to_dict()
-    job = get_queue().submit(kind, pid, fn, paralelo=paralelo)
-    return job.to_dict()
+    with _submeter_lock:
+        for existing in get_queue().list(pid):
+            if existing.status not in ("fila", "rodando"):
+                continue
+            if existing.kind == kind:
+                return existing.to_dict()
+            if kind in _DIRECAO_JOBS and existing.kind in _DIRECAO_JOBS:
+                raise HTTPException(409, "Já há uma direção em andamento neste projeto.")
+        job = get_queue().submit(kind, pid, fn, paralelo=paralelo)
+        return job.to_dict()
 
 
 @app.post("/api/projects/{pid}/proxy")
@@ -434,7 +444,11 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     com_pos = bool(project.plan.pos_claude)
 
     def pipeline(ctx) -> dict:
-        if claude:
+        if project.plan.pos_editor is not None or project.plan.editor == "codex":
+            from . import editores
+            res = editores.pipeline(pid, ctx, fontes_extras)
+            res = _previa_e_pronto(pid, ctx, res, 0.95)
+        elif claude:
             res = _clique_do_claude(pid, ctx, fontes_extras, com_pos)
         elif com_pos:
             res = _clique_com_pos(pid, ctx, fontes_extras)
@@ -456,7 +470,8 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
     # trabalhos (refazer o corte, baixar b-roll). Na fila única, eles
     # esperariam o clique único e o clique único esperaria por eles: roda em
     # linha própria (ver JobQueue.submit).
-    return _run("clique-unico", pid, pipeline, paralelo=claude or com_pos)
+    return _run("clique-unico", pid, pipeline, paralelo=claude or com_pos
+                or project.plan.editor == "codex" or bool(project.plan.pos_editor))
 
 
 def _previa_e_pronto(pid: str, ctx, res: dict, lo: float) -> dict:
@@ -595,11 +610,23 @@ def aplicar_receita(project, payload: dict) -> None:
             setattr(plan, attr, cls(**current))
     if "editor" in payload:
         # "claude": o Claude edita pelo MCP e o Gemini não decide nada
-        plan.editor = "claude" if payload.get("editor") == "claude" else ""
+        plan.editor = payload.get("editor") if payload.get("editor") in ("claude", "codex") else ""
     if "pedido_claude" in payload:
         plan.pedido_claude = str(payload.get("pedido_claude") or "")[:4000]
     if "pos_claude" in payload:
         plan.pos_claude = bool(payload.get("pos_claude"))
+        plan.pos_editor = None
+    if "pos_editor" in payload:
+        if payload["pos_editor"] not in ("", "claude", "codex"):
+            raise HTTPException(400, "acabamento inválido")
+        plan.pos_editor = payload["pos_editor"]
+        plan.pos_claude = plan.pos_editor == "claude"
+    if "direcao" in payload:
+        from .diretor import PERFIS
+        d = payload["direcao"]
+        if not isinstance(d, dict) or d.get("perfil", "editorial") not in PERFIS:
+            raise HTTPException(400, "direção inválida")
+        plan.direcao = {"ativa": bool(d.get("ativa")), "perfil": d.get("perfil", "editorial")}
     if "marca" in payload:
         # a marca DESTE vídeo: o slug do kit, "-" = nenhuma, "" = a do programa
         from . import marca as MK
@@ -2649,8 +2676,12 @@ def api_pos_quadros(pid: str, payload: dict = Body(...)) -> dict:
     if not tempos:
         raise HTTPException(400, "diga em que segundos quer ver o vídeo")
     try:
-        return {"quadros": pos_edicao.quadros_b64(_project(pid), tempos,
-                                                  _lado(payload.get("lado", 720)))}
+        project = _project(pid)
+        from .diretor import assinatura, registrar_quadros
+        renderizada = assinatura(project)
+        quadros = pos_edicao.quadros_b64(project, tempos, _lado(payload.get("lado", 720)))
+        registrar_quadros(_project(pid), [q["t"] for q in quadros if not q.get("avisos")], renderizada)
+        return {"quadros": quadros}
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -2697,7 +2728,7 @@ def api_claude_config(payload: dict = Body(...)) -> dict:
     if "editor_padrao" in payload:
         db.set_setting("editor_padrao",
                        str(payload.get("editor_padrao") or "") if
-                       payload.get("editor_padrao") in ("claude", "gemini", "regra") else "")
+                       payload.get("editor_padrao") in ("claude", "codex", "gemini", "regra") else "")
     return api_claude_estado(True)
 
 
@@ -2776,6 +2807,97 @@ def api_claude_entrar(request: Request) -> dict:
     return claude_editor.entrar()
 
 
+@app.get("/api/codex/estado")
+def api_codex_estado() -> dict:
+    from .codex_editor import estado
+    return estado(True)
+
+
+@app.post("/api/codex/config")
+def api_codex_config(payload: dict = Body(...)) -> dict:
+    if "caminho" in payload:
+        caminho = str(payload["caminho"] or "").strip().strip('"')
+        if caminho and not Path(caminho).is_file():
+            raise HTTPException(400, "esse executável não existe")
+        db.set_setting("codex_caminho", caminho)
+    if "modelo" in payload:
+        import re
+        modelo = str(payload["modelo"] or "").strip()
+        if modelo and not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", modelo):
+            raise HTTPException(400, "identificador de modelo inválido")
+        db.set_setting("codex_modelo", modelo)
+    return api_codex_estado()
+
+
+@app.get("/api/projects/{pid}/direcao")
+def api_direcao(pid: str) -> dict:
+    from .diretor import estado
+    return estado(_project(pid))
+
+
+@app.post("/api/projects/{pid}/direcao")
+def api_direcao_mudar(pid: str, payload: dict = Body(...)) -> dict:
+    from . import diretor
+    p = _project(pid)
+    try:
+        if payload.get("acao") == "planejar":
+            return diretor.planejar(p, payload)
+        if payload.get("acao") == "revisar":
+            return diretor.revisar(p, str(payload.get("parecer") or ""))
+        raise ValueError("ação de direção inválida")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/pos/compor")
+def api_compor(pid: str, payload: dict = Body(...)) -> dict:
+    from .diretor import compor
+    try:
+        return compor(_project(pid), payload)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/projects/{pid}/diretor")
+def api_diretor(pid: str, payload: dict = Body(...)) -> dict:
+    with _submeter_lock:
+        # A segunda solicitação não pode trocar o plano do diretor em curso.
+        for job in get_queue().list(pid):
+            if job.status in ("fila", "rodando") and job.kind in _DIRECAO_JOBS:
+                if job.kind == "diretor":
+                    return job.to_dict()
+                raise HTTPException(409, "Já há uma direção em andamento neste projeto.")
+        return _pedir_diretor(pid, payload)
+
+
+def _pedir_diretor(pid: str, payload: dict) -> dict:
+    from . import editores
+    p = _project(pid)
+    provedor = payload.get("provedor", "codex")
+    modo = payload.get("modo", "pos")
+    if provedor not in ("claude", "codex") or modo not in ("completo", "edicao", "pos"):
+        raise HTTPException(400, "diretor ou etapa inválidos")
+    pedido = str(payload.get("pedido") or "").strip()[:4000]
+    p.plan.direcao = {"ativa": True, "perfil": p.plan.direcao.get("perfil", "editorial")}
+    if modo == "pos":
+        p.plan.pos_editor = provedor
+        p.plan.pos_claude = provedor == "claude"
+    else:
+        p.plan.editor = provedor
+    p.save_plan()
+
+    def pipeline(ctx):
+        r = svc._scoped(ctx, 0.0, 0.9, lambda c: editores.executar(pid, c, provedor, modo, pedido))
+        if not r.get("ok"):
+            raise RuntimeError(r.get("erro") or "direção incompleta")
+        res = _previa_e_pronto(pid, ctx, {"diretor": r}, 0.9)
+        res["final_job"] = get_queue().submit("exportacao", pid,
+            lambda c: svc.exportar_final(svc.load(pid), c)).id
+        return res
+
+    return _run("diretor", pid, pipeline, paralelo=True)
+
+
 # ------------------------------------------------------------ MCP pela porta
 # O Claude Code que o Sharkcut chama liga as ferramentas por aqui (Streamable
 # HTTP do MCP, resposta em JSON), e não por um segundo programa. Três portas
@@ -2786,7 +2908,7 @@ def api_claude_entrar(request: Request) -> dict:
 _LOCAIS = ("127.0.0.1", "::1", "localhost")
 
 
-def _mcp_barrar(request: Request) -> None:
+def _mcp_barrar(request: Request) -> dict:
     from urllib.parse import urlparse
 
     from . import claude_editor
@@ -2798,8 +2920,10 @@ def _mcp_barrar(request: Request) -> None:
         raise HTTPException(403, "origem recusada")
     auth = request.headers.get("authorization") or ""
     chave = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not claude_editor.chave_ok(chave):
+    contexto = claude_editor.contexto_chave(chave)
+    if not contexto:
         raise HTTPException(401, "sem a chave desta edição")
+    return contexto
 
 
 @app.post("/mcp")
@@ -2811,7 +2935,7 @@ async def api_mcp(request: Request):
     from .mcp.__main__ import processar
     from .mcp.cliente import Cliente
 
-    _mcp_barrar(request)
+    contexto = _mcp_barrar(request)
     if "application/json" not in (request.headers.get("content-type") or "").lower():
         raise HTTPException(415, "o MCP fala JSON")
     try:
@@ -2821,7 +2945,12 @@ async def api_mcp(request: Request):
                              "error": {"code": -32700, "message": "JSON inválido"}},
                             status_code=400)
     porta = request.scope.get("server", (None, _config.PORT))[1] or _config.PORT
-    cliente = Cliente(base=f"http://127.0.0.1:{porta}")
+    from .claude_editor import _liberadas
+    cliente = Cliente(base=f"http://127.0.0.1:{porta}",
+                      origem=contexto.get("origem", "claude"),
+                      projeto=contexto.get("projeto", ""),
+                      permitidas=_liberadas(contexto.get("modo", "completo"))
+                      if contexto.get("projeto") else None)
     # a ferramenta chama a API deste mesmo servidor: roda fora do laço de
     # eventos, senão ela esperaria por ele e ele por ela
     resposta = await run_in_threadpool(processar, pedido, cliente)

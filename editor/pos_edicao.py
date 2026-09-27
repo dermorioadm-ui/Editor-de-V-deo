@@ -413,7 +413,7 @@ def _sem_cartao_solido(project, novo: dict) -> dict:
     cima da pessoa vira VIDRO — a imagem continua aparecendo por trás. O
     sólido só fica onde não há ninguém atrás: a tela cheia e o lado livre da
     moldura. Na tela, à mão, a escolha é dele e fica."""
-    if (novo.get("origem") != "claude" or novo.get("estilo") not in MG.SOLIDOS
+    if (novo.get("origem") not in ("claude", "codex") or novo.get("estilo") not in MG.SOLIDOS
             or novo.get("tipo") in _SEM_CARTAO or _no_lado_livre(project, novo)):
         return novo
     return {**novo, "estilo": "vidro"}

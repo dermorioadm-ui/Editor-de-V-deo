@@ -334,6 +334,11 @@ export const api = {
   recorteEstado: () => req<any>('/api/recorte/estado'),
   // O CLAUDE COMO EDITOR: o Claude Code desta máquina, sem janela
   claudeEstado: (forcar = false) => req<any>(`/api/claude/estado${forcar ? '?forcar=true' : ''}`),
+  codexEstado: () => req<any>('/api/codex/estado'),
+  codexConfig: (dados: { caminho?: string; modelo?: string }) => post<any>('/api/codex/config', dados),
+  direcao: (id: string) => req<any>(`/api/projects/${id}/direcao`),
+  diretorPedir: (id: string, provedor: string, modo: string, pedido = '') =>
+    post<Job>(`/api/projects/${id}/diretor`, { provedor, modo, pedido }),
   claudeConfig: (dados: { caminho?: string; modelo?: string; editor_padrao?: string;
                           pos_padrao?: boolean }) =>
     post<any>('/api/claude/config', dados),

@@ -4,7 +4,7 @@ import { timecode } from '../lib/format'
 import { toast, useStore } from '../state/store'
 
 export const TIPOS_GRAFICO: [string, string][] = [
-  ['titulo', 'Título'], ['tela', 'Tela de tópico'], ['lista', 'Lista'],
+  ['titulo', 'Título'], ['tela', 'Tela de tópico'], ['lista', 'Lista'], ['comparacao', 'Comparação em duas colunas'],
   ['destaque', 'Destaque'], ['numero', 'Número'], ['texto', 'Texto'],
   ['nome', 'Nome (lower third)'], ['seta', 'Seta'], ['circulo', 'Círculo'],
   ['barra', 'Barra de progresso'], ['logo', 'Logo'],
@@ -13,6 +13,7 @@ export const TIPOS_GRAFICO: [string, string][] = [
 ]
 const ESTILOS: [string, string][] = [
   ['vidro', 'Vidro (translúcido)'], ['limpo', 'Sem fundo'],
+  ['editorial', 'Editorial (sem contorno, para fundo escuro)'],
   ['claro', 'Claro (cartão sólido)'], ['marca', 'Cor da marca (sólido)'],
   ['escuro', 'Escuro (sólido)'], ['neon', 'Neon (sólido)'],
 ]
@@ -36,7 +37,7 @@ const FUNDOS: [string, string][] = [
 ]
 const ENTRADAS: [string, string][] = [
   ['pop', 'Pop'], ['slide', 'Desliza'], ['subir', 'Sobe'], ['3d', 'Giro 3D'],
-  ['digitar', 'Digitando'], ['fade', 'Aparece'],
+  ['digitar', 'Digitando'], ['fade', 'Aparece'], ['cinema', 'Cinema suave'], ['linhas', 'Linha por linha'],
 ]
 const SAIDAS: [string, string][] = [
   ['fade', 'Some'], ['slide', 'Desliza'], ['pop', 'Encolhe'], ['corte', 'Corte seco'],
@@ -156,7 +157,7 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
   const titulo = kind === 'grafico' ? (d.tipo === 'logo' ? 'Logo' : 'Gráfico')
     : kind === 'camada' ? 'Camada' : kind === 'cena' ? 'Cena' : 'Transição'
   const ehLogo = kind === 'grafico' && d.tipo === 'logo'
-  const pedeItens = d.tipo === 'lista' || d.tipo === 'tela'
+  const pedeItens = ['lista', 'tela', 'comparacao'].includes(d.tipo)
   const pedeNumero = d.tipo === 'numero' || d.tipo === 'barra' || d.tipo === 'rosca'
   const pedeValores = d.tipo === 'barras' || d.tipo === 'linha'
 
@@ -231,6 +232,11 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
               </select>
             </label>
           )}
+          {d.tipo === 'comparacao' && <label className="block">
+            <span className="label">nome de cada lado (separe com vírgula)</span>
+            <input className="field w-full text-xs py-1" value={rotulosTxt}
+              onChange={e => setRotulosTxt(e.target.value)} placeholder="Antes, Depois" />
+          </label>}
           {pedeValores && (
             <>
               <label className="block">

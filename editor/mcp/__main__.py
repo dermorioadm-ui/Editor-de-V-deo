@@ -88,7 +88,11 @@ def tratar(pedido: dict, cliente: Cliente) -> tuple[bool, dict | None]:
             "protocolVersion": versao,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": NOME, "version": VERSAO},
-            "instructions": INSTRUCOES,
+            "instructions": (f"Você dirige o projeto {cliente.projeto} no Sharkcut. "
+                             "Siga o pedido desta execução. As ferramentas estão limitadas "
+                             "à etapa autorizada. Tempos são do vídeo final. Confira o "
+                             "resultado com ver_quadros. O programa gera a exportação."
+                             if cliente.projeto else INSTRUCOES),
         }
 
     if metodo in ("notifications/initialized", "initialized", "notifications/cancelled"):
@@ -98,12 +102,17 @@ def tratar(pedido: dict, cliente: Cliente) -> tuple[bool, dict | None]:
         return True, {}
 
     if metodo == "tools/list":
-        return True, {"tools": catalogo()}
+        return True, {"tools": [t for t in catalogo() if cliente.permitidas is None
+                                or t["name"] in cliente.permitidas]}
 
     if metodo == "tools/call":
         params = pedido.get("params") or {}
         nome = params.get("name", "")
         argumentos = params.get("arguments") or {}
+        if cliente.permitidas is not None and nome not in cliente.permitidas:
+            return True, _texto("ferramenta não permitida nesta etapa", erro=True)
+        if cliente.projeto and argumentos.get("projeto", cliente.projeto) != cliente.projeto:
+            return True, _texto("esta execução só pode editar o projeto autorizado", erro=True)
         try:
             r = chamar(cliente, nome, argumentos)
             # ferramenta que devolve IMAGEM (ver_quadros) já monta o conteúdo

@@ -5,16 +5,21 @@ bruto na página, escolhe um preset, aperta **EDITAR** e recebe o vídeo
 cortado, acelerado e legendado. Depois revisa e ajusta o que ficou fora do
 lugar.
 
-**O arquivo nunca sai da sua máquina.** Não existe upload, não existe nuvem, não
-existe limite de tamanho. O programa roda no seu computador e lê o vídeo direto
-da pasta onde ele já está.
+**O vídeo fonte e a renderização ficam na sua máquina.** O programa lê o vídeo
+direto da pasta onde ele já está. Quando você escolhe uma IA, ela recebe a
+transcrição e os quadros de conferência que consultar.
 
-> Uma ressalva honesta, e só uma: a aba **IA** é opcional, vem desligada e não
+> A aba **IA** é opcional, vem desligada e não
 > funciona sem uma chave do Gemini que você mesmo cole. Ligada, ela manda o
 > **texto** da transcrição — e, se você pedir ajuda com anexos, um quadro de
 > 360 px de cada anexo seu. **O vídeo continua não saindo**, nem o arquivo nem
 > o caminho dele. Detalhes, inclusive o que a Google faz com isso no plano
 > gratuito, em [12. A aba IA](#12-a-aba-ia).
+
+**Direção criativa com sua conta ChatGPT/Codex ou Claude:** escolha quem faz o
+corte inicial e quem dirige o acabamento. O diretor planeja os momentos,
+compõe e confere quadros reais antes da finalização. Veja o
+[guia da direção, recursos de motion e limites da conferência](DIRECAO.md).
 
 ---
 

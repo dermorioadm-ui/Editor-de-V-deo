@@ -9,7 +9,7 @@
 // sobreposição animada, errar a curva não desalinha um pixel: põe a janela num
 // lugar no vídeo e noutro na tela.
 
-export type Curva = 'linear' | 'suave' | 'entra' | 'sai'
+export type Curva = 'linear' | 'suave' | 'entra' | 'sai' | 'cinema' | 'organica'
 
 export type Marco = {
   t: number
@@ -26,7 +26,7 @@ export const PROPRIEDADES: Record<string, number> = {
   x: 0.5, y: 0.25, scale: 1, opacity: 1, rotation: 0,
 }
 
-const CURVAS = ['linear', 'suave', 'entra', 'sai']
+const CURVAS = ['linear', 'suave', 'entra', 'sai', 'cinema', 'organica']
 
 type Ponto = { t: number; v: number; c: string }
 
@@ -56,6 +56,8 @@ export function temAnimacao(kfs: Marco[] | undefined | null, chave: string): boo
 }
 
 function progresso(p: number, curva: string): number {
+  if (curva === 'cinema') return 1 - Math.pow(1 - p, 3)
+  if (curva === 'organica') return p ** 3 * (10 - 15 * p + 6 * p * p)
   if (curva === 'suave') return p * p * (3 - 2 * p)
   if (curva === 'entra') return p * p
   if (curva === 'sai') return p * (2 - p)

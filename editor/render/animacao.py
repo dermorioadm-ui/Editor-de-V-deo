@@ -51,10 +51,14 @@ PROPRIEDADES = {
 #   suave   — smoothstep: sai devagar, chega devagar (movimento de câmera)
 #   entra   — acelera do repouso
 #   sai     — freia até o repouso
-CURVAS = ("linear", "suave", "entra", "sai")
+CURVAS = ("linear", "suave", "entra", "sai", "cinema", "organica")
 
 
 def _progresso(p: str, curva: str) -> str:
+    if curva == "cinema":
+        return f"(1-pow(1-({p}),3))"
+    if curva == "organica":
+        return f"(pow({p},3)*(10-15*({p})+6*pow({p},2)))"
     if curva == "suave":
         return f"(({p})*({p})*(3-2*({p})))"
     if curva == "entra":
@@ -120,6 +124,10 @@ def valor_em(keyframes: list | None, chave: str, t: float,
                 p = p * p
             elif cb == "sai":
                 p = p * (2 - p)
+            elif cb == "cinema":
+                p = 1 - (1 - p) ** 3
+            elif cb == "organica":
+                p = p ** 3 * (10 - 15 * p + 6 * p * p)
             return va + (vb - va) * p
     return m[-1][1]
 

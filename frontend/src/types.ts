@@ -126,6 +126,7 @@ export interface TimelineView {
   cutaways: any[]; overlays: any[]; blurs: any[]; speed_warn: string[]
   /** a pós-edição: gráficos animados, camadas de profundidade, transições */
   graficos?: any[]; camadas?: any[]; transicoes?: any[]; editor?: string
+  pos_editor?: string | null; direcao?: { ativa?: boolean; perfil?: string }
 }
 
 export interface MediaInfo {

@@ -450,6 +450,9 @@ class EditPlan:
     # Gemini ou a regra editando, o Claude entra só para a pós. Desligada, o
     # vídeo sai só com a edição.
     pos_claude: bool = False
+    # None migra a escolha antiga; "" desliga explicitamente o acabamento.
+    pos_editor: str | None = None
+    direcao: dict = field(default_factory=dict)
     # A MARCA deste vídeo (kit em marcas/<slug>): "" = a marca ligada no
     # programa, "-" = nenhuma. Ver editor/marca.py.
     marca: str = ""
@@ -499,6 +502,8 @@ class EditPlan:
             "editor": self.editor,
             "pedido_claude": self.pedido_claude,
             "pos_claude": self.pos_claude,
+            "pos_editor": self.pos_editor,
+            "direcao": self.direcao,
             "marca": self.marca,
             "version": self.version,
         }
@@ -544,9 +549,15 @@ class EditPlan:
         except (TypeError, ValueError):
             plan.alvo_duracao = 0.0
         plan.broll = dict(data.get("broll") or {})
-        plan.editor = "claude" if data.get("editor") == "claude" else ""
+        plan.editor = data.get("editor") if data.get("editor") in ("claude", "codex") else ""
         plan.pedido_claude = str(data.get("pedido_claude") or "")[:4000]
         plan.pos_claude = bool(data.get("pos_claude", False))
+        pe = data.get("pos_editor")
+        plan.pos_editor = pe if pe in ("", "claude", "codex") else None
+        d = data.get("direcao") if isinstance(data.get("direcao"), dict) else {}
+        plan.direcao = {"ativa": bool(d.get("ativa")),
+                        "perfil": d.get("perfil") if d.get("perfil") in
+                        ("editorial", "cinema", "dinamico") else "editorial"} if d else {}
         plan.marca = str(data.get("marca") or "")[:40]
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]

@@ -158,3 +158,26 @@ barra subindo, o traço se desenhando. Use SÓ números que a fala diz.
 Termine com um relatório curto, em tópicos: o que entrou, em que segundo e por
 quê (a frase que justificou cada cena). O Sharkcut gera a prévia e o arquivo
 sozinho — você não exporta.
+
+## 8. Direção registrada (Claude e Codex)
+
+Quando o projeto estiver com direção criativa ativa, o plano não fica apenas
+na conversa. Depois dos cortes, use `direcao acao=planejar` com objetivo,
+linguagem e momentos (`inicio`, `fim`, `fala`, `intencao`). Os tempos são do
+vídeo final. `direcao acao=ler` mostra os instantes que faltam conferir.
+Após as últimas alterações, peça `ver_quadros` nesses tempos, em lotes de até
+seis. Registre o parecer com `direcao acao=revisar`. Se mudar algo, confira de
+novo. Imagens estáticas não permitem afirmar que você ouviu o áudio ou
+conferiu todo o movimento.
+
+`compor` oferece gancho, comparação, passos, prova e fechamento. A comparação
+usa duas colunas, com `rotulos` para cada lado e `itens=[{texto, em}, ...]`:
+`em` é relativo ao início e deve acompanhar a fala. Os outros tipos usam
+títulos, listas e números que continuam editáveis. `entrada=cinema` é uma
+aproximação discreta com foco; `entrada=linhas` revela títulos linha por linha.
+
+Use as frequências acima como referências, não cotas. Uma intervenção precisa
+esclarecer, provar ou orientar o olhar. Silêncio visual também é uma decisão.
+Respeite as ressalvas da fala, sem transformar hipótese em promessa. No modo
+de acabamento, preserve cortes e ordem. Nunca recrie itens manualmente
+ajustados apenas para uniformizar o estilo.

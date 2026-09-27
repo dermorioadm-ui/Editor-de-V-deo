@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import FileBrowser from './FileBrowser'
 import Gravar from './Gravar'
+import CodexConfig from './CodexConfig'
 import { palavrasDaMontagem } from '../lib/eixo'
 import { api } from '../lib/api'
 import { bytes, timecode } from '../lib/format'
@@ -78,7 +79,11 @@ export default function Home() {
   const [fpsSaida, setFpsSaida] = useState(30)
   const [iaCortes, setIaCortes] = useState(true)
   // QUEM EDITA: o Claude Code desta máquina, o Gemini (chave) ou só a regra
-  const [editor, setEditor] = useState<'claude' | 'gemini' | 'regra' | ''>('')
+  const [editor, setEditor] = useState<'claude' | 'codex' | 'gemini' | 'regra' | ''>('')
+  const [posEditor, setPosEditor] = useState<string>(() => {
+    try { return localStorage.getItem('sharkcut.posEditor') ?? 'auto' } catch { return 'auto' }
+  })
+  const [perfilDirecao, setPerfilDirecao] = useState('editorial')
   const [claude, setClaude] = useState<any>(null)
   const [pedidoClaude, setPedidoClaude] = useState('')
   const [claudeCaminho, setClaudeCaminho] = useState('')
@@ -223,23 +228,25 @@ export default function Home() {
    *  DEPOIS do preset e a ordem para de depender de quem gravou primeiro. */
   // o editor da vez: o que ele escolheu da última vez; sem escolha, o Claude
   // quando ele está instalado, senão o Gemini com chave, senão a regra
-  const editorDaVez: 'claude' | 'gemini' | 'regra' = editor
+  const editorDaVez: 'claude' | 'codex' | 'gemini' | 'regra' = editor
     || (claude?.editor_padrao as any)
     || (claude?.instalado ? 'claude' : ia?.tem_chave ? 'gemini' : 'regra')
 
-  const posDaVez: boolean = posClaude ?? (claude?.pos_padrao ?? !!claude?.instalado)
+  const acabamento = posEditor === 'auto'
+    ? ((posClaude ?? (claude?.pos_padrao ?? !!claude?.instalado)) ? 'claude' : '') : posEditor
+  const posDaVez = !!acabamento
 
   async function escolherMarca(slug: string) {
     setMarcaDaVez(slug)
     try { setMarcas(await api.marcaAtiva(slug)) } catch { /* só lembrança */ }
   }
 
-  async function escolherPos(v: boolean) {
-    setPosClaude(v)
-    try { setClaude(await api.claudeConfig({ pos_padrao: v })) } catch { /* só lembrança */ }
+  function escolherPos(v: string) {
+    setPosEditor(v); setPosClaude(v === 'claude')
+    try { localStorage.setItem('sharkcut.posEditor', v) } catch { /* só lembrança */ }
   }
 
-  async function escolherEditor(e: 'claude' | 'gemini' | 'regra') {
+  async function escolherEditor(e: 'claude' | 'codex' | 'gemini' | 'regra') {
     setEditor(e)
     try { setClaude(await api.claudeConfig({ editor_padrao: e })) } catch { /* só lembrança */ }
   }
@@ -289,11 +296,13 @@ export default function Home() {
 
   function receita() {
     return {
-      editor: editorDaVez === 'claude' ? 'claude' : '',
-      pedido_claude: (editorDaVez === 'claude' || posDaVez) ? pedidoClaude.trim() : '',
+      editor: ['claude', 'codex'].includes(editorDaVez) ? editorDaVez : '',
+      pedido_claude: pedidoClaude.trim(),
+      pos_editor: acabamento,
+      direcao: { ativa: true, perfil: perfilDirecao },
       // a pós do Claude vale para QUALQUER editor: com o Gemini cortando, o
       // Claude entra só com títulos, telas, transições e camadas
-      pos_claude: posDaVez && !!claude?.instalado,
+      pos_claude: acabamento === 'claude',
       ...(marcas ? { marca: (marcaDaVez ?? marcas.ativa ?? '') || '-' } : {}),
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       alvo_duracao: alvo,
@@ -328,7 +337,7 @@ export default function Home() {
       // com o Claude editando, o interruptor do Gemini não importa (o Gemini
       // fica fora); na "só a regra", ele é desligado de verdade
       const cortesGemini = editorDaVez === 'regra' ? false : iaCortes
-      if (editorDaVez !== 'claude' && cortesGemini !== (ia?.cortes !== false)) {
+      if (!['claude', 'codex'].includes(editorDaVez) && cortesGemini !== (ia?.cortes !== false)) {
         await api.setAiConfig({ cortes: cortesGemini }).catch(() => {})
       }
       // AS OUTRAS GRAVAÇÕES DO PACOTE sobem como fonte, não como anexo: elas
@@ -535,7 +544,7 @@ export default function Home() {
         <div className="card p-3 mb-3 space-y-2" data-quem-edita={editorDaVez}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-slate-200 mr-1">Quem edita este vídeo</span>
-            {([['claude', 'Claude (no seu computador)'], ['gemini', 'Gemini'],
+            {([['claude', 'Claude (no seu computador)'], ['codex', 'Codex · ChatGPT'], ['gemini', 'Gemini'],
                ['regra', 'Só a regra']] as const).map(([v, rot]) => (
               <button key={v} data-editor={v}
                       className={`btn btn-xs ${editorDaVez === v ? 'btn-primary' : ''}`}
@@ -624,20 +633,23 @@ export default function Home() {
           {/* A PÓS-EDIÇÃO DO CLAUDE, num clique: independe de quem edita */}
           <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-line/60"
                data-pos-claude={posDaVez ? 'sim' : 'nao'}>
-            <span className="text-sm text-slate-200 mr-1">Pós-edição do Claude</span>
-            <button className={`btn btn-xs ${posDaVez ? 'btn-primary' : ''}`} data-pos="sim"
-                    disabled={!claude?.instalado} onClick={() => escolherPos(true)}>
-              entregar finalizado</button>
-            <button className={`btn btn-xs ${!posDaVez ? 'btn-primary' : ''}`} data-pos="nao"
-                    onClick={() => escolherPos(false)}>só a edição</button>
+            <span className="text-sm text-slate-200 mr-1">Quem dirige o acabamento</span>
+            {([['codex', 'Codex · ChatGPT'], ['claude', 'Claude'], ['', 'Só a edição']] as const).map(([v, nome]) =>
+              <button key={v} className={`btn btn-xs ${acabamento === v ? 'btn-primary' : ''}`}
+                data-pos-editor={v || 'nenhum'} onClick={() => escolherPos(v)}>{nome}</button>)}
             <span className="text-[11px] text-slate-500 basis-full">
-              {!claude?.instalado
-                ? 'precisa do Claude Code nesta máquina'
-                : posDaVez
-                ? `títulos animados, telas de tópico, listas, números, transições, fundo desfocado e texto atrás de você — por cima da edição${editorDaVez === 'gemini' ? ' do Gemini' : editorDaVez === 'regra' ? ' da regra' : ''}`
-                : 'o vídeo sai só com a edição (cortes, ritmo, legenda, b-roll). Dá para pôr a pós depois, no editor, num clique.'}
+              {posDaVez ? 'O diretor planeja as cenas, executa a composição e confere os quadros antes de concluir.'
+                : 'Cortes, ritmo e legenda. O acabamento pode ser feito depois.'}
             </span>
           </div>
+          {(editorDaVez === 'codex' || acabamento === 'codex') && <CodexConfig />}
+          <label className="block text-xs text-slate-300">Linguagem da direção
+            <select className="field w-full mt-1" value={perfilDirecao} onChange={e => setPerfilDirecao(e.target.value)}>
+              <option value="editorial">Editorial · composição precisa, movimento contido</option>
+              <option value="cinema">Cinema · respiro, profundidade e ênfase</option>
+              <option value="dinamico">Dinâmico · contraste de ritmo e entradas curtas</option>
+            </select>
+          </label>
           {marcas && (marcas.lista ?? []).length > 0 && (
             <div className="flex items-center gap-2 flex-wrap" data-marca-da-vez={(marcaDaVez ?? marcas.ativa) || 'nenhuma'}>
               <span className="text-sm text-slate-200 mr-1">Marca</span>
@@ -656,9 +668,9 @@ export default function Home() {
               </span>
             </div>
           )}
-          {editorDaVez !== 'claude' && posDaVez && claude?.instalado && (
+          {editorDaVez !== 'claude' && (posDaVez || editorDaVez === 'codex') && (
             <label className="block">
-              <span className="label">o que você quer na pós (opcional)</span>
+              <span className="label">orientação para o diretor (opcional)</span>
               <textarea className="field w-full text-xs" rows={2} value={pedidoClaude}
                         data-campo="pedido-pos"
                         placeholder="ex.: telas de tópico, título amarelo no gancho, texto atrás de mim no começo"
