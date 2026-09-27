@@ -75,11 +75,38 @@ if args[:2] == ["auth", "status"]:
     sys.exit(0)
 modo = os.environ.get("CLAUDE_FALSO_MODO", "ok")
 prompt = sys.stdin.read()
-json.dump({"argv": args, "prompt": prompt, "cwd": os.getcwd()},
-          open(os.environ["CLAUDE_FALSO_LOG"], "w", encoding="utf-8"))
 
 def emit(o):
     print(json.dumps(o, ensure_ascii=False), flush=True)
+
+# como o Claude Code: o env do settings.json do usuário vale sobre o do
+# Windows, e o do --settings vale sobre os dois
+efetivo = dict(os.environ)
+try:
+    cfgdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    efetivo.update(json.load(open(os.path.join(cfgdir, "settings.json"), encoding="utf-8")).get("env", {}))
+except (OSError, ValueError):
+    pass
+if "--settings" in args:
+    efetivo.update(json.load(open(args[args.index("--settings") + 1], encoding="utf-8")).get("env", {}))
+json.dump({"argv": args, "prompt": prompt, "cwd": os.getcwd(),
+           "base": efetivo.get("ANTHROPIC_BASE_URL", ""),
+           "token": efetivo.get("ANTHROPIC_AUTH_TOKEN", "")},
+          open(os.environ["CLAUDE_FALSO_LOG"], "w", encoding="utf-8"))
+base = efetivo.get("ANTHROPIC_BASE_URL", "")
+if base and base.rstrip("/") != "https://api.anthropic.com":
+    import socket, urllib.parse
+    u = urllib.parse.urlparse(base)
+    try:
+        socket.create_connection((u.hostname, u.port or 80), timeout=2).close()
+    except OSError:
+        emit({"type": "result", "subtype": "success", "is_error": True,
+              "result": "API Error: Connection refused — a firewall or proxy may be "
+                        "blocking it (ECONNREFUSED)"})
+        sys.exit(1)
+if "--mcp-config" not in args:          # o "testar o Claude": só responde
+    emit({"type": "result", "subtype": "success", "is_error": False, "result": "OK"})
+    sys.exit(0)
 
 if modo == "sem_login":
     sys.stderr.write("Invalid API key · Please run /login\n")
@@ -474,6 +501,57 @@ def main() -> int:
               "o botão de entrar abre o login do Claude Code (fora do Windows, diz o "
               "comando)", str(entrar)[:160])
         http("GET", "/api/claude/estado?forcar=true", base=base)
+
+        print("\n-- um roteador de Claude morto na configuração (o app Claude ignora; o Sharkcut também)")
+        morto = porta_livre()
+        from editor import claude_editor as C
+        os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{morto}"
+        os.environ["ANTHROPIC_AUTH_TOKEN"] = "freecc"
+        try:
+            t = http("POST", "/api/claude/testar", {}, base=base)
+            a = json.loads(registro.read_text(encoding="utf-8"))
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL")
+            os.environ.pop("ANTHROPIC_AUTH_TOKEN")
+        check(t["ok"] and a["base"] == "https://api.anthropic.com" and not a["token"]
+              and "--settings" in a["argv"],
+              "ANTHROPIC_BASE_URL apontando para onde nada responde: o Sharkcut usa o "
+              "endereço oficial e deixa de fora a chave de mentira que ia junto",
+              str(t)[:160])
+        check(any("ANTHROPIC_BASE_URL" in x for x in t.get("avisos", [])),
+              "e diz o que contornou", str(t.get("avisos"))[:160])
+        cfgdir = tmp / "config do claude"
+        cfgdir.mkdir()
+        (cfgdir / "settings.json").write_text(json.dumps(
+            {"env": {"ANTHROPIC_BASE_URL": f"http://localhost:{morto}"}}), encoding="utf-8")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        try:
+            t = http("POST", "/api/claude/testar", {}, base=base)
+            a = json.loads(registro.read_text(encoding="utf-8"))
+        finally:
+            os.environ.pop("CLAUDE_CONFIG_DIR")
+        check(t["ok"] and a["base"] == "https://api.anthropic.com"
+              and any("settings.json" in x for x in t.get("avisos", [])),
+              "o mesmo quando o endereço morto está no settings.json do Claude Code "
+              "(sem mexer no arquivo dele)", str(t)[:160])
+        check(json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))["env"]
+              ["ANTHROPIC_BASE_URL"].endswith(str(morto)),
+              "o settings.json dele fica intacto")
+        vivo = socket.socket()
+        vivo.bind(("127.0.0.1", 0))
+        vivo.listen(1)
+        os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{vivo.getsockname()[1]}"
+        try:
+            env_vivo, sob_vivo, _av = C.ambiente()
+        finally:
+            os.environ.pop("ANTHROPIC_BASE_URL")
+            vivo.close()
+        check(not sob_vivo and env_vivo["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1"),
+              "um endereço que responde (proxy da empresa, gateway) fica como está")
+        msg = C._explicar("API Error: Connection refused — a firewall or proxy may be "
+                          "blocking it (ECONNREFUSED)", r"C:\x\claude.exe")
+        check("conexão recusada" in msg and ("antivírus" in msg),
+              "o 'Connection refused' que sobrar vira uma explicação com o que fazer", msg[:140])
 
         print("\n-- clique único com o Claude como editor")
         p = http("POST", "/api/projects", {"source_path": str(fonte), "name": "claude",

@@ -295,6 +295,113 @@ def _abrir(cmd: list[str], **kw) -> subprocess.Popen:
     return subprocess.Popen(_linha_do_cmd(cmd), **kw)
 
 
+# O AMBIENTE DO CLAUDE CODE. O app Claude, quando roda o Claude Code dele,
+# FORÇA o endereço oficial da Anthropic e ignora o que estiver no
+# settings.json ou nas variáveis do Windows. Rodando sozinho, o Claude Code
+# obedece a essas configurações — e um "roteador" de Claude instalado um dia
+# (ANTHROPIC_BASE_URL=http://localhost:8082, com uma chave de mentira junto)
+# que não está mais aberto dá "API Error: Connection refused (ECONNREFUSED)":
+# no app funciona, no Sharkcut não (visto na máquina dele). O Sharkcut faz o
+# mesmo que o app, mas SÓ quando a configuração aponta para onde nada
+# responde: um endereço vivo (um proxy da empresa, um gateway) fica como está.
+OFICIAL = "https://api.anthropic.com"
+_PROXIES = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+_CHAVES_DE_API = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+_vivos: dict[str, tuple[bool, float]] = {}
+
+
+def _settings_do_usuario() -> tuple[dict, Path]:
+    """O bloco "env" do settings.json do Claude Code desta conta do Windows."""
+    pasta = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    alvo = pasta / "settings.json"
+    try:
+        dados = json.loads(alvo.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}, alvo
+    env = dados.get("env") if isinstance(dados, dict) else None
+    return ({str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}), alvo
+
+
+def _vivo(url: str) -> bool:
+    """Alguém atende nesse endereço? (Só abre a conexão; não manda nada.)"""
+    import socket
+    from urllib.parse import urlparse
+
+    agora = time.time()
+    if url in _vivos and agora - _vivos[url][1] < 30:
+        return _vivos[url][0]
+    try:
+        u = urlparse(url if "://" in url else f"http://{url}")
+        porta = u.port or (443 if u.scheme == "https" else 80)
+        with socket.create_connection((u.hostname or "", porta), timeout=3):
+            ok = True
+    except (OSError, ValueError):
+        ok = False
+    _vivos[url] = (ok, agora)
+    return ok
+
+
+def ambiente() -> tuple[dict, dict, list[str]]:
+    """(as variáveis para o Claude Code, o que sobrepor no settings dele, avisos)."""
+    env = dict(os.environ)
+    do_settings, onde = _settings_do_usuario()
+    efetivo = {**env, **do_settings}           # no Claude Code, o settings ganha
+    sobrepor: dict[str, str] = {}
+    avisos: list[str] = []
+
+    def origem(var: str) -> str:
+        return f"no {onde}" if var in do_settings else "nas variáveis do Windows"
+
+    base = efetivo.get("ANTHROPIC_BASE_URL", "").strip()
+    if base and base.rstrip("/") != OFICIAL and not _vivo(base):
+        env["ANTHROPIC_BASE_URL"] = sobrepor["ANTHROPIC_BASE_URL"] = OFICIAL
+        avisos.append(f"o Claude Code estava configurado para falar com {base} "
+                      f"(ANTHROPIC_BASE_URL {origem('ANTHROPIC_BASE_URL')}), e lá nada "
+                      f"responde — usei o endereço oficial da Anthropic, como o app Claude faz")
+        # a chave que ia junto era do roteador morto: com ela, o oficial
+        # recusaria; sem ela, vale o login da assinatura
+        for var in _CHAVES_DE_API:
+            if efetivo.get(var):
+                env.pop(var, None)
+                sobrepor[var] = ""
+                avisos.append(f"deixei de fora o {var} que ia com esse endereço "
+                              "(vale o login da sua conta do Claude)")
+    for var in _PROXIES:
+        px = efetivo.get(var, "").strip()
+        if px and not _vivo(px):
+            env.pop(var, None)
+            sobrepor[var] = ""
+            avisos.append(f"o proxy {px} ({var} {origem(var)}) não responde — "
+                          "o Claude Code vai direto, sem ele")
+    return env, sobrepor, avisos
+
+
+def _arquivo_de_ajustes(pasta: Path, sobrepor: dict) -> list[str]:
+    """--settings com o que sobrepor (o settings.json do usuário fica intacto)."""
+    if not sobrepor:
+        return []
+    pasta.mkdir(parents=True, exist_ok=True)
+    alvo = pasta / "ajustes_do_sharkcut.json"
+    alvo.write_text(json.dumps({"env": sobrepor}, ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+    return ["--settings", str(alvo)]
+
+
+def _diagnostico_de_rede(caminho: str = "") -> str:
+    _e, _s, avisos = ambiente()
+    feito = (" Achei e contornei: " + "; ".join(avisos) + ".") if avisos else ""
+    if _vivo(OFICIAL):
+        return ("o Claude Code não conseguiu falar com a Anthropic (conexão recusada)." + feito
+                + " Este computador alcança a Anthropic, então quem barra é algo no caminho "
+                "do próprio Claude Code: o antivírus ou o firewall do Windows bloqueando "
+                + (f"o {caminho}" if caminho else "o claude.exe")
+                + " — libere ele e aperte testar. Se no app Claude a aba Code também der "
+                "erro, é o Claude Code desta versão; atualize o app.")
+    return ("o Claude Code não conseguiu falar com a Anthropic (conexão recusada)." + feito
+            + " E este computador não está alcançando api.anthropic.com: confira a "
+            "internet, a VPN e o antivírus.")
+
+
 def _texto(b: bytes) -> str:
     """Saída de processo em texto: UTF-8 (o Claude Code) ou a página de código
     do console (as mensagens do próprio Windows, que saíam "n�o �")."""
@@ -306,8 +413,9 @@ def _texto(b: bytes) -> str:
 
 def _rodar(args: list[str], timeout: float = 20.0,
            entrada: bytes | None = None) -> subprocess.CompletedProcess:
+    env, _s, _a = ambiente()
     p = _abrir(args, stdin=subprocess.PIPE if entrada is not None else subprocess.DEVNULL,
-               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     try:
         out, err = p.communicate(entrada, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -325,7 +433,7 @@ def estado(forcar: bool = False) -> dict:
     caminho = achar()
     info = {"instalado": False, "caminho": caminho, "versao": "", "origem": _origem(caminho),
             "logado": None, "modelo": str(db.get_setting("claude_modelo", "") or ""),
-            "motivo": ""}
+            "motivo": "", "rede": ambiente()[2]}
     guardado = str(db.get_setting("claude_caminho", "") or "").strip().strip('"')
     if not caminho:
         info["motivo"] = ("não achei o Claude Code nesta máquina. Se você usa o app Claude, "
@@ -405,7 +513,7 @@ def entrar() -> dict:
     # próprio primeiro uso pede o login
     subprocess.Popen([*base, *(["auth", "login"] if tem_auth else [])],
                      creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-                     close_fds=True)
+                     close_fds=True, env=ambiente()[0])
     _cache.pop("estado", None)
     return {"ok": True, "janela": True}
 
@@ -809,7 +917,10 @@ def _conduzir(pid, ctx, project, pasta: Path, chave: str, est: dict, modelo, ret
     cfg = config_mcp(pasta, chave)
     modelo = modelo if modelo is not None else str(db.get_setting("claude_modelo", "") or "")
     cmd = comando(est["caminho"], cfg, modelo, modo)
-    env = dict(os.environ)
+    env, sobrepor, avisos = ambiente()
+    cmd += _arquivo_de_ajustes(pasta, sobrepor)
+    if avisos:
+        saida["avisos"] = avisos
     env.setdefault("MCP_TIMEOUT", "60000")
     env.setdefault("MCP_TOOL_TIMEOUT", "900000")
     env["PYTHONIOENCODING"] = "utf-8"
@@ -950,14 +1061,21 @@ def _conduzir(pid, ctx, project, pasta: Path, chave: str, est: dict, modelo, ret
         if time.time() - t0 > TETO_MINUTOS * 60 - 2:
             detalhe = f"passou de {TETO_MINUTOS} min e foi interrompido"
         saida["erro"] = saida["erro"] or _explicar(detalhe or erro or
-                                                   f"o Claude Code saiu com código {proc.returncode}")
+                                                   f"o Claude Code saiu com código {proc.returncode}",
+                                                   est["caminho"])
         # o que ele já tinha feito continua no projeto
         saida["relatorio"] = ultimo_texto[:2000]
     return _gravar(pid, saida, t0)
 
 
-def _explicar(bruto: str) -> str:
+_SEM_REDE = ("econnrefused", "connection refused", "connectionrefused", "unable to connect",
+             "etimedout", "enotfound", "fetch failed", "connection error", "econnreset")
+
+
+def _explicar(bruto: str, caminho: str = "") -> str:
     b = bruto.lower()
+    if any(x in b for x in _SEM_REDE):
+        return _diagnostico_de_rede(caminho)
     if "login" in b or "not logged" in b or "authenticat" in b or "401" in b:
         return ("falta o login do Claude Code na sua conta do Claude: na primeira "
                 "tela, aperte \"entrar na conta\" (abre o navegador, uma vez só)")
@@ -977,6 +1095,7 @@ def _gravar(pid: str, saida: dict, t0: float) -> dict:
             "ok": saida["ok"], "modo": saida.get("modo", "completo"), "relatorio": saida.get("relatorio", ""),
             "erro": saida.get("erro", ""), "ferramentas": saida.get("ferramentas", 0),
             "passos": saida.get("passos", [])[-30:], "segundos": saida["segundos"],
+            "avisos": saida.get("avisos", []),
             "quando": time.time()}
         p.save_analysis()
     except Exception:  # noqa: BLE001 — o relatório não pode derrubar a edição
@@ -995,10 +1114,15 @@ def testar(modelo: str = "") -> dict:
         cmd += ["--tools", ""]
     if modelo and modelo in MODELOS:
         cmd += ["--model", modelo]
+    _env, sobrepor, avisos = ambiente()
+    cmd += _arquivo_de_ajustes(DATA_DIR / "claude", sobrepor)
     try:
         r = _rodar(cmd, timeout=120)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "motivo": "o Claude Code não respondeu em 2 minutos"}
+        motivo = "o Claude Code não respondeu em 2 minutos"
+        if not _vivo(OFICIAL):
+            motivo += " — " + _diagnostico_de_rede(est["caminho"])
+        return {"ok": False, "motivo": motivo}
     except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "motivo": str(exc)[:200]}
     try:
@@ -1006,7 +1130,7 @@ def testar(modelo: str = "") -> dict:
     except ValueError:
         dados = {}
     if r.returncode == 0 and not dados.get("is_error"):
-        return {"ok": True, "versao": est["versao"],
+        return {"ok": True, "versao": est["versao"], "avisos": avisos,
                 "resposta": str(dados.get("result") or "")[:80]}
     return {"ok": False, "motivo": _explicar(str(dados.get("result") or "")
-                                             or r.stderr or r.stdout)}
+                                             or r.stderr or r.stdout, est["caminho"])}

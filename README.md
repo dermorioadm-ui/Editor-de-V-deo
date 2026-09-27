@@ -1591,6 +1591,18 @@ conta, aperte **entrar na conta**: abre o navegador na página do Claude, você
 entra com a mesma conta do app, e a tela percebe sozinha quando terminou. O
 botão **testar o Claude** confere tudo.
 
+**"API Error: Connection refused (ECONNREFUSED)"** com o Claude funcionando no
+app: quase sempre é um endereço ou proxy configurado no Claude Code — um
+`ANTHROPIC_BASE_URL` no `settings.json` dele ou nas variáveis do Windows,
+deixado por um "roteador" de Claude que não está mais aberto. O app Claude
+ignora essas configurações; o Claude Code rodando sozinho obedece. O Sharkcut
+faz como o app, mas só quando o endereço configurado não responde: usa o
+endereço oficial da Anthropic, deixa de fora a chave de mentira que ia junto e
+pula o proxy morto — sem mexer no `settings.json` (vai um `--settings` só para
+aquela execução). A primeira tela mostra o que foi contornado. Se ainda assim
+a conexão for recusada, a mensagem diz se este computador alcança a Anthropic
+(então é antivírus ou firewall barrando o `claude.exe`) ou não (internet, VPN).
+
 O Sharkcut nunca roda o `Claude.exe` que o app põe no PATH
 (`WindowsApps\Claude.exe`): esse abre a janela do app, não responde. E se o
 Claude Code instalado pelo npm estiver quebrado (o programa dele faltando, ou

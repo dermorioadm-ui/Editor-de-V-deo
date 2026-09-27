@@ -229,7 +229,8 @@ export default function Home() {
     try {
       if (claudeCaminho.trim()) setClaude(await api.claudeConfig({ caminho: claudeCaminho.trim() }))
       const r = await api.claudeTestar()
-      if (r.ok) toast('ok', 'O Claude Code respondeu', `${r.versao} — pronto para editar`)
+      if (r.ok) toast('ok', 'O Claude Code respondeu', `${r.versao} — pronto para editar`
+        + (r.avisos?.length ? `. Contornei: ${r.avisos.join('; ')}` : ''))
       else toast('warn', 'O Claude Code não respondeu', r.motivo)
       setClaude(await api.claudeEstado(true))
     } catch (e: any) {
@@ -519,6 +520,10 @@ export default function Home() {
           </div>
           {editorDaVez === 'claude' && (
             <div className="space-y-2">
+              {(claude?.rede ?? []).map((a: string) => (
+                <p key={a} className="text-[10px] text-slate-400 leading-snug" data-rede-claude="1">
+                  ↳ {a}</p>
+              ))}
               {claude?.instalado && claude.logado !== false ? (
                 <p className="text-[11px] text-emerald-300">
                   ✓ Claude Code {claude.versao}

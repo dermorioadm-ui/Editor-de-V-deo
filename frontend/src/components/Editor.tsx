@@ -72,7 +72,7 @@ function FaixaDoClaude({ projectId, edicao, onVerPos }: {
         </span>
         <span className="text-slate-400 truncate">
           {rodando ? (activeJob?.message ?? '')
-            : falhou ? `${edicao.erro} — o vídeo saiu pela regra do programa.`
+            : falhou ? 'o vídeo saiu pela regra do programa. O motivo:'
             : edicao ? `${edicao.ferramentas} passos em ${Math.round(edicao.segundos)} s · o Gemini ficou fora`
             : 'o Gemini não decide nada aqui'}
         </span>
@@ -91,6 +91,13 @@ function FaixaDoClaude({ projectId, edicao, onVerPos }: {
         )}
         <button className="btn btn-xs ml-auto" onClick={onVerPos}>ver a pós</button>
       </div>
+      {/* o motivo inteiro, sem cortar: ele diz o que fazer */}
+      {falhou && !rodando && (
+        <p className="text-[11px] text-amber-100/90 leading-snug" data-erro-claude="1">{edicao.erro}</p>
+      )}
+      {!rodando && (edicao?.avisos ?? []).map((a: string) => (
+        <p key={a} className="text-[11px] text-slate-400 leading-snug" data-aviso-claude="1">↳ {a}</p>
+      ))}
       {aberto && edicao?.relatorio && (
         <pre className="whitespace-pre-wrap text-[11px] text-slate-300 font-sans max-h-48 overflow-auto"
              data-relatorio-claude="1">{edicao.relatorio}</pre>
