@@ -761,13 +761,13 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     cenas_seg = CN.no_trecho(getattr(plan, "cenas", None) or [], seg.t_start, seg.nominal)
     if cenas_seg:
         mascara_cena = None
+        parte_mascara = ""
         tem_recorte = bool(recorte and recorte.get("path") and recorte.get("tem_pessoa", True))
         if tem_recorte and any(getattr(c, "tipo", "") == "vidro3d" for c in cenas_seg):
-            graph_parts.append(f"[§MASCARA§:v]format=gray,settb=AVTB,"
-                               f"setpts='floor(N/({fps:.6f}*TB))',"
-                               f"scale={width}:{height}:flags=bilinear[__mcn]")
+            parte_mascara = (f"[§MASCARA§:v]format=gray,settb=AVTB,"
+                             f"setpts='floor(N/({fps:.6f}*TB))',"
+                             f"scale={width}:{height}:flags=bilinear[__mcn]")
             mascara_cena = "__mcn"
-            mascara = str(recorte["path"])
         elif any(getattr(c, "tipo", "") == "vidro3d" for c in cenas_seg):
             aviso = ("as camadas de vidro saíram sem a pessoa separada: falta o recorte "
                      "(baixe o modelo na aba Pós)")
@@ -783,6 +783,14 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                             max(1, int(round(seg.nominal * fps))), seg.t_start,
                             plan.export.pix_fmt, kit, centro, mascara_cena, img,
                             ass_dir.parent / "cenas", logos_de)
+        # A MÁSCARA SÓ ENTRA SE A CENA A USA. Uma cena de vidro que encosta no
+        # trecho por menos de 2 quadros (termina colada numa emenda) é
+        # descartada pelo CN.grafo; a máscara já preparada ficava sem ninguém
+        # na ponta e o ffmpeg recusava o trecho inteiro ("Filter 'scale' has
+        # output 0 (__mcn) unconnected") — a exportação parava ali.
+        if parte_mascara and f"[{mascara_cena}]" in cn_graph:
+            graph_parts.append(parte_mascara)
+            mascara = str(recorte["path"])
         if cn_graph:
             graph_parts.append(cn_graph)
             cur_tag = "__vcn"

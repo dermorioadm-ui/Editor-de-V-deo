@@ -356,6 +356,7 @@ def main() -> int:
     testar_marca_logos_cenas()
     testar_voz_de_estudio_trilha_constante_e_broll_fixo()
     testar_graficos_de_dados_e_sem_cartao_solido()
+    testar_cena_de_vidro_colada_na_emenda()
 
     print()
     if FALHAS:
@@ -8567,6 +8568,66 @@ def testar_graficos_de_dados_e_sem_cartao_solido() -> None:
         skill = Path("habilidades/sharkcut-motion/SKILL.md").read_text(encoding="utf-8")
         check("tipo=barras" in skill and "cartão sólido" in skill,
               "e a habilidade de motion ensina a usá-los e proíbe cartão sólido")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_cena_de_vidro_colada_na_emenda() -> None:
+    """O erro que parou a exportação dele: "Filter 'scale:default' has output
+    0 (__mcn) unconnected — Invalid argument".
+
+    Uma cena de camadas de vidro que termina 1 quadro DEPOIS de uma emenda
+    toca o trecho seguinte por menos de 2 quadros. O gerador de cenas a
+    descarta ali (não há o que animar em 1 quadro), mas o renderizador já
+    tinha preparado o recorte da pessoa para ela — e o ffmpeg recusa uma
+    saída de filtro sem ninguém na ponta. Com o recorte presente (é o caso de
+    quem baixou o modelo), o trecho inteiro falhava.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Cena, Clip, EditPlan
+    from editor.render.renderer import _build_video_command, plan_segments
+
+    tmp = Path(tempfile.mkdtemp(prefix="mcn_"))
+    try:
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=s=320x180:r=30:d=4", "-c:v", "libx264", "-preset",
+                        "ultrafast", "-pix_fmt", "yuv420p", str(fonte)], check=True)
+        mascara = tmp / "mascara.mkv"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=white:s=160x90:r=30:d=2.2", "-c:v", "ffv1",
+                        "-pix_fmt", "gray", str(mascara)], check=True)
+        info = probe(fonte)
+        fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+        recorte = {"path": str(mascara), "tem_pessoa": True, "centro": (0.5, 0.5)}
+        for fim, nome in ((2.03, "1 quadro depois da emenda"),
+                          (2.0, "exatamente na emenda"),
+                          (3.2, "atravessando a emenda")):
+            p = EditPlan()
+            p.export = ExportParams(scale="source", burn_subtitles=False,
+                                    preset="ultrafast", crf=30)
+            p.clips = [Clip(src_start=0, src_end=2), Clip(src_start=2, src_end=4)]
+            p.cenas = [Cena(tipo="vidro3d", out_start=0.8, out_end=fim)]
+            segs = plan_segments(p, Timeline(p.active_clips, 30.0), fontes, info)
+            falhas = []
+            for s in segs:
+                args, _ = _build_video_command(s, p, info, [], tmp / "ass",
+                                               {"main": str(fonte)}, None,
+                                               recorte=recorte)
+                r = subprocess.run([*args, str(tmp / f"s{s.index}.mp4")],
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    falhas.append(f"trecho {s.index}: "
+                                  + (r.stderr.strip().splitlines() or [""])[-1][:120])
+            check(not falhas,
+                  f"cena de vidro terminando {nome}: todos os trechos encodam "
+                  f"({falhas or 'ok'})")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
