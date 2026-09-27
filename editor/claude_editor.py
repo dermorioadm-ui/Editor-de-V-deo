@@ -341,12 +341,34 @@ def _vivo(url: str) -> bool:
     return ok
 
 
-def ambiente() -> tuple[dict, dict, list[str]]:
-    """(as variáveis para o Claude Code, o que sobrepor no settings dele, avisos)."""
+class Ambiente:
+    """Como rodar o Claude Code: as variáveis, e o que fazer com o settings.json."""
+
+    def __init__(self, env: dict, sobrepor: dict, pular_usuario: bool, avisos: list[str]):
+        self.env, self.sobrepor = env, sobrepor
+        self.pular_usuario, self.avisos = pular_usuario, avisos
+
+    def args(self, caminho: str, pasta: Path | None = None) -> list[str]:
+        """Opções de linha de comando (vão ANTES de um subcomando como auth).
+
+        Com o settings.json do usuário quebrado, ele não é lido nesta execução
+        (--setting-sources sem "user") — o que o app Claude faz, na prática — e
+        o que lá estava de bom já entrou nas variáveis. Medido com o Claude Code
+        de verdade: com --setting-sources project,local o env do settings.json
+        do usuário some; com --settings ele só é sobreposto por "".
+        """
+        if self.pular_usuario and "--setting-sources" in _ajuda(caminho):
+            return ["--setting-sources", "project,local"]
+        return _arquivo_de_ajustes(pasta or (DATA_DIR / "claude"), self.sobrepor)
+
+
+def ambiente() -> Ambiente:
+    """O ambiente do Claude Code para esta máquina (ver o comentário acima)."""
     env = dict(os.environ)
     do_settings, onde = _settings_do_usuario()
     efetivo = {**env, **do_settings}           # no Claude Code, o settings ganha
     sobrepor: dict[str, str] = {}
+    fora: set[str] = set()                     # o que não vai, de onde vier
     avisos: list[str] = []
 
     def origem(var: str) -> str:
@@ -354,14 +376,16 @@ def ambiente() -> tuple[dict, dict, list[str]]:
 
     base = efetivo.get("ANTHROPIC_BASE_URL", "").strip()
     if base and base.rstrip("/") != OFICIAL and not _vivo(base):
+        fora.add("ANTHROPIC_BASE_URL")
         env["ANTHROPIC_BASE_URL"] = sobrepor["ANTHROPIC_BASE_URL"] = OFICIAL
         avisos.append(f"o Claude Code estava configurado para falar com {base} "
                       f"(ANTHROPIC_BASE_URL {origem('ANTHROPIC_BASE_URL')}), e lá nada "
                       f"responde — usei o endereço oficial da Anthropic, como o app Claude faz")
         # a chave que ia junto era do roteador morto: com ela, o oficial
-        # recusaria; sem ela, vale o login da assinatura
+        # recusaria; sem ela, vale o login da sua conta do Claude
         for var in _CHAVES_DE_API:
             if efetivo.get(var):
+                fora.add(var)
                 env.pop(var, None)
                 sobrepor[var] = ""
                 avisos.append(f"deixei de fora o {var} que ia com esse endereço "
@@ -369,11 +393,18 @@ def ambiente() -> tuple[dict, dict, list[str]]:
     for var in _PROXIES:
         px = efetivo.get(var, "").strip()
         if px and not _vivo(px):
+            fora.add(var)
             env.pop(var, None)
             sobrepor[var] = ""
             avisos.append(f"o proxy {px} ({var} {origem(var)}) não responde — "
                           "o Claude Code vai direto, sem ele")
-    return env, sobrepor, avisos
+    pular = bool(fora & set(do_settings))
+    if pular:
+        # o settings.json não será lido: o que ele tinha de bom vai pelas variáveis
+        for k, v in do_settings.items():
+            if k not in fora:
+                env[k] = v
+    return Ambiente(env, sobrepor, pular, avisos)
 
 
 def _arquivo_de_ajustes(pasta: Path, sobrepor: dict) -> list[str]:
@@ -388,7 +419,7 @@ def _arquivo_de_ajustes(pasta: Path, sobrepor: dict) -> list[str]:
 
 
 def _diagnostico_de_rede(caminho: str = "") -> str:
-    _e, _s, avisos = ambiente()
+    avisos = ambiente().avisos
     feito = (" Achei e contornei: " + "; ".join(avisos) + ".") if avisos else ""
     if _vivo(OFICIAL):
         return ("o Claude Code não conseguiu falar com a Anthropic (conexão recusada)." + feito
@@ -413,9 +444,8 @@ def _texto(b: bytes) -> str:
 
 def _rodar(args: list[str], timeout: float = 20.0,
            entrada: bytes | None = None) -> subprocess.CompletedProcess:
-    env, _s, _a = ambiente()
     p = _abrir(args, stdin=subprocess.PIPE if entrada is not None else subprocess.DEVNULL,
-               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ambiente().env)
     try:
         out, err = p.communicate(entrada, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -433,7 +463,7 @@ def estado(forcar: bool = False) -> dict:
     caminho = achar()
     info = {"instalado": False, "caminho": caminho, "versao": "", "origem": _origem(caminho),
             "logado": None, "modelo": str(db.get_setting("claude_modelo", "") or ""),
-            "motivo": "", "rede": ambiente()[2]}
+            "motivo": "", "rede": ambiente().avisos}
     guardado = str(db.get_setting("claude_caminho", "") or "").strip().strip('"')
     if not caminho:
         info["motivo"] = ("não achei o Claude Code nesta máquina. Se você usa o app Claude, "
@@ -484,7 +514,9 @@ def _logado(caminho: str) -> bool | None:
     if not re.search(r"^\s+auth\b", _ajuda(caminho), re.M):
         return None
     try:
-        r = _rodar([caminho, "auth", "status", "--json"])
+        # com as mesmas opções da edição: se o settings.json dele não vai ser
+        # lido, a chave do roteador que mora lá também não conta como login
+        r = _rodar([caminho, *ambiente().args(caminho), "auth", "status", "--json"])
         dados = json.loads(r.stdout.strip() or "{}")
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -506,14 +538,16 @@ def entrar() -> dict:
         return {"ok": False, "motivo": "o Claude Code daqui só roda pelo atalho do npm, "
                                        "que não abre uma janela de login"}
     tem_auth = bool(re.search(r"^\s+auth\b", _ajuda(est["caminho"]), re.M))
+    amb = ambiente()
+    opcoes = [*amb.args(est["caminho"]), *(["auth", "login"] if tem_auth else [])]
     if not EH_WINDOWS:
-        comando = subprocess.list2cmdline([est["caminho"], *(["auth", "login"] if tem_auth else [])])
+        comando = subprocess.list2cmdline([est["caminho"], *opcoes])
         return {"ok": False, "motivo": f"abra o Terminal e rode: {comando}"}
     # sem "auth login" (versão velha), abre o Claude Code na janela e o
     # próprio primeiro uso pede o login
-    subprocess.Popen([*base, *(["auth", "login"] if tem_auth else [])],
+    subprocess.Popen([*base, *opcoes],
                      creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-                     close_fds=True, env=ambiente()[0])
+                     close_fds=True, env=amb.env)
     _cache.pop("estado", None)
     return {"ok": True, "janela": True}
 
@@ -917,10 +951,11 @@ def _conduzir(pid, ctx, project, pasta: Path, chave: str, est: dict, modelo, ret
     cfg = config_mcp(pasta, chave)
     modelo = modelo if modelo is not None else str(db.get_setting("claude_modelo", "") or "")
     cmd = comando(est["caminho"], cfg, modelo, modo)
-    env, sobrepor, avisos = ambiente()
-    cmd += _arquivo_de_ajustes(pasta, sobrepor)
-    if avisos:
-        saida["avisos"] = avisos
+    amb = ambiente()
+    env = amb.env
+    cmd += amb.args(est["caminho"], pasta)
+    if amb.avisos:
+        saida["avisos"] = amb.avisos
     env.setdefault("MCP_TIMEOUT", "60000")
     env.setdefault("MCP_TOOL_TIMEOUT", "900000")
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1114,8 +1149,9 @@ def testar(modelo: str = "") -> dict:
         cmd += ["--tools", ""]
     if modelo and modelo in MODELOS:
         cmd += ["--model", modelo]
-    _env, sobrepor, avisos = ambiente()
-    cmd += _arquivo_de_ajustes(DATA_DIR / "claude", sobrepor)
+    amb = ambiente()
+    avisos = amb.avisos
+    cmd += amb.args(est["caminho"])
     try:
         r = _rodar(cmd, timeout=120)
     except subprocess.TimeoutExpired:

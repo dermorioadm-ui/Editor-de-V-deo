@@ -66,12 +66,9 @@ if "--help" in args:
     print("  --tools <tools...>  Use \"\" to disable all tools\n"
           "  --permission-mode <mode>  (choices: \"acceptEdits\", \"dontAsk\")\n"
           "  --disallowedTools <tools...>\n"
+          "  --setting-sources <sources>  Comma-separated list of setting sources\n"
           "Commands:\n"
           "  auth                                  Manage authentication")
-    sys.exit(0)
-if args[:2] == ["auth", "status"]:
-    print(json.dumps({"loggedIn": os.environ.get("CLAUDE_FALSO_LOGADO", "sim") == "sim",
-                      "authMethod": "claude.ai"}, indent=2))
     sys.exit(0)
 modo = os.environ.get("CLAUDE_FALSO_MODO", "ok")
 prompt = sys.stdin.read()
@@ -82,16 +79,26 @@ def emit(o):
 # como o Claude Code: o env do settings.json do usuário vale sobre o do
 # Windows, e o do --settings vale sobre os dois
 efetivo = dict(os.environ)
-try:
-    cfgdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    efetivo.update(json.load(open(os.path.join(cfgdir, "settings.json"), encoding="utf-8")).get("env", {}))
-except (OSError, ValueError):
-    pass
+fontes = args[args.index("--setting-sources") + 1].split(",") if "--setting-sources" in args else ["user"]
+if "user" in fontes:
+    try:
+        cfgdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        efetivo.update(json.load(open(os.path.join(cfgdir, "settings.json"), encoding="utf-8")).get("env", {}))
+    except (OSError, ValueError):
+        pass
 if "--settings" in args:
     efetivo.update(json.load(open(args[args.index("--settings") + 1], encoding="utf-8")).get("env", {}))
+# logado: por uma chave no ambiente (a do roteador, inclusive) ou pelo login da conta
+logado = bool(efetivo.get("ANTHROPIC_API_KEY") or efetivo.get("ANTHROPIC_AUTH_TOKEN")) \
+    or os.environ.get("CLAUDE_FALSO_LOGADO", "sim") == "sim"
+if "auth" in args and args[args.index("auth") + 1:args.index("auth") + 2] == ["status"]:
+    print(json.dumps({"loggedIn": logado, "authMethod": "claude.ai"}, indent=2))
+    sys.exit(0)
 json.dump({"argv": args, "prompt": prompt, "cwd": os.getcwd(),
            "base": efetivo.get("ANTHROPIC_BASE_URL", ""),
-           "token": efetivo.get("ANTHROPIC_AUTH_TOKEN", "")},
+           "token": efetivo.get("ANTHROPIC_AUTH_TOKEN", ""),
+           "chave": efetivo.get("ANTHROPIC_API_KEY", ""),
+           "outra": efetivo.get("SHARKCUT_OUTRA", "")},
           open(os.environ["CLAUDE_FALSO_LOG"], "w", encoding="utf-8"))
 base = efetivo.get("ANTHROPIC_BASE_URL", "")
 if base and base.rstrip("/") != "https://api.anthropic.com":
@@ -104,6 +111,10 @@ if base and base.rstrip("/") != "https://api.anthropic.com":
               "result": "API Error: Connection refused — a firewall or proxy may be "
                         "blocking it (ECONNREFUSED)"})
         sys.exit(1)
+if not logado:
+    emit({"type": "result", "subtype": "success", "is_error": True,
+          "result": "Invalid API key · Please run /login"})
+    sys.exit(1)
 if "--mcp-config" not in args:          # o "testar o Claude": só responde
     emit({"type": "result", "subtype": "success", "is_error": False, "result": "OK"})
     sys.exit(0)
@@ -531,9 +542,11 @@ def main() -> int:
         finally:
             os.environ.pop("CLAUDE_CONFIG_DIR")
         check(t["ok"] and a["base"] == "https://api.anthropic.com"
+              and "--setting-sources" in a["argv"]
               and any("settings.json" in x for x in t.get("avisos", [])),
-              "o mesmo quando o endereço morto está no settings.json do Claude Code "
-              "(sem mexer no arquivo dele)", str(t)[:160])
+              "o mesmo quando o endereço morto está no settings.json do Claude Code: "
+              "nesta execução o settings.json dele não é lido (sem mexer no arquivo)",
+              str(t)[:160])
         check(json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))["env"]
               ["ANTHROPIC_BASE_URL"].endswith(str(morto)),
               "o settings.json dele fica intacto")
@@ -542,12 +555,42 @@ def main() -> int:
         vivo.listen(1)
         os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{vivo.getsockname()[1]}"
         try:
-            env_vivo, sob_vivo, _av = C.ambiente()
+            amb = C.ambiente()
         finally:
             os.environ.pop("ANTHROPIC_BASE_URL")
             vivo.close()
-        check(not sob_vivo and env_vivo["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1"),
+        check(not amb.sobrepor and not amb.pular_usuario
+              and amb.env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1"),
               "um endereço que responde (proxy da empresa, gateway) fica como está")
+        print("\n-- a máquina dele: roteador morto no settings.json, com as duas chaves, sem login próprio")
+        (cfgdir / "settings.json").write_text(json.dumps({"env": {
+            "ANTHROPIC_BASE_URL": f"http://localhost:{morto}", "ANTHROPIC_API_KEY": "sk-roteador",
+            "ANTHROPIC_AUTH_TOKEN": "roteador", "SHARKCUT_OUTRA": "fica"}}), encoding="utf-8")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+        os.environ["CLAUDE_FALSO_LOGADO"] = "nao"
+        try:
+            e = http("GET", "/api/claude/estado?forcar=true", base=base)
+            entrar = http("POST", "/api/claude/entrar", {}, base=base)
+            os.environ["CLAUDE_FALSO_LOGADO"] = "sim"       # ... e ele entrou na conta
+            e2 = http("GET", "/api/claude/estado?forcar=true", base=base)
+            t = http("POST", "/api/claude/testar", {}, base=base)
+            a = json.loads(registro.read_text(encoding="utf-8"))
+        finally:
+            os.environ.pop("CLAUDE_CONFIG_DIR")
+            os.environ.pop("CLAUDE_FALSO_LOGADO")
+        check(e["instalado"] and e["logado"] is False and "entrar na conta" in e["motivo"]
+              and len(e["rede"]) == 3,
+              "a chave do roteador no settings.json não passa por login: a tela pede "
+              "'entrar na conta' (antes ela dizia que estava tudo certo e o teste falhava)",
+              f"{e['logado']} {e['motivo'][:80]}")
+        check("--setting-sources" in entrar.get("motivo", "") and "auth login" in entrar.get("motivo", "")
+              if os.name != "nt" else entrar["ok"],
+              "o login também roda sem o settings.json quebrado", str(entrar)[:160])
+        check(e2["logado"] is True and t["ok"] and a["base"] == "https://api.anthropic.com"
+              and not a["token"] and not a["chave"] and a["outra"] == "fica",
+              "depois do login: endereço oficial, sem as chaves do roteador, e o resto do "
+              "settings.json dele continua valendo", str(a)[:200])
+
         msg = C._explicar("API Error: Connection refused — a firewall or proxy may be "
                           "blocking it (ECONNREFUSED)", r"C:\x\claude.exe")
         check("conexão recusada" in msg and ("antivírus" in msg),

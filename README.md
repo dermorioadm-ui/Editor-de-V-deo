@@ -1598,8 +1598,12 @@ deixado por um "roteador" de Claude que não está mais aberto. O app Claude
 ignora essas configurações; o Claude Code rodando sozinho obedece. O Sharkcut
 faz como o app, mas só quando o endereço configurado não responde: usa o
 endereço oficial da Anthropic, deixa de fora a chave de mentira que ia junto e
-pula o proxy morto — sem mexer no `settings.json` (vai um `--settings` só para
-aquela execução). A primeira tela mostra o que foi contornado. Se ainda assim
+pula o proxy morto — sem mexer no `settings.json`: naquela execução ele
+simplesmente não é lido (`--setting-sources project,local`), e o que ele tinha
+de bom vai pelas variáveis. A primeira tela mostra o que foi contornado. Sem as
+chaves do roteador, o Claude Code precisa do login da SUA conta — o do app
+Claude não passa para fora dele —: a primeira tela mostra **entrar na conta**,
+uma vez só. Se ainda assim
 a conexão for recusada, a mensagem diz se este computador alcança a Anthropic
 (então é antivírus ou firewall barrando o `claude.exe`) ou não (internet, VPN).
 
