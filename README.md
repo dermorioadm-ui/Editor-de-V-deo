@@ -1808,6 +1808,28 @@ saem do outro lado. Tudo renderiza no Blender desta máquina (nada vai para a
 internet) — alguns minutos por objeto; o vídeo continua editável enquanto
 isso, e o resultado fica guardado.
 
+### Logos 3D no gancho (Airbnb, Booking…), passando por trás de você
+
+Ponha o PNG do logo na biblioteca (aba **Pós → pôr logo**; os logos de
+plataforma não vêm com o programa — são marcas dos outros). Na primeira tela,
+abaixo do **gancho**, escolha até 2 logos em **logos 3D no gancho** (vêm
+marcados os de plataforma). Em todo vídeo com gancho, cada logo:
+
+- vira uma **peça 3D de verdade** no Blender desta máquina — o contorno de
+  cada cor do PNG é extrudado (a cor dominante é o corpo, as outras saltam
+  em relevo; os buracos ficam no lugar), com brilho de acrílico;
+- **nasce atrás de você**, sai para o lado (um à esquerda, outro à direita),
+  fica **flutuando** (balança e respira, nunca dá a volta) e **volta para
+  trás de você** no fim do gancho.
+
+"Atrás" usa o recorte da pessoa (o mesmo do texto atrás — baixe o modelo na
+aba Pós). Sem o recorte, os logos entram pelas bordas, na frente, e somem com
+um fade — nunca passam pelo rosto. O render de cada logo é feito UMA vez e
+fica guardado: do segundo vídeo em diante, entra na hora. O logo da marca sai
+de cena durante o gancho (nunca logo de plataforma ao lado da marca). Fora do
+gancho, o Claude/Codex pode usar o mesmo efeito quando a fala é sobre a
+plataforma (`arte_3d acao=logo`).
+
 ### A marca, os logos e as cenas
 
 **Kit de marca.** A pós-edição sai na identidade da marca do vídeo. O Sharkcut

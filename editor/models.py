@@ -204,6 +204,9 @@ class Overlay:
     effects: list = field(default_factory=list)
     enabled: bool = True
     origem: str = ""                # arte gerada localmente, preserva autoria
+    # CAMADA: "" = na frente de tudo (o de sempre); "atras" = entre o fundo e
+    # a pessoa — o logo 3D do gancho passa POR TRÁS dele (precisa do recorte)
+    camada: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -465,6 +468,9 @@ class EditPlan:
     # O NOME DO ARQUIVO que vai para a pasta (sem extensão), escolhido na
     # primeira tela — "" = o nome do projeto + "_editado", como sempre foi
     nome_arquivo: str = ""
+    # os logos (nomes da biblioteca) que entram em 3D no GANCHO, flutuando e
+    # passando por trás dele — "quero que sempre apareça nos hooks"
+    gancho_logos: list = field(default_factory=list)
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -516,6 +522,7 @@ class EditPlan:
             "marca": self.marca,
             "gancho": self.gancho,
             "nome_arquivo": self.nome_arquivo,
+            "gancho_logos": list(self.gancho_logos),
             "version": self.version,
         }
 
@@ -572,6 +579,8 @@ class EditPlan:
         plan.marca = str(data.get("marca") or "")[:40]
         plan.gancho = str(data.get("gancho") or "")[:160]
         plan.nome_arquivo = str(data.get("nome_arquivo") or "")[:120]
+        plan.gancho_logos = [str(x)[:40] for x in (data.get("gancho_logos") or [])
+                             if isinstance(x, str)][:4]
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]
         plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])

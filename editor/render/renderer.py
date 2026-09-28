@@ -671,7 +671,41 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                            getattr(plan, "cenas", None) or [])
     camadas_da_frente = ("frente", "atras")
     mascara = ""
-    if recorte and recorte.get("path") and recorte.get("tem_pessoa", True):
+    # AS SOBREPOSIÇÕES DO TRECHO, separadas em duas pilhas: as de camada
+    # "atras" (o logo 3D do gancho) entram no FUNDO, antes de a pessoa voltar
+    # por cima; o resto, na frente, como sempre. Sem o recorte da pessoa não
+    # há "atrás": tudo vai na frente (aparece, em vez de sumir).
+    ov_seg = F.overlay_inputs(plan.overlays, seg.t_start, seg.t_start + seg.nominal)
+    tem_pessoa = bool(recorte and recorte.get("path") and recorte.get("tem_pessoa", True))
+    ov_atras = [o for o in ov_seg if getattr(o, "camada", "") == "atras"] if tem_pessoa else []
+    ov_frente = [o for o in ov_seg if o not in ov_atras]
+    ov_atras_inputs: list[dict] = []
+    pasta_ov = ass_dir.parent / "sobrepor"
+    mascaras: dict[str, str] = {}
+    comandos: dict[str, str] = {}
+    # OS ARQUIVOS DA SOBREPOSIÇÃO, preparados antes de montar o grafo.
+    # Máscara: um PNG cinza no tamanho nativo da mídia, desenhado uma vez e
+    # reaproveitado pelo hash do conteúdo. Opacidade animada: um comando por
+    # quadro num arquivo de texto, porque o filtergraph viaja na linha de
+    # comando e no Windows ela para em 32767 caracteres.
+    for o in ov_seg:
+        caminho = media_paths.get(o.media_id)
+        if getattr(o, "mask", None) and caminho:
+            png = Msk.preparar(o.mask, caminho, pasta_ov)
+            if png:
+                mascaras[o.id] = png
+        kfs = getattr(o, "keyframes", None) or []
+        if A.tem_animacao(kfs, "opacity"):
+            ini, fim = F.janela_no_trecho(o, seg.t_start)
+            texto = A.texto_dos_comandos(
+                kfs, "opacity", seg.t_start + ini, fim - ini, fps,
+                "colorchannelmixer", "aa", repouso=o.opacity)
+            if texto:
+                pasta_ov.mkdir(parents=True, exist_ok=True)
+                alvo = pasta_ov / f"op_{seg.index:04d}_{o.id}.txt"
+                alvo.write_text(texto, encoding="utf-8")
+                comandos[o.id] = str(alvo)
+    if tem_pessoa:
         cam_seg = CM.no_trecho(getattr(plan, "camadas", None) or [],
                                seg.t_start, seg.nominal)
         atras = MG.no_trecho(graficos, seg.t_start, seg.nominal, ("atras",))
@@ -686,11 +720,26 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         atras = [g for g in atras if getattr(g, "tipo", "") != "logo" and ass_atras
                  or any(g is lg[0] for lg in logos_atras)]
         extra = None
-        if logos_atras:
+        if logos_atras or ov_atras:
             def extra(tin: str, tout: str, _l=logos_atras) -> str:
-                return LG.grafo(tin, tout, _l, width, height, seg.t_start, "__la")
+                partes, cur = [], tin
+                if _l:
+                    partes.append(LG.grafo(cur, "__lax", _l, width, height, seg.t_start, "__la"))
+                    cur = "__lax"
+                if ov_atras:
+                    g_oa, ins = F.overlay_chain(
+                        ov_atras, media_paths, seg.t_start, width, height,
+                        first_input_index=1, tag_in=cur, tag_out="__oax",
+                        ref_height=main.display_size[1], ref_width=main.display_size[0],
+                        mascaras=mascaras, comandos=comandos, prefixo="__oa")
+                    if g_oa:
+                        partes.append(g_oa)
+                        ov_atras_inputs[:] = ins
+                        cur = "__oax"
+                partes.append(f"[{cur}]null[{tout}]")
+                return ";".join(partes)
         cam_graph = CM.grafo(cur_tag, "__vc", "§MASCARA§", width, height, fps,
-                             seg.t_start, seg.nominal, cam_seg, ass_atras, atras,
+                             seg.t_start, seg.nominal, cam_seg, ass_atras, atras + ov_atras,
                              tuple(recorte.get("centro") or (0.5, 0.5)),
                              fontsdir=fontsdir, extra_fundo=extra)
         if cam_graph:
@@ -706,43 +755,19 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         graph_parts.append(blur_graph)
         cur_tag = "__vb"
 
-    overlays = F.overlay_inputs(plan.overlays, seg.t_start,
-                                seg.t_start + seg.nominal)
-    if overlays:
-        # OS ARQUIVOS DA SOBREPOSIÇÃO, preparados antes de montar o grafo.
-        # Máscara: um PNG cinza no tamanho nativo da mídia, desenhado uma vez e
-        # reaproveitado pelo hash do conteúdo. Opacidade animada: um comando por
-        # quadro num arquivo de texto, porque o filtergraph viaja na linha de
-        # comando e no Windows ela para em 32767 caracteres.
-        pasta_ov = ass_dir.parent / "sobrepor"
-        mascaras: dict[str, str] = {}
-        comandos: dict[str, str] = {}
-        for o in overlays:
-            caminho = media_paths.get(o.media_id)
-            if getattr(o, "mask", None) and caminho:
-                png = Msk.preparar(o.mask, caminho, pasta_ov)
-                if png:
-                    mascaras[o.id] = png
-            kfs = getattr(o, "keyframes", None) or []
-            if A.tem_animacao(kfs, "opacity"):
-                ini, fim = F.janela_no_trecho(o, seg.t_start)
-                texto = A.texto_dos_comandos(
-                    kfs, "opacity", seg.t_start + ini, fim - ini, fps,
-                    "colorchannelmixer", "aa", repouso=o.opacity)
-                if texto:
-                    pasta_ov.mkdir(parents=True, exist_ok=True)
-                    alvo = pasta_ov / f"op_{seg.index:04d}_{o.id}.txt"
-                    alvo.write_text(texto, encoding="utf-8")
-                    comandos[o.id] = str(alvo)
+    overlays = ov_frente
+    if ov_atras_inputs or overlays:
         ov_graph, ov_inputs = F.overlay_chain(
             overlays, media_paths, seg.t_start, width, height,
-            first_input_index=1, tag_in=cur_tag, tag_out="__vo",
+            first_input_index=1 + len(ov_atras_inputs), tag_in=cur_tag, tag_out="__vo",
             ref_height=main.display_size[1], ref_width=main.display_size[0],
             mascaras=mascaras, comandos=comandos)
         if ov_graph:
             graph_parts.append(ov_graph)
             cur_tag = "__vo"
-            for ent in ov_inputs:
+        # as entradas na ordem em que os grafos as numeraram: as de trás primeiro
+        if ov_atras_inputs or ov_graph:
+            for ent in ov_atras_inputs + (ov_inputs if ov_graph else []):
                 if ent["video"]:
                     # VÍDEO COMO JANELA: entra pelo ponto certo da mídia e só
                     # até o fim da janela; -an porque a fala principal
@@ -857,7 +882,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     args = [FFMPEG, "-y", "-v", "error", *pre,
             "-filter_complex", filtergraph, "-map", "[vout]"]
     args += encoder_args(plan.export, main, hw)
-    if overlays or mascara or imagens:
+    if ov_seg or mascara or imagens:
         # o overlay (framesync) repete o último quadro do principal enquanto a
         # entrada do PNG tiver quadros — sem esta trava, cada trecho com
         # sobreposição saía mais longo que o planejado e a soma inflava o vídeo
@@ -994,7 +1019,8 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
                  for c in CN.no_trecho(getattr(plan, "cenas", None) or [], t0, seg.nominal)]
     usa_recorte = bool(seg_camadas) or any(
         g.get("camada") == "atras" for g in seg_graficos) or any(
-        c.get("tipo") == "vidro3d" for c in seg_cenas)
+        c.get("tipo") == "vidro3d" for c in seg_cenas) or any(
+        o.get("camada") == "atras" for o in seg_overlays)
     positional = bool(seg_cues or seg_blurs or seg_overlays or seg_graficos
                       or seg_camadas or seg_cenas)
     # a MARCA e os arquivos dos logos: trocar a cor do kit ou o PNG de um
@@ -1093,6 +1119,10 @@ def _janelas_do_recorte(seg: VideoSegment, plan: EditPlan) -> list[tuple[float, 
                          seg.t_start, seg.nominal, ("atras",))
     vidros = CN.janelas_de_recorte(getattr(plan, "cenas", None) or [],
                                    seg.t_start, seg.nominal)
+    # as sobreposições que passam por trás dele (o logo 3D do gancho)
+    atras = list(atras) + [o for o in F.overlay_inputs(getattr(plan, "overlays", None) or [],
+                                                       seg.t_start, seg.t_start + seg.nominal)
+                           if getattr(o, "camada", "") == "atras"]
     if not cam and not atras and not vidros:
         return []
     brutas = sorted(CM.janelas(cam, atras, seg.t_start, seg.nominal) + vidros)

@@ -71,6 +71,11 @@ daqui.
   `grafico`; hóspede/viagem → `mala`. Modelado no Blender, cores da marca,
   monta peça por peça, 2–4 s, no lado livre (longe do rosto). Um por ideia;
   no máximo 2 ou 3 por vídeo. Espere o job terminar antes de conferir.
+- **Logo 3D de plataforma** (`arte_3d acao=logo`, logo=airbnb/booking…) — o
+  PNG da biblioteca vira peça 3D nas cores dele, sai de TRÁS da pessoa,
+  flutua ao lado e volta para trás. O GANCHO já leva os logos escolhidos na
+  primeira tela, sozinho — não repita. Fora do gancho, só quando a fala é
+  sobre a plataforma, e nunca junto do logo da marca.
 - **Transição 3D** (`arte_3d acao=transicao`, em= o instante da troca) —
   faixas da marca que tampam a tela na virada de assunto. 1 ou 2 por vídeo,
   só em troca de assunto de verdade.

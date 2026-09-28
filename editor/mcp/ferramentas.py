@@ -1667,13 +1667,18 @@ def gosto(c: Cliente, a: dict) -> str:
     "(crescimento, resultado), mala (hóspede, viagem). Use quando a FALA nomeia o conceito — "
     "ele ilustra o produto; não é enfeite. lado=esquerda|direita (o lado livre, longe do "
     "rosto) ou centro (tela cheia/moldura); duracao 2–4 s; animacao montar|surgir|flutuar. "
+    "acao=logo: um LOGO DA BIBLIOTECA (logo=nome, ex. airbnb, booking) vira peça 3D "
+    "extrudada nas cores dele, flutuando; atras=true (padrão) sai de trás da pessoa, "
+    "flutua ao lado e volta para trás — use quando a fala é SOBRE a plataforma, nunca "
+    "junto do logo da marca. O gancho já leva os logos escolhidos na primeira tela. "
     "acao=transicao: faixas 3D da marca que TAMPAM a tela no instante em= (a troca de "
     "assunto) — no máximo 1 ou 2 por vídeo. acao=criar: cena livre com primitivas "
     "(cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo cubo/esfera/"
     "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job: use consultar com job até "
     "ok/erro ANTES de revisar. Não executa scripts arbitrários.",
     {"properties":{"projeto":{"type":"string"},
-        "acao":{"type":"string","enum":["objeto","transicao","criar","consultar"]},
+        "acao":{"type":"string","enum":["objeto","logo","transicao","criar","consultar"]},
+        "logo":{"type":"string"},"atras":{"type":"boolean"},
         "job":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},
         "objeto":{"type":"string","enum":["casa","predio","chave","cadeado","escudo","documento",
                                           "celular","calendario","check","estrela","grafico","mala"]},
@@ -1689,6 +1694,8 @@ def arte_3d(c: Cliente,a: dict) -> str:
         return json.dumps(r or {"erro":"job 3D não encontrado neste projeto"},ensure_ascii=False)
     if a.get("acao")=="objeto":
         r=c.post(f"/api/projects/{pid}/objeto-3d",{**a,"origem":c.origem})
+    elif a.get("acao")=="logo":
+        r=c.post(f"/api/projects/{pid}/logo-3d",{**a,"origem":c.origem})
     elif a.get("acao")=="transicao":
         r=c.post(f"/api/projects/{pid}/transicao-3d",{**a,"origem":c.origem})
     else:

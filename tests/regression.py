@@ -368,6 +368,7 @@ def main() -> int:
     testar_previa_com_animacoes_sempre_em_dia()
     testar_marca_pelo_pdf()
     testar_gosto_aprendido_e_objetos_3d()
+    testar_logo_3d_atras_da_pessoa_no_gancho()
 
     print()
     if FALHAS:
@@ -9386,6 +9387,109 @@ def testar_gosto_aprendido_e_objetos_3d() -> None:
             os.environ.pop("EDITOR_BLENDER", None)
         else:
             os.environ["EDITOR_BLENDER"] = antes
+
+
+
+def testar_logo_3d_atras_da_pessoa_no_gancho() -> None:
+    """ "Quero o 3D da logo do Airbnb e Booking, sempre nos hooks, animado,
+    flutuante, que esconde atrás de mim." Três coisas: (1) o PNG do logo vira
+    contornos por cor, com os buracos no lugar, para o Blender extrudar;
+    (2) uma sobreposição com camada="atras" passa POR TRÁS da pessoa (no
+    quadro: dentro da pessoa é a imagem dela, fora é o logo) e a da frente
+    continua na frente; (3) o gancho pede os logos escolhidos, saindo de trás
+    dele e voltando, e tira os logos quando o gancho sai."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import gancho3d, logo3d
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Clip, EditPlan, Overlay
+    from editor.render.renderer import _build_video_command, _janelas_do_recorte, plan_segments
+
+    print("\n-- logo 3D atrás da pessoa, no gancho")
+    tmp = Path(tempfile.mkdtemp(prefix="logo3d_"))
+    try:
+        # (1) um logo de teste: quadrado azul com um anel branco (um buraco)
+        png = tmp / "logo.png"
+        rgba = np.zeros((200, 200, 4), np.uint8)
+        rgba[20:180, 20:180] = (0x00, 0x35, 0x80, 255)
+        rgba[70:130, 70:130] = (255, 255, 255, 255)
+        rgba[90:110, 90:110] = (0x00, 0x35, 0x80, 255)
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
+                        "-s", "200x200", "-i", "-", "-frames:v", "1", str(png)],
+                       input=rgba.tobytes(), check=True)
+        c = logo3d.camadas(str(png))
+        cores = [k["cor"] for k in c["camadas"]]
+        check(len(c["camadas"]) == 2 and cores[0] == "#003580" and cores[1] == "#FFFFFF",
+              f"o PNG vira camadas por cor: a silhueta azul e o branco em relevo ({cores})")
+        check(len(c["camadas"][1]["lacos"]) == 2,
+              "o buraco do anel branco fica no lugar (2 laços: fora e dentro)")
+        xs = [p[0] for laco in c["camadas"][0]["lacos"] for p in laco]
+        check(abs(max(xs) - 1.0) < 0.05 and abs(min(xs) + 1.0) < 0.05,
+              "normalizado: o maior lado mede 2 unidades, no centro")
+
+        # (2) atrás da pessoa, no quadro
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=0x00AA00:s=320x180:r=30:d=2", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(fonte)], check=True)
+        mascara = tmp / "mascara.mkv"          # a "pessoa": uma faixa no meio
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=black:s=160x90:r=30:d=2.2,"
+                        "drawbox=x=65:y=0:w=30:h=90:color=white:t=fill",
+                        "-c:v", "ffv1", "-pix_fmt", "gray", str(mascara)], check=True)
+        vermelho = tmp / "vermelho.png"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=red:s=180x180", "-frames:v", "1", str(vermelho)], check=True)
+        info = probe(fonte)
+        fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+        recorte = {"path": str(mascara), "tem_pessoa": True, "centro": (0.5, 0.5)}
+
+        def quadro(camada: str) -> np.ndarray:
+            p = EditPlan()
+            p.export = ExportParams(scale="source", burn_subtitles=False, preset="ultrafast", crf=12)
+            p.clips = [Clip(src_start=0, src_end=2)]
+            p.overlays = [Overlay(media_id="m1", out_start=0.0, out_end=2.0, x=0.5, y=0.5,
+                                  scale=1.0, anim_in="none", anim_out="none", camada=camada)]
+            segs = plan_segments(p, Timeline(p.active_clips, 30.0), fontes, info)
+            s0 = segs[0]
+            check(bool(_janelas_do_recorte(s0, p)) == (camada == "atras"),
+                  f"o trecho pede o recorte só com sobreposição atrás ({camada or 'frente'})")
+            args, _ = _build_video_command(s0, p, info, [], tmp / f"ass_{camada}",
+                                           {"main": str(fonte), "m1": str(vermelho)}, None,
+                                           recorte=recorte if camada == "atras" else None)
+            saida = tmp / f"s_{camada or 'frente'}.mp4"
+            r = subprocess.run([*args, str(saida)], capture_output=True, text=True)
+            check(r.returncode == 0, f"o trecho encoda ({camada or 'frente'}): "
+                  + (r.stderr.strip().splitlines() or [""])[-1][:160])
+            q = subprocess.run([FFMPEG, "-v", "error", "-ss", "1.0", "-i", str(saida),
+                                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                               capture_output=True, check=True)
+            return np.frombuffer(q.stdout, np.uint8).reshape(180, 320, 3).astype(int)
+
+        atras, frente = quadro("atras"), quadro("")
+        meio, lado = atras[90, 160], atras[90, 110]
+        check(meio[1] > 140 and meio[0] < 90 and lado[0] > 180 and lado[1] < 80,
+              f"camada atras: a pessoa (verde) fica NA FRENTE do logo, e o logo aparece fora "
+              f"dela (meio {meio.tolist()}, lado {lado.tolist()})")
+        check(frente[90, 160][0] > 180 and frente[90, 160][1] < 80,
+              f"sem camada, o logo continua na frente ({frente[90, 160].tolist()})")
+
+        # (3) o trajeto do gancho: sai de trás dele e volta
+        tr = gancho3d._trajeto(0.2, 3.5, True, 0.0)
+        check(tr[0]["x"] == 0.5 and tr[-1]["x"] == 0.5 and any(k["x"] == 0.2 for k in tr)
+              and tr[0]["escala"] < 1 and max(k["escala"] for k in tr) == 1.0,
+              "no gancho, o logo nasce atrás dele (meio, pequeno), vai ao lado e volta")
+        tf = gancho3d._trajeto(0.8, 3.5, False, 0.0)
+        check(tf[0]["x"] > 1.0 and all(k["x"] != 0.5 for k in tf),
+              "sem recorte, entra pela borda e nunca passa pelo meio (o rosto)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

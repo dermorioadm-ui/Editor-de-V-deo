@@ -2324,6 +2324,13 @@ def limpar_cartoes(project: Project) -> int:
     return len(antigos)
 
 
+def nome_da_midia(project: Project, media_id: str) -> str:
+    """O nome com que a mídia entrou no projeto ("" se não existe)."""
+    linha = db.q1("SELECT name FROM media WHERE id=? AND project_id=?",
+                  (str(media_id or ""), project.id))
+    return str(linha["name"] or "") if linha else ""
+
+
 def esquecer_cartao_orfao(project: Project, media_id: str) -> None:
     """Apagou a sobreposição de um cartão: a mídia dele vai junto."""
     mid = str(media_id or "")

@@ -475,3 +475,56 @@ def enquadrar(cam, alvo, objetos, cena, margem=1.18):
     cam.keyframe_insert(data_path="location", frame=1)
     alvo.keyframe_insert(data_path="location", frame=1)
     cena.frame_set(1)
+
+
+# ------------------------------------------------------------------ logo 3D
+def logo_3d(raw, fps, duracao):
+    """O logo (contornos por cor, vindos do PNG) extrudado: a silhueta inteira
+    na cor dominante e as outras cores em relevo na frente. Brilho de peça de
+    acrílico, entra girando e fica FLUTUANDO — balança de um lado para o
+    outro, sobe e desce, sem nunca dar a volta."""
+    grupo = bpy.data.objects.new("Grupo_logo", None)
+    bpy.context.scene.collection.objects.link(grupo)
+    prof = 0.2
+    for k, cam in enumerate(raw["camadas"]):
+        cu = bpy.data.curves.new(f"logo{k}", "CURVE")
+        cu.dimensions = "2D"
+        cu.fill_mode = "BOTH"
+        cu.extrude = prof if k == 0 else prof * 0.45
+        cu.bevel_depth = 0.02 if k == 0 else 0.012
+        cu.bevel_resolution = 3
+        for laco in cam["lacos"]:
+            sp = cu.splines.new("POLY")
+            sp.points.add(len(laco) - 1)
+            for p, (x, y) in zip(sp.points, laco):
+                p.co = (x, y, 0, 1)
+            sp.use_cyclic_u = True
+        obj = bpy.data.objects.new(f"logo{k}", cu)
+        bpy.context.scene.collection.objects.link(obj)
+        obj.data.materials.append(material(cam["cor"], rug=0.24, coat=1.0))
+        obj.rotation_euler = (math.radians(90), 0, 0)
+        # girado 90° em x, o "para frente" da curva é o -y do mundo: as cores
+        # de cima saltam um pouco para fora da face da silhueta
+        obj.location = (0, -prof * 0.8 if k else 0, 0)
+        obj.parent = grupo
+    fim = max(2, round(duracao * fps))
+    anim = raw.get("animacao", "flutuar")
+    base = grupo.scale.copy()
+    if anim != "nenhuma":
+        entra = max(3, round(0.55 * fps))
+        grupo.scale = base * 0.001
+        grupo.rotation_euler = (0, 0, math.radians(-70))
+        _chave(grupo, "scale", 1, "BACK")
+        _chave(grupo, "rotation_euler", 1, "SINE")
+        grupo.scale = base
+        _chave(grupo, "scale", entra)
+        # balança: -22° → +22° → -12°, devagar (nunca uma volta)
+        for t, ang in ((entra, -22), ((entra + fim) // 2, 22), (fim, -12)):
+            grupo.rotation_euler = (math.radians(4), 0, math.radians(ang))
+            _chave(grupo, "rotation_euler", max(2, t), "SINE")
+        for t, z in ((entra, 0.0), (entra + (fim - entra) // 3, 0.1),
+                     (entra + 2 * (fim - entra) // 3, -0.06), (fim, 0.04)):
+            grupo.location.z = z
+            _chave(grupo, "location", max(2, t), "SINE")
+    bpy.context.preferences.edit.keyframe_new_interpolation_type = "BEZIER"
+    return grupo

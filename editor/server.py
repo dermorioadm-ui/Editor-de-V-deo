@@ -47,6 +47,11 @@ async def _startup() -> None:
 
     if previa_auto.plano_mudou not in svc.ao_salvar_plano:
         svc.ao_salvar_plano.append(previa_auto.plano_mudou)
+    # e os logos 3D do gancho acompanham o gancho (entram, mudam, saem)
+    from . import gancho3d
+
+    if gancho3d.plano_mudou not in svc.ao_salvar_plano:
+        svc.ao_salvar_plano.append(gancho3d.plano_mudou)
 
 
 # ------------------------------------------------------------------ helpers
@@ -636,6 +641,10 @@ def aplicar_receita(project, payload: dict) -> None:
     if "nome_arquivo" in payload:
         # o nome do vídeo na pasta, limpo para o Windows ("" = o de sempre)
         plan.nome_arquivo = svc.nome_limpo(payload.get("nome_arquivo") or "")
+    if isinstance(payload.get("gancho_logos"), list):
+        # os logos que entram em 3D no gancho (nomes da biblioteca/kit)
+        plan.gancho_logos = [str(x)[:40] for x in payload["gancho_logos"]
+                             if isinstance(x, str) and x.strip()][:2]
     if "gancho" in payload:
         # a copy do começo do vídeo ("pra pessoa clicar"); com o corte já
         # feito, o gráfico entra (ou muda) na hora
@@ -3067,6 +3076,47 @@ def api_objeto_3d(pid: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(400, str(exc)) from exc
     dados = {"cena": cena, "inicio": inicio, "x": LADOS_3D[lado], "y": y, "tamanho": tamanho,
              "some": True, "nome": f"3D · {objeto}", "origem": payload.get("origem") or "manual"}
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
+
+
+@app.post("/api/projects/{pid}/logo-3d")
+def api_logo_3d(pid: str, payload: dict = Body(...)) -> dict:
+    """UM LOGO DA BIBLIOTECA EM 3D (o PNG vira peça extrudada no Blender,
+    com as cores dele), flutuando. ``atras``: passa por trás da pessoa."""
+    from . import blender_local as B
+    from . import gancho3d
+    from . import logo3d
+    from . import marca as MK
+
+    p = _project(pid)
+    try:
+        nome = str(payload.get("logo") or "")
+        caminho = MK.caminho_do_logo(MK.do_projeto(p), nome)
+        if not caminho:
+            raise ValueError(f"o logo '{nome}' não está na biblioteca — os que existem: "
+                             + (", ".join(sorted(MK.logos(MK.do_projeto(p)))) or "nenhum"))
+        total = svc.duracao_de_saida(p)
+        inicio = B.numero(payload.get("inicio", 0), "inicio", 0, total)
+        dur = min(B.numero(payload.get("duracao", 3.0), "duracao", 1.0, 4.5),
+                  max(1.0, total - inicio))
+        lado = str(payload.get("lado") or "direita")
+        if lado not in LADOS_3D:
+            raise ValueError("lado: esquerda, direita ou centro")
+        if not B.executavel():
+            raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
+        cams = logo3d.camadas(caminho)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    from .render import recorte
+
+    atras = bool(payload.get("atras", True)) and recorte.pronto()
+    x = LADOS_3D[lado]
+    dados = {"cena": B.cena_de_logo(cams["camadas"], gancho3d.DURACAO_DO_RENDER),
+             "inicio": inicio, "janela": dur, "x": x, "y": 0.3,
+             "tamanho": B.numero(payload.get("tamanho", 0.3), "tamanho", 0.1, 1.0),
+             "cache": str(gancho3d.CACHE), "camada": "atras" if atras else "",
+             "some": not atras, "trajeto": gancho3d._trajeto(x, dur, atras, 0.0),
+             "nome": f"Logo 3D · {nome}", "origem": payload.get("origem") or "manual"}
     return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
 
 

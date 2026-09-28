@@ -89,6 +89,10 @@ export default function Home() {
   // O GANCHO: a copy que abre o vídeo ("pra pessoa clicar"). *palavra* ganha
   // a pílula na cor da marca; sem asterisco, a última palavra
   const [gancho, setGancho] = useState('')
+  // os logos que entram em 3D no gancho (null = ainda não escolheu: os de plataforma)
+  const [ganchoLogos, setGanchoLogos] = useState<string[] | null>(() => {
+    try { const v = localStorage.getItem('sharkcut.ganchoLogos'); return v ? JSON.parse(v) : null } catch { return null }
+  })
   // o nome do vídeo na pasta (sem extensão); vazio = o nome do arquivo + "_editado"
   const [nomeArquivo, setNomeArquivo] = useState('')
   const [claudeCaminho, setClaudeCaminho] = useState('')
@@ -246,6 +250,14 @@ export default function Home() {
     ? ((posClaude ?? (claude?.pos_padrao ?? !!claude?.instalado)) ? 'claude' : '') : posEditor
   const posDaVez = !!acabamento
 
+  // os logos da biblioteca (os PNG dele) e os do kit; padrão: os de plataforma
+  const logosDoGancho = (() => {
+    const todos = Object.keys(marcas?.logos ?? {})
+    const plataforma = todos.filter((n) => !marcas?.logos?.[n]?.da_marca)
+    const escolhidos = (ganchoLogos ?? plataforma.slice(0, 2)).filter((n) => todos.includes(n))
+    return { todos, escolhidos }
+  })()
+
   async function escolherMarca(slug: string) {
     setMarcaDaVez(slug)
     try { setMarcas(await api.marcaAtiva(slug)) } catch { /* só lembrança */ }
@@ -342,6 +354,7 @@ export default function Home() {
       // Claude entra só com títulos, telas, transições e camadas
       pos_claude: acabamento === 'claude',
       gancho: gancho.trim(),
+      gancho_logos: logosDoGancho.escolhidos,
       nome_arquivo: nomeArquivo.trim(),
       ...(marcas ? { marca: (marcaDaVez ?? marcas.ativa ?? '') || '-' } : {}),
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
@@ -756,6 +769,26 @@ export default function Home() {
               entra nos primeiros segundos, palavra por palavra, na identidade da marca ·
               ponha *asteriscos* na palavra que fisga (ela ganha a cor da marca)
             </span>
+            {logosDoGancho.todos.length > 0 && (
+              <span className="flex items-center gap-1.5 flex-wrap mt-1" data-gancho-logos="1">
+                <span className="text-[11px] text-slate-300">logos 3D no gancho, flutuando atrás de você:</span>
+                {logosDoGancho.todos.map((n) => {
+                  const on = logosDoGancho.escolhidos.includes(n)
+                  return <button key={n} type="button" data-gancho-logo={n}
+                    className={`btn btn-xs ${on ? 'btn-primary' : ''}`}
+                    onClick={() => {
+                      const base = logosDoGancho.escolhidos
+                      const novo = on ? base.filter((x) => x !== n) : [...base, n].slice(-2)
+                      setGanchoLogos(novo)
+                      try { localStorage.setItem('sharkcut.ganchoLogos', JSON.stringify(novo)) } catch { /* só lembrança */ }
+                    }}>{n}</button>
+                })}
+                <span className="text-[11px] text-slate-500 basis-full">
+                  até 2 · o PNG vira peça 3D no Blender desta máquina, sai de trás de você, flutua ao lado e volta ·
+                  Airbnb/Booking: ponha o PNG na aba Pós (pôr logo)
+                </span>
+              </span>
+            )}
           </label>
           {editorDaVez !== 'claude' && (posDaVez || editorDaVez === 'codex') && (
             <label className="block">

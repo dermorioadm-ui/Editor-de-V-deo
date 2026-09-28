@@ -77,6 +77,8 @@ def main():
         tipo=raw["tipo"]
         if tipo=="modelo":
             MOD.construir(raw,d["fps"],d["duracao"]);continue
+        if tipo=="logo3d":
+            MOD.logo_3d(raw,d["fps"],d["duracao"]);continue
         if tipo=="cubo": bpy.ops.mesh.primitive_cube_add()
         elif tipo=="esfera": bpy.ops.mesh.primitive_uv_sphere_add(segments=48,ring_count=24)
         elif tipo=="torus": bpy.ops.mesh.primitive_torus_add(major_segments=64,minor_segments=24)

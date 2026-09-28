@@ -188,7 +188,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                   width: int, height: int, first_input_index: int,
                   tag_in: str, tag_out: str, ref_height: int = 0,
                   ref_width: int = 0, mascaras: dict | None = None,
-                  comandos: dict | None = None) -> tuple[str, list[dict]]:
+                  comandos: dict | None = None, prefixo: str = "__ov") -> tuple[str, list[dict]]:
     """PNGs — e vídeos, como janela (picture-in-picture) — por cima do quadro.
 
     Devolve o grafo e a lista de ENTRADAS, uma por sobreposição, na ordem em
@@ -241,7 +241,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
                         + ja_passou, 4),
             "t": round((end - start) + 0.5, 3),
         })
-        scaled = f"__ov{i}"
+        scaled = f"{prefixo}{i}"
         kfs = getattr(o, "keyframes", None) or []
         # DOIS RELÓGIOS. Dentro da cadeia da sobreposição (scale/rotate/sendcmd)
         # o tempo conta do primeiro quadro dela, que é onde a janela começa a
@@ -264,9 +264,9 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
             idx_m = first_input_index + len(inputs)
             inputs.append({"path": str(png_mascara), "video": False,
                            "ss": 0.0, "t": round((end - start) + 0.5, 3)})
-            parts.append(f"{cabeca}[__ovr{i}]")
-            parts.append(f"[{idx_m}:v]format=gray[__ovm{i}]")
-            cabeca = f"[__ovr{i}][__ovm{i}]alphamerge"
+            parts.append(f"{cabeca}[{prefixo}r{i}]")
+            parts.append(f"[{idx_m}:v]format=gray[{prefixo}m{i}]")
+            cabeca = f"[{prefixo}r{i}][{prefixo}m{i}]alphamerge"
 
         if A.tem_animacao(kfs, "scale"):
             e = A.curva(kfs, "scale", t0_propria, repouso=o.scale)
@@ -340,7 +340,7 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
             x_expr = f"({cx}+(1-{prog})*(main_w*0.6))"
         elif o.anim_in == "pop":
             y_expr = f"({cy}+(1-{prog})*26)"
-        nxt = f"__ovo{i}"
+        nxt = f"{prefixo}o{i}"
         parts.append(
             f"[{cur}][{scaled}]overlay=x='{x_expr}':y='{y_expr}':eval=frame:"
             f"enable='between(t,{start:.3f},{end:.3f})'[{nxt}]"

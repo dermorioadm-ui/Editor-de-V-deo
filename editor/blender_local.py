@@ -12,7 +12,7 @@ import time
 
 from .render.composicao import numero
 
-TIPOS = ("cubo", "esfera", "torus", "cilindro", "plano", "texto", "modelo")
+TIPOS = ("cubo", "esfera", "torus", "cilindro", "plano", "texto", "modelo", "logo3d")
 # os objetos prontos (editor/blender_modelos.py) — a lista é repetida aqui
 # porque aquele arquivo só pode ser importado DENTRO do Blender
 MODELOS = ("casa", "predio", "chave", "cadeado", "escudo", "documento", "celular",
@@ -65,6 +65,39 @@ def _paleta(raw):
     return out
 
 
+def _camadas_do_logo(obj):
+    """As camadas de contorno do logo 3D (vindas de logo3d.camadas), conferidas."""
+    import re
+    cams=obj.get("camadas")
+    if not isinstance(cams,list) or not 1<=len(cams)<=3: raise ValueError("logo 3D: de 1 a 3 camadas")
+    total=0;out=[]
+    for c in cams:
+        if not isinstance(c,dict) or not re.fullmatch(r"#[0-9a-fA-F]{6}",str(c.get("cor",""))):
+            raise ValueError("logo 3D: camada sem cor #RRGGBB")
+        lacos=c.get("lacos")
+        if not isinstance(lacos,list) or not 1<=len(lacos)<=400: raise ValueError("logo 3D: laços inválidos")
+        novos=[]
+        for laco in lacos:
+            if not isinstance(laco,list) or len(laco)<3: raise ValueError("logo 3D: laço com menos de 3 pontos")
+            novos.append([[numero(p[0],"x",-3,3),numero(p[1],"y",-3,3)] for p in laco
+                          if isinstance(p,(list,tuple)) and len(p)==2])
+            total+=len(laco)
+        out.append({"cor":c["cor"].upper(),"lacos":novos})
+    if total>9000: raise ValueError("logo 3D: detalhe demais")
+    anim=obj.get("animacao","flutuar")
+    if anim not in ("flutuar","nenhuma"): raise ValueError("animacao do logo 3D: flutuar ou nenhuma")
+    return {"camadas":out,"animacao":anim}
+
+
+def cena_de_logo(camadas, duracao=4.5, fps=24, lado=640):
+    """O logo 3D sozinho, de frente, flutuando — fundo transparente, sem chão
+    (ele flutua no ar, atrás e ao lado da pessoa)."""
+    return normalizar({"duracao":duracao,"largura":lado,"altura":lado,"fps":fps,"amostras":10,
+                       "estudio":True,
+                       "camera":{"posicao":[0.8,-8.0,1.2],"alvo":[0,0,0],"lente":50,"enquadrar":True},
+                       "objetos":[{"tipo":"logo3d","camadas":camadas,"animacao":"flutuar"}]})
+
+
 def normalizar(raw):
     if not isinstance(raw,dict): raise ValueError("cena 3D precisa ser um objeto")
     dur=numero(raw.get("duracao",3),"duracao",0.3,10)
@@ -115,6 +148,8 @@ def normalizar(raw):
         o={"tipo":obj["tipo"],"cor":cor,"texto":str(obj.get("texto",""))[:80],
            "metalico":numero(obj.get("metalico",0.2),"metalico",0,1),
            "rugosidade":numero(obj.get("rugosidade",0.3),"rugosidade",0.05,1)}
+        if obj["tipo"]=="logo3d":
+            o.update(_camadas_do_logo(obj))
         if obj["tipo"]=="modelo":
             if obj.get("modelo") not in MODELOS: raise ValueError(f"modelo 3D: um de {', '.join(MODELOS)}")
             anim=obj.get("animacao","montar")
@@ -247,13 +282,24 @@ def trabalho(pid,dados,ctx):
     p=P.load(pid)
     ini=numero(dados.get("inicio",0),"inicio",0,P.duracao_de_saida(p))
     cena=normalizar(dados.get("cena"))
-    if ini+cena["duracao"]>P.duracao_de_saida(p)+0.001: raise ValueError("3D não cabe na montagem")
-    video,cena=renderizar(cena,p.dir/"artes-3d",ctx)
+    # a janela na linha do tempo pode ser MENOR que o render (o logo do gancho
+    # é renderizado uma vez, com a duração máxima, e serve a todo vídeo)
+    janela=min(cena["duracao"],numero(dados.get("janela",cena["duracao"]),"janela",0.3,10))
+    if ini+janela>P.duracao_de_saida(p)+0.001: raise ValueError("3D não cabe na montagem")
+    # cache: o da pasta do projeto, ou o GLOBAL (o mesmo logo serve a todo vídeo)
+    pasta=Path(dados["cache"]) if dados.get("cache") else p.dir/"artes-3d"
+    video,cena=renderizar(cena,pasta,ctx)
     ctx.check()
     p=P.load(pid) # carrega novamente para preservar alterações durante o render
-    if ini+cena["duracao"]>P.duracao_de_saida(p)+0.001:
+    if ini+janela>P.duracao_de_saida(p)+0.001:
         raise ValueError("a montagem encurtou durante o render; o vídeo 3D está no cache")
-    m=P.add_media(pid,str(video),kind="video",name=dados.get("nome") or "Arte 3D local")
+    nome=dados.get("nome") or "Arte 3D local"
+    if dados.get("substituir"):
+        # refeito (o gancho mudou): sai o anterior com o mesmo nome e a mesma origem
+        antigos={o.id for o in p.plan.overlays if o.origem==dados.get("origem")
+                 and P.nome_da_midia(p,o.media_id)==nome}
+        p.plan.overlays=[o for o in p.plan.overlays if o.id not in antigos]
+    m=P.add_media(pid,str(video),kind="video",name=nome)
     # scale do overlay é relativo à altura da fonte. Encaixa toda a imagem.
     W,H=target_size(p.info,p.plan.export)
     fonteW,fonteH=p.info.display_size
@@ -266,9 +312,20 @@ def trabalho(pid,dados,ctx):
         escala*=numero(dados.get("tamanho",1.0),"tamanho",0.1,1.5)
     x=numero(dados.get("x",0.5),"x",0,1);y=numero(dados.get("y",0.5),"y",0,1)
     sai="fade" if dados.get("some") else "none"
-    o=Overlay(media_id=m["id"],out_start=ini,out_end=ini+cena["duracao"],x=x,y=y,
+    # o TRAJETO: marcos relativos ao começo ({t, x?, y?, escala?, easing?}) —
+    # o logo do gancho sai de trás dele, flutua ao lado e volta para trás
+    marcos=[]
+    for k in dados.get("trajeto") or []:
+        mk={"t":round(ini+numero(k.get("t",0),"t",0,janela),4)}
+        if "x" in k: mk["x"]=numero(k["x"],"x",-0.5,1.5)
+        if "y" in k: mk["y"]=numero(k["y"],"y",-0.5,1.5)
+        if "escala" in k: mk["scale"]=round(escala*numero(k["escala"],"escala",0.05,3),5)
+        if k.get("easing"): mk["easing"]=str(k["easing"])
+        marcos.append(mk)
+    camada="atras" if dados.get("camada")=="atras" else ""
+    o=Overlay(media_id=m["id"],out_start=ini,out_end=ini+janela,x=x,y=y,
               scale=escala,anim_in="none",anim_out=sai,dur_in=0,dur_out=0.3 if sai=="fade" else 0,
-              origem=str(dados.get("origem") or "manual"))
+              origem=str(dados.get("origem") or "manual"),keyframes=marcos,camada=camada)
     p.plan.overlays.append(o);p.save_plan()
     return {"ok":True,"overlay":o.to_dict(),"arquivo":str(video),"cena":cena,
-            "conferir":[ini+0.1,ini+cena["duracao"]/2,ini+cena["duracao"]-0.1]}
+            "conferir":[ini+0.1,ini+janela/2,ini+janela-0.1]}
