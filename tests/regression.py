@@ -371,6 +371,7 @@ def main() -> int:
     testar_logo_3d_atras_da_pessoa_no_gancho()
     testar_logo_de_print_com_fundo()
     testar_logo_no_canto_e_pos_rica()
+    testar_cada_tomada_toca_na_previa()
 
     print()
     if FALHAS:
@@ -9653,6 +9654,79 @@ def testar_logo_no_canto_e_pos_rica() -> None:
     check("RICO EM DETALHE" in habil and "Pouco, e bem escolhido" not in habil
           and "RICO EM" in "\n".join(CE._com_habilidade([])) and "RICA" in diretor.GUIA,
           "a habilidade e o diretor pedem edição rica: motion a cada tópico, moldura, transição")
+
+
+def testar_cada_tomada_toca_na_previa() -> None:
+    """A prévia ao vivo consegue tocar CADA tomada do pacote, com o som dela.
+
+    O relato: "a partir do segundo vídeo está mudo". A prévia ao vivo tocava
+    só o arquivo principal: bloco de outra gravação virava quadro parado, sem
+    som. Agora o player tem um <video> por tomada e passa de um para o outro
+    na emenda — e para isso cada tomada precisa de um arquivo que o navegador
+    abra. MP4 leve toca direto; MKV (o que o gravador do app às vezes salva)
+    ou HEVC só tocam pela cópia leve dela, que este teste confere que é feita
+    e servida, só para quem precisa.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from editor import projects as svc
+    from tests.e2e import Ctx
+    from tests.speech import build_track, make_video
+
+    tmp = Path(tempfile.mkdtemp(prefix="tomadas_previa_"))
+    pids: list[str] = []
+    previa_real = svc.previa_da_edicao
+    svc.previa_da_edicao = lambda *a, **k: {"ok": True, "substituida": True}
+    try:
+        frases = ["primeira tomada falando", "segunda tomada falando",
+                  "terceira tomada falando"]
+        tomadas = []
+        for i, frase in enumerate(frases):
+            amostras, _m, dur = build_track([(frase, 0.6)], seed=31 + i)
+            ext = ".mkv" if i == 2 else ".mp4"
+            tomadas.append(make_video(tmp / f"t{i}{ext}", amostras, dur, 320, 180, 30))
+        install(frases)
+        p = svc.create(str(tomadas[0]), "cada tomada toca", "VSL")
+        pids.append(p.id)
+        extras = [svc.add_media(p.id, str(t), "video", papel="fonte")["id"]
+                  for t in tomadas[1:]]
+        svc.one_click(svc.load(p.id), Ctx(quiet=True), fontes_extras=extras)
+        client = TestClient(app)
+
+        st = client.get(f"/api/projects/{p.id}/proxy-status").json()
+        fontes = st.get("fontes") or {}
+        check(set(fontes) == set(extras),
+              "o status da cópia leve fala de cada OUTRA tomada, não só da "
+              "principal")
+        check(fontes[extras[0]]["toca"] and not fontes[extras[0]]["precisa"],
+              "o MP4 leve toca direto no navegador: nada de cópia à toa")
+        check(fontes[extras[1]]["precisa"] and not fontes[extras[1]]["toca"],
+              "o MKV não abre no navegador: sem a cópia leve ele ficaria mudo "
+              "na prévia")
+
+        feito = svc.build_proxy_job(svc.load(p.id), Ctx(quiet=True))
+        q = svc.load(p.id)
+        r = client.get(f"/api/projects/{p.id}/proxy?source={extras[1]}")
+        check(q.proxy_ok_de(extras[1]) and r.status_code in (200, 206)
+              and r.headers.get("content-type", "").startswith("video/mp4"),
+              "a cópia leve do MKV é feita e servida em MP4")
+        check(not q.proxy_de(extras[0]).exists()
+              and (feito.get("fontes") or {}).get(extras[0], {}).get("skipped"),
+              "e o MP4 leve continua sem cópia")
+        st = client.get(f"/api/projects/{p.id}/proxy-status").json()
+        check(st["fontes"][extras[1]]["toca"],
+              "depois da cópia, a terceira tomada também toca na prévia")
+        r = client.get(f"/api/projects/{p.id}/proxy?source=nao-existe")
+        check(r.status_code == 404, "gravação que não é do projeto não é servida")
+    finally:
+        svc.previa_da_edicao = previa_real
+        for pid in pids:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

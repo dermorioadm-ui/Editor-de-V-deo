@@ -163,6 +163,11 @@ export default function Editor() {
   const [previewBusy, setPreviewBusy] = useState(false)
   const playing = useStore((s) => s.playing)
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
+  // AS OUTRAS GRAVAÇÕES do pacote, para a prévia ao vivo tocar cada uma com o
+  // som dela: {id: {ok (cópia leve pronta), toca (o navegador toca de algum
+  // jeito), precisa (sem cópia leve ela não abre ou engasga)}}
+  const [proxyFontes, setProxyFontes] = useState<
+    Record<string, { ok: boolean; toca: boolean; precisa: boolean }>>({})
 
   useEffect(() => { api.presets().then(setPresets).catch(() => {}) }, [])
 
@@ -307,7 +312,8 @@ export default function Editor() {
   useEffect(() => {
     if (!previaVelha || !project || proxyUrl) return
     api.proxyStatus(project.id).then((st) => {
-      if (!st.ok && st.precisa) api.buildProxy(project.id).catch(() => {})
+      const faltaOutra = Object.values(st.fontes ?? {}).some((f) => f.precisa && !f.ok)
+      if ((!st.ok && st.precisa) || faltaOutra) api.buildProxy(project.id).catch(() => {})
     }).catch(() => {})
   }, [previaVelha, project?.id, proxyUrl])
 
@@ -525,10 +531,14 @@ export default function Editor() {
     const ver = async () => {
       try {
         const st = await api.proxyStatus(project.id)
-        if (!vivo) return
+        if (!vivo) return true
+        setProxyFontes(st.fontes ?? {})
+        // uma tomada do pacote que o navegador não toca (MKV, HEVC) sem a
+        // cópia leve dela ficaria parada e muda na prévia
+        const faltaOutra = Object.values(st.fontes ?? {}).some((f) => f.precisa && !f.ok)
         if (st.ok) {
           setProxyUrl(`/api/projects/${project.id}/proxy`)
-          return true
+          return !faltaOutra
         }
         setProxyUrl(null)
         return false
@@ -545,6 +555,7 @@ export default function Editor() {
   useEffect(() => {
     if (activeJob?.kind !== 'proxy' || activeJob.status !== 'ok') return
     api.proxyStatus(project!.id).then((st) => {
+      setProxyFontes(st.fontes ?? {})
       if (st.ok) {
         setProxyUrl(`/api/projects/${project!.id}/proxy`)
         toast('ok', 'Prévia leve pronta',
@@ -555,6 +566,16 @@ export default function Editor() {
 
   if (!project) return null
   const view = timeline
+  // de onde a prévia ao vivo toca cada OUTRA gravação: a cópia leve, quando
+  // existe; o próprio arquivo, quando o navegador abre; e nada (quadro parado
+  // com o aviso) enquanto a cópia leve de um MKV ainda está sendo feita
+  const fontesVideo = (view?.montagem ?? []).filter((t) => t.source !== 'main').map((t) => {
+    const st = proxyFontes[t.source]
+    const url = st?.ok ? `/api/projects/${project.id}/proxy?source=${encodeURIComponent(t.source)}`
+      : st && !st.toca ? null
+      : api.mediaFileUrl(project.id, t.source)
+    return { id: t.source, url }
+  })
 
   /** B-ROLL depois da edição: um ou vários vídeos por cima da fala, em
    *  sequência a partir do cursor. O servidor acha o vão livre de cada um. */
@@ -909,6 +930,7 @@ export default function Editor() {
         <main className="flex-1 flex flex-col min-w-0 min-h-0 p-3">
           <Player projectId={project.id}
                   blocks={view?.blocks ?? []}
+                  fontesVideo={fontesVideo}
                   cues={view?.subtitles ?? []}
                   duration={view?.duration ?? project.info?.duration ?? 0}
                   style={project.plan?.style}

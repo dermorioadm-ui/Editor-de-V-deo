@@ -56,6 +56,27 @@ def vale_a_pena(info) -> tuple[bool, str]:
     return False, f"{w}x{h} a {fps:.0f} fps já toca liso; proxy seria desperdício"
 
 
+# O que o <video> do navegador abre sozinho. Fora disto a gravação só toca
+# pela cópia leve (H.264 + AAC, que todo navegador abre).
+RECIPIENTES_DO_NAVEGADOR = {".mp4", ".m4v", ".webm", ".mov"}
+VIDEO_DO_NAVEGADOR = {"h264", "vp8", "vp9", "av1"}
+AUDIO_DO_NAVEGADOR = {"", "aac", "opus", "vorbis", "mp3"}
+
+
+def toca_no_navegador(caminho: str | Path, info) -> tuple[bool, str]:
+    """O navegador toca este arquivo direto, sem cópia leve?"""
+    ext = Path(str(caminho)).suffix.lower()
+    v = str(getattr(info, "v_codec", "") or "").lower()
+    a = str(getattr(info, "a_codec", "") or "").lower()
+    if ext not in RECIPIENTES_DO_NAVEGADOR:
+        return False, f"o navegador não abre {ext or 'esse formato'}"
+    if v not in VIDEO_DO_NAVEGADOR:
+        return False, f"o navegador não decodifica vídeo {v or 'desconhecido'}"
+    if a not in AUDIO_DO_NAVEGADOR:
+        return False, f"o navegador não decodifica áudio {a}"
+    return True, "o navegador toca direto"
+
+
 def build_proxy(source: str | Path, dest: Path, duration: float,
                 on_progress=None, cancel=None) -> dict:
     """Gera o proxy. Devolve o que saiu, para a interface poder conferir."""

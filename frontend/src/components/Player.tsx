@@ -16,6 +16,10 @@ import { getState, setPlayhead, setState, usePlayhead, useStore } from '../state
 interface Props {
   projectId: string
   blocks: Clip[]
+  /** De onde tocar cada OUTRA gravação do pacote — a cópia leve ou o próprio
+   *  arquivo. `url` nulo: o navegador ainda não tem como tocar essa (MKV sem
+   *  cópia leve pronta), e ela aparece em quadro parado com o aviso. */
+  fontesVideo?: { id: string; url: string | null }[]
   /** Resolução da FONTE, [largura, altura]. É a régua em que fontsize, margem
    *  e contorno do estilo estão escritos — e a mesma que o ASS usa como
    *  PlayRes na exportação. NÃO é a resolução do que está tocando: com a
@@ -95,7 +99,8 @@ interface Props {
  * trechos removidos, aplicando a velocidade de cada bloco e desenhando a
  * legenda por cima.
  */
-export default function Player({ projectId, blocks, cues, duration, style, safeZone,
+export default function Player({ projectId, blocks, fontesVideo,
+                                cues, duration, style, safeZone,
                                 sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
                                  animada, temPrevia, onAnimada,
@@ -105,7 +110,59 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                                  legendaNoVideo = true,
                                  formato, formatos, onFormato, quadro, onQuadroChange,
                                  look, onStyleChange, music, onMusicChange }: Props) {
-  const video = useRef<HTMLVideoElement>(null)
+  // UM <video> POR GRAVAÇÃO. A prévia ao vivo tocava só o arquivo principal:
+  // num pacote de três tomadas, a segunda e a terceira viravam quadro parado,
+  // MUDO, a cada meio segundo. Agora cada tomada tem o elemento dela (todos no
+  // mesmo lugar, um só visível) e a reprodução passa de um para o outro na
+  // emenda. `video` aponta sempre para o que está tocando agora.
+  const video = useRef<HTMLVideoElement | null>(null)
+  const videos = useRef<Record<string, HTMLVideoElement | null>>({})
+  const ativaRef = useRef('main')
+  const [ativa, setAtiva] = useState('main')
+  const refsPorFonte = useRef<Record<string, (el: HTMLVideoElement | null) => void>>({})
+  const refDe = (id: string) => {
+    if (!refsPorFonte.current[id]) {
+      refsPorFonte.current[id] = (el) => {
+        videos.current[id] = el
+        if (ativaRef.current === id) video.current = el
+      }
+    }
+    return refsPorFonte.current[id]
+  }
+  // a gravação que o navegador se recusou a abrir cai no quadro parado
+  const quebrados = useRef<Set<string>>(new Set())
+  const [, setQuebrou] = useState(0)
+  const fontesVideoRef = useRef(fontesVideo)
+  fontesVideoRef.current = fontesVideo
+  /** Dá para tocar esta gravação AO VIVO, com som? */
+  const tocavel = useCallback((id: string) => {
+    if (id === 'main') return true
+    const f = (fontesVideoRef.current ?? []).find((x) => x.id === id)
+    return !!f?.url && !quebrados.current.has(id) && !!videos.current[id]
+  }, [])
+  /** Põe esta gravação na tela e devolve o elemento dela. A ordem importa: o
+   *  `video` passa a apontar para a nova ANTES de a antiga pausar — senão a
+   *  pausa da antiga era lida como "o usuário pausou" e parava tudo. */
+  const ativar = useCallback((id: string) => {
+    const alvo = videos.current[id] ?? null
+    if (ativaRef.current === id && video.current === alvo) return alvo
+    const antes = video.current
+    ativaRef.current = id
+    video.current = alvo
+    setAtiva(id)
+    if (antes && antes !== alvo && !antes.paused) antes.pause()
+    return alvo
+  }, [])
+  // quando a pausa é do elemento que está tocando e não é o fim natural de uma
+  // tomada (no fim de uma, quem decide o próximo passo é o laço de reprodução,
+  // que passa para a seguinte). A prévia renderizada é um arquivo só: o fim
+  // dela é o fim do vídeo.
+  const aoPausar = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const el = e.currentTarget
+    if (el === video.current && !stillRef.current && (!el.ended || linear)) {
+      setPlaying(false)
+    }
+  }
   // "tocando" mora na store: a timeline também tem play/pause, e os dois
   // precisam mostrar o mesmo estado
   const playing = useStore((s) => s.playing)
@@ -465,7 +522,8 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   }, [])
 
   useEffect(() => {
-    const el = video.current
+    // a régua do quadro é a gravação PRINCIPAL, toque quem tocar
+    const el = videos.current.main ?? video.current
     if (!el) return
     const medir = () => {
       const cont = palco.current
@@ -511,6 +569,13 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
   // a prévia RENDERIZADA é do formato da gravação; num formato derivado o
   // player compõe ao vivo (cópia leve + tela + zoom), como quando se edita
   const linear = !!previewUrl && !derivado
+  // a prévia renderizada já traz as tomadas todas num arquivo só: um elemento
+  useEffect(() => {
+    if (!linear) return
+    ativaRef.current = 'main'
+    video.current = videos.current.main ?? null
+    setAtiva('main')
+  }, [linear])
 
   // A POSIÇÃO SOBREVIVE À TROCA DE PRÉVIA. Cada retoque refaz a prévia, e a
   // prévia nova troca o `src` do <video> — que remonta e volta para 0:00. O
@@ -532,15 +597,19 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     retomar.current = null
     if (!el || !r || r.t <= 0.05) return
     const alvo = Math.max(0, Math.min(r.t, (el.duration || duration) - 0.05))
+    let quem: HTMLVideoElement = el
     if (linear) {
       el.currentTime = alvo
     } else {
       const pos = outputToSource(alvo, blocks)
-      if (pos) el.currentTime = pos.time
+      if (pos && tocavel(pos.source)) {
+        quem = ativar(pos.source) ?? el
+        quem.currentTime = pos.time
+      }
     }
     setPlayhead(alvo)
-    if (r.tocando) el.play().then(() => setPlaying(true)).catch(() => {})
-  }, [linear, blocks, duration])
+    if (r.tocando) quem.play().then(() => setPlaying(true)).catch(() => {})
+  }, [linear, blocks, duration, tocavel, ativar])
 
   // MARCAR INÍCIO / FIM DE ONDE VOCÊ ESTÁ ASSISTINDO. É o gesto que faltava:
   // "ouvi uma frase ruim" -> I no começo dela, O no fim, Delete. Sem isso o
@@ -572,8 +641,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     if (!blocks.length) return
     const clamped = Math.max(0, Math.min(t, duration - 0.01))
     const block = blockAtOutput(clamped, blocks)
-    if (block && block.source !== 'main') {
-      // caiu numa foto ou num inserto: mostra o quadro da própria mídia
+    if (block && (block.kind === 'photo' || !tocavel(block.source))) {
+      // caiu numa foto, num inserto ou numa tomada que o navegador ainda não
+      // abre: mostra o quadro da própria mídia
       enterStill(block, clamped - (block.out_start ?? 0))
       setPlayhead(clamped)
       return
@@ -582,15 +652,16 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     leaveStill()
     const pos = outputToSource(clamped, blocks)
     if (!pos) return
+    const alvo = ativar(pos.source) ?? el
     seekingRef.current = true
-    el.currentTime = pos.time
-    if (block) el.playbackRate = block.speed
+    alvo.currentTime = pos.time
+    if (block) alvo.playbackRate = block.speed
     setPlayhead(clamped)
-    // se estava tocando um still e o alvo é vídeo, retoma o vídeo — senão a
-    // reprodução ficava congelada com o botão dizendo "pausa"
-    if (wasStill && playing) el.play().catch(() => {})
+    // se estava tocando um still (ou outra gravação) e o alvo é vídeo, retoma
+    // o vídeo — senão a reprodução ficava congelada com o botão dizendo "pausa"
+    if ((wasStill || alvo !== el) && playing) alvo.play().catch(() => {})
     window.setTimeout(() => { seekingRef.current = false }, 60)
-  }, [blocks, duration, linear, enterStill, leaveStill, playing])
+  }, [blocks, duration, linear, enterStill, leaveStill, playing, tocavel, ativar])
 
   // segue o playhead vindo da timeline
   useEffect(() => {
@@ -600,27 +671,40 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       if (Math.abs(el.currentTime - playhead) > 0.25) el.currentTime = playhead
       return
     }
-    const pos = outputToSource(playhead, blocks)
-    if (pos && Math.abs(el.currentTime - pos.time) > 0.25) {
-      el.currentTime = pos.time
+    const block = blockAtOutput(playhead, blocks)
+    if (block && (block.kind === 'photo' || !tocavel(block.source))) {
+      if (stillRef.current?.clip.id !== block.id) {
+        enterStill(block, playhead - (block.out_start ?? 0))
+      }
+      return
     }
-  }, [playhead, blocks, playing, linear])
+    if (stillRef.current) leaveStill()
+    const pos = outputToSource(playhead, blocks)
+    if (!pos) return
+    // clicou na segunda tomada na timeline: é ela que aparece, parada ali
+    const alvo = ativar(pos.source) ?? el
+    if (Math.abs(alvo.currentTime - pos.time) > 0.25) {
+      alvo.currentTime = pos.time
+    }
+  }, [playhead, blocks, playing, linear, tocavel, ativar, enterStill, leaveStill])
 
   // laço de reprodução: pula os buracos e ajusta a velocidade por bloco
   useEffect(() => {
     if (!playing) return
     const advance = (outT: number) => {
-      // entrega a reprodução ao bloco que contém outT (vídeo ou "still")
-      const el = video.current!
+      // entrega a reprodução ao bloco que contém outT — na gravação dele,
+      // com o som dela — ou ao "still" (foto, inserto)
       const block = blockAtOutput(outT, blocks)
       if (!block || outT >= duration - 0.02) {
-        el.pause()
+        video.current?.pause()
         leaveStill()
         setPlaying(false)
         setPlayhead(duration)
         return
       }
-      if (block.source === 'main') {
+      const el = block.kind !== 'photo' && tocavel(block.source)
+        ? ativar(block.source) : null
+      if (el) {
         leaveStill()
         el.currentTime = block.src_start +
           (outT - (block.out_start ?? 0)) * block.speed
@@ -635,7 +719,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
       const still = stillRef.current
       if (el && linear) {
         setPlayhead(el.currentTime)
-      } else if (el && still && playing) {
+      } else if (still && playing) {
         // foto/inserto: o relógio é o performance.now()
         const elapsed = still.offset0 + (performance.now() - still.perfStart) / 1000
         const dur = (still.clip.out_end ?? 0) - (still.clip.out_start ?? 0)
@@ -645,15 +729,20 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
           setPlayhead((still.clip.out_start ?? 0) + elapsed)
         }
       } else if (el && blocks.length) {
+        // os blocos DA GRAVAÇÃO que está tocando: o tempo do elemento é o
+        // tempo dela, e só os blocos dela falam essa língua
+        const fonte = ativaRef.current
         const src = el.currentTime
         let current: Clip | null = null
         for (const b of blocks) {
-          if (b.source !== 'main') continue
+          if (b.source !== fonte || b.kind === 'photo') continue
           if (src >= b.src_start - 0.02 && src < b.src_end) { current = b; break }
         }
         if (!current) {
-          // fim do bloco main: o próximo na ORDEM DE SAÍDA decide (pode ser foto)
-          const prev = [...blocks].filter((b) => b.source === 'main' && b.src_end <= src + 0.05)
+          // fim do bloco: o próximo na ORDEM DE SAÍDA decide (pode ser foto,
+          // ou a próxima tomada)
+          const prev = [...blocks].filter((b) => b.source === fonte && b.kind !== 'photo'
+                                                 && b.src_end <= src + 0.05)
             .sort((a, b) => (b.out_end ?? 0) - (a.out_end ?? 0))[0]
           advance(prev ? (prev.out_end ?? 0) + 0.001 : duration)
         } else {
@@ -669,7 +758,7 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     }
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
-  }, [playing, blocks, duration, linear, enterStill, leaveStill])
+  }, [playing, blocks, duration, linear, enterStill, leaveStill, tocavel, ativar])
 
   const toggleRef = useRef<() => void>(() => {})
   const toggle = () => {
@@ -689,22 +778,26 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         seekOutput(0)
         window.setTimeout(() => {
           const b = !linear ? blockAtOutput(0, blocks) : null
-          if (b && b.source !== 'main') { setPlaying(true); return }
+          if (b && (b.kind === 'photo' || !tocavel(b.source))) { setPlaying(true); return }
           video.current?.play().then(() => setPlaying(true)).catch(() => {})
         }, 80)
         return
       }
       const block = !linear ? blockAtOutput(playhead, blocks) : null
-      if (block && block.source !== 'main') {
+      if (block && (block.kind === 'photo' || !tocavel(block.source))) {
         enterStill(block, playhead - (block.out_start ?? 0))
         setPlaying(true)
         return
       }
+      let quem: HTMLVideoElement = el
       if (!linear) {
         const pos = outputToSource(playhead, blocks)
-        if (pos) el.currentTime = pos.time
+        if (pos) {
+          quem = ativar(pos.source) ?? el
+          quem.currentTime = pos.time
+        }
       }
-      el.play().then(() => setPlaying(true)).catch(() => {})
+      quem.play().then(() => setPlaying(true)).catch(() => {})
     }
   }
 
@@ -771,6 +864,29 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
     } as const
   })()
 
+  // AS OUTRAS TOMADAS, no mesmo lugar e no mesmo quadro da principal. Só a
+  // que está tocando aparece e tem som; as outras esperam carregadas, para a
+  // emenda não engasgar. A prévia renderizada já traz tudo num arquivo só.
+  const outrasTomadas = (className: string, style: React.CSSProperties) =>
+    linear ? null : (fontesVideo ?? []).filter((f) => !!f.url).map((f) => (
+      <video key={`${f.id}|${f.url}`} ref={refDe(f.id)} className={className}
+             playsInline preload="auto" src={f.url ?? undefined}
+             muted={muted || ativa !== f.id}
+             style={{ ...style, visibility: ativa === f.id ? 'visible' : 'hidden' }}
+             onError={() => {
+               // o navegador não abriu: essa tomada cai no quadro parado
+               quebrados.current.add(f.id)
+               setQuebrou((n) => n + 1)
+               if (ativaRef.current === f.id) ativar('main')
+             }}
+             onPause={aoPausar} />
+    ))
+  const visivelPrincipal = (linear || ativa === 'main') ? 'visible' : 'hidden'
+  const nomeDaTomada = (id: string) => {
+    const k = montarEixo(getState().timeline).trechos.findIndex((t) => t.source === id)
+    return k >= 0 ? `gravação ${k + 1}` : ''
+  }
+
   return (
     <div className="flex flex-col gap-2 h-full min-h-0">
       <div ref={palco} tabIndex={0}
@@ -813,13 +929,16 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                             cursor: qDrag.current ? 'grabbing' : 'grab' }}
                    title="arraste para mover o vídeo na tela · o canto redimensiona"
                    onMouseDown={(e) => iniciarArrastoQuadro(e, 'move')}>
-                <video ref={video} className="w-full h-full object-fill" playsInline
-                       muted={muted}
-                       style={{ ...(zoomCss ?? {}), filter: filtroCss }}
+                <video ref={refDe('main')} className="w-full h-full object-fill" playsInline
+                       muted={muted || ativa !== 'main'}
+                       style={{ ...(zoomCss ?? {}), filter: filtroCss,
+                                visibility: visivelPrincipal }}
                        key={proxyUrl ?? 'source'}
                        src={proxyUrl ?? `/api/projects/${projectId}/source`}
                        onLoadedMetadata={aoCarregarMetadata}
-                       onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+                       onPause={aoPausar} />
+                {outrasTomadas('absolute inset-0 w-full h-full object-fill',
+                               { ...(zoomCss ?? {}), filter: filtroCss })}
                 <div data-quadro="1"
                      className="absolute -right-1 -bottom-1 w-3 h-3 bg-accent rounded-sm
                                 cursor-nwse-resize"
@@ -834,25 +953,34 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
               zoomAnchor?.x ?? 0.5, zoomAnchor?.y ?? 0.4, PROPORCOES[formato!] ?? 0)
             const kx = box.width / Math.max(rw, 1)
             const ky = box.height / Math.max(rh, 1)
+            const geometria: React.CSSProperties = {
+              left: -rx * kx, top: -ry * ky,
+              width: fonteW * kx, height: fonteH * ky, filter: filtroCss }
             return (
-              <video ref={video} className="absolute object-fill max-w-none" playsInline
-                     muted={muted}
-                     style={{ left: -rx * kx, top: -ry * ky,
-                              width: fonteW * kx, height: fonteH * ky,
-                              filter: filtroCss }}
-                     key={proxyUrl ?? 'source'}
-                     src={proxyUrl ?? `/api/projects/${projectId}/source`}
-                     onLoadedMetadata={aoCarregarMetadata}
-                     onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+              <>
+                <video ref={refDe('main')} className="absolute object-fill max-w-none" playsInline
+                       muted={muted || ativa !== 'main'}
+                       style={{ ...geometria, visibility: visivelPrincipal }}
+                       key={proxyUrl ?? 'source'}
+                       src={proxyUrl ?? `/api/projects/${projectId}/source`}
+                       onLoadedMetadata={aoCarregarMetadata}
+                       onPause={aoPausar} />
+                {outrasTomadas('absolute object-fill max-w-none', geometria)}
+              </>
             )
           })() : (
-            <video ref={video} className="w-full h-full object-contain" playsInline
-                   muted={muted}
-                   style={{ ...(zoomCss ?? {}), filter: filtroCss }}
-                   key={previewUrl ?? proxyUrl ?? 'source'}
-                   src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
-                   onLoadedMetadata={aoCarregarMetadata}
-                   onPause={() => { if (!stillRef.current) setPlaying(false) }} />
+            <>
+              <video ref={refDe('main')} className="w-full h-full object-contain" playsInline
+                     muted={muted || ativa !== 'main'}
+                     style={{ ...(zoomCss ?? {}), filter: filtroCss,
+                              visibility: visivelPrincipal }}
+                     key={previewUrl ?? proxyUrl ?? 'source'}
+                     src={previewUrl ?? proxyUrl ?? `/api/projects/${projectId}/source`}
+                     onLoadedMetadata={aoCarregarMetadata}
+                     onPause={aoPausar} />
+              {outrasTomadas('absolute inset-0 w-full h-full object-contain',
+                             { ...(zoomCss ?? {}), filter: filtroCss })}
+            </>
           )}
         </div>
         {stillClip && !linear && (
@@ -867,7 +995,10 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
                  alt="" />
             <span className="absolute top-1.5 left-1.5 chip border-line
                              text-slate-300 bg-ink-900/80">
-              {stillClip.kind === 'photo' ? 'foto inserida' : 'inserto (sem áudio na prévia)'}
+              {stillClip.kind === 'photo' ? 'foto inserida'
+                : nomeDaTomada(stillClip.source)
+                  ? `${nomeDaTomada(stillClip.source)}: preparando a cópia leve para tocar aqui (o arquivo final sai com som)`
+                  : 'inserto (sem áudio na prévia)'}
             </span>
           </div>
         )}

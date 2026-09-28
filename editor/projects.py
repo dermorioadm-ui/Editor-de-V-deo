@@ -95,33 +95,65 @@ class Project:
     @property
     def proxy_file(self) -> Path:
         """Cópia leve da FONTE, só para a prévia tocar liso."""
-        return self.dir / "proxy.mp4"
+        return self.proxy_de("main")
 
-    @property
-    def proxy_ok(self) -> bool:
+    # A CÓPIA LEVE DE CADA GRAVAÇÃO. A prévia ao vivo toca a montagem pulando
+    # de gravação em gravação, e as outras tomadas do pacote têm o mesmo peso
+    # da primeira (mesma câmera, mesmo 1080p60) — ou nem abrem no navegador
+    # (MKV, HEVC). "main" continua no nome de antes: projeto já gravado no
+    # disco abre sem migração.
+    def proxy_de(self, source: str = "main") -> Path:
+        if source in ("", "main"):
+            return self.dir / "proxy.mp4"
+        return self.dir / f"proxy_{source}.mp4"
+
+    def _marca_do_proxy(self, source: str) -> Path:
+        if source in ("", "main"):
+            return self.dir / "proxy.origem"
+        return self.dir / f"proxy_{source}.origem"
+
+    def caminho_da_fonte(self, source: str = "main") -> str:
+        if source in ("", "main"):
+            return self.source_path
+        caminho = (self.fontes.get(source) or {}).get("path")
+        if caminho:
+            return str(caminho)
+        m = next((x for x in list_media(self.id) if x["id"] == source), None)
+        return str((m or {}).get("path") or "")
+
+    def _assinatura(self, source: str) -> str | None:
+        try:
+            src = Path(self.caminho_da_fonte(source))
+            return f"{src.resolve()}|{src.stat().st_size}|{int(src.stat().st_mtime)}"
+        except OSError:
+            return None
+
+    def proxy_ok_de(self, source: str = "main") -> bool:
         """O proxy existe e é do arquivo que está aberto agora?
 
         Se o usuário trocar o arquivo fonte, o proxy velho tem que morrer —
         senão ele edita vendo um vídeo e exporta outro.
         """
-        f = self.proxy_file
+        f = self.proxy_de(source)
         if not f.exists() or f.stat().st_size < 1024:
             return False
-        marca = self.dir / "proxy.origem"
-        if not marca.exists():
-            return False
-        try:
-            src = Path(self.source_path)
-            atual = f"{src.resolve()}|{src.stat().st_size}|{int(src.stat().st_mtime)}"
-        except OSError:
+        marca = self._marca_do_proxy(source)
+        atual = self._assinatura(source)
+        if not marca.exists() or atual is None:
             return False
         return marca.read_text(encoding="utf-8").strip() == atual
 
+    def marcar_proxy_de(self, source: str = "main") -> None:
+        atual = self._assinatura(source)
+        if atual is not None:
+            self._marca_do_proxy(source).write_text(atual, encoding="utf-8")
+
+    @property
+    def proxy_ok(self) -> bool:
+        return self.proxy_ok_de("main")
+
     def marcar_proxy(self) -> None:
-        src = Path(self.source_path)
-        (self.dir / "proxy.origem").write_text(
-            f"{src.resolve()}|{src.stat().st_size}|{int(src.stat().st_mtime)}",
-            encoding="utf-8")
+        self.marcar_proxy_de("main")
 
     @property
     def words(self) -> list[dict]:
@@ -1715,28 +1747,74 @@ def _lembrar_saida(project: Project, dest: Path) -> None:
         pass
 
 
+def _info_da_fonte(project: Project, source: str):
+    if source in ("", "main"):
+        return project.info
+    m = next((x for x in list_media(project.id) if x["id"] == source), None)
+    dados = (m or {}).get("info") or {}
+    if not dados:
+        return None
+    return MediaInfo(**{k: v for k, v in dados.items()
+                        if k in MediaInfo.__dataclass_fields__})
+
+
+def precisa_de_proxy(project: Project, source: str = "main") -> tuple[bool, str]:
+    """Esta gravação precisa de cópia leve para a prévia ao vivo?
+
+    A principal segue a regra de sempre (pesada demais para o navegador). As
+    outras tomadas do pacote têm um motivo a mais: a prévia ao vivo toca o
+    arquivo DIRETO, e MKV ou HEVC o navegador nem abre — a tomada ficava
+    parada e muda na prévia, que foi o relato.
+    """
+    from .render.proxy import toca_no_navegador, vale_a_pena
+
+    info = _info_da_fonte(project, source)
+    if info is None:
+        return False, "sem informação do arquivo"
+    precisa, motivo = vale_a_pena(info)
+    if precisa or source in ("", "main"):
+        return precisa, motivo
+    toca, porque = toca_no_navegador(project.caminho_da_fonte(source), info)
+    return (not toca), porque
+
+
 def build_proxy_job(project: Project, ctx) -> dict:
-    """Gera a cópia leve da fonte para a prévia (Parte: play sem engasgo)."""
-    from .render.proxy import build_proxy, vale_a_pena
+    """Gera a cópia leve de cada gravação para a prévia (play sem engasgo)."""
+    from .render.proxy import build_proxy
 
     if project.info is None:
         raise RuntimeError("rode a análise antes")
-    precisa, motivo = vale_a_pena(project.info)
-    if not precisa:
-        ctx.progress(1.0, motivo)
-        return {"skipped": True, "detail": motivo}
-    if project.proxy_ok:
-        ctx.progress(1.0, "a prévia leve já existe")
-        return {"skipped": True, "detail": "proxy já existe"}
-    ctx.stage("proxy", f"gerando prévia leve — {motivo}")
-    res = build_proxy(project.source_path, project.proxy_file,
-                      project.info.duration,
-                      on_progress=lambda f: ctx.progress(f, "gerando prévia leve"),
-                      cancel=ctx.cancelled)
-    project.marcar_proxy()
-    ctx.progress(1.0, f"prévia leve pronta: {res['width']}x{res['height']} "
-                      f"a {res['fps']:.0f} fps, {res['size_bytes'] / 1e6:.1f} MB")
-    return res
+    fontes = project.fontes_com_fala()
+    fatia = 1.0 / max(1, len(fontes))
+    feitos: dict[str, dict] = {}
+    for k, fonte in enumerate(fontes):
+        precisa, motivo = precisa_de_proxy(project, fonte)
+        if not precisa:
+            feitos[fonte] = {"skipped": True, "detail": motivo}
+            continue
+        if project.proxy_ok_de(fonte):
+            feitos[fonte] = {"skipped": True, "detail": "proxy já existe"}
+            continue
+        info = _info_da_fonte(project, fonte)
+        rotulo = ("gerando prévia leve" if len(fontes) == 1
+                  else f"gerando prévia leve da gravação {k + 1} de {len(fontes)}")
+        ctx.stage("proxy", f"{rotulo} — {motivo}")
+        res = build_proxy(project.caminho_da_fonte(fonte), project.proxy_de(fonte),
+                          float(getattr(info, "duration", 0.0) or 0.0),
+                          on_progress=lambda f, _k=k: ctx.progress(
+                              (_k + f) * fatia, rotulo),
+                          cancel=ctx.cancelled)
+        project.marcar_proxy_de(fonte)
+        feitos[fonte] = res
+    principal = feitos.get("main") or {"skipped": True}
+    prontos = [r for r in feitos.values() if not r.get("skipped")]
+    if prontos:
+        ctx.progress(1.0, f"prévia leve pronta ({len(prontos)} gravação(ões))")
+    else:
+        ctx.progress(1.0, principal.get("detail") or "nada a fazer")
+    # as chaves de cima continuam sendo as da gravação principal: é o que a
+    # tela e a suíte sempre leram
+    return {**principal, "fontes": feitos}
 
 
 def export(project: Project, ctx, options: dict | None = None) -> dict:

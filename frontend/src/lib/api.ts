@@ -165,7 +165,9 @@ export const api = {
 
   buildProxy: (id: string) => post<any>(`/api/projects/${id}/proxy`),
   proxyStatus: (id: string) =>
-    req<{ ok: boolean; precisa: boolean; detail: string; size_bytes: number }>(
+    req<{ ok: boolean; precisa: boolean; detail: string; size_bytes: number
+          fontes?: Record<string, { ok: boolean; precisa: boolean; detail: string
+                                    toca: boolean }> }>(
       `/api/projects/${id}/proxy-status`),
 
   looks: () => req<any[]>('/api/looks'),

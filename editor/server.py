@@ -346,24 +346,35 @@ def api_proxy(pid: str) -> dict:
 
 
 @app.get("/api/projects/{pid}/proxy")
-def api_proxy_file(pid: str, request: Request):
+def api_proxy_file(pid: str, request: Request, source: str = "main"):
     """Serve o proxy. 404 quando não existe — o player cai na fonte."""
     project = _project(pid)
-    if not project.proxy_ok:
+    if source not in project.fontes_com_fala():
+        raise HTTPException(404, "essa gravação não está no projeto")
+    if not project.proxy_ok_de(source):
         raise HTTPException(404, "sem prévia leve")
-    return _range_response(project.proxy_file, request)
+    return _range_response(project.proxy_de(source), request)
 
 
 @app.get("/api/projects/{pid}/proxy-status")
 def api_proxy_status(pid: str) -> dict:
-    from .render.proxy import vale_a_pena
+    """A cópia leve da principal (chaves de cima) e a de cada outra gravação.
 
+    Para as outras, ``toca`` diz se a prévia ao vivo consegue tocá-la: pela
+    cópia leve, ou direto do arquivo quando o navegador abre o formato dele.
+    """
     project = _project(pid)
-    precisa, motivo = (vale_a_pena(project.info) if project.info
+    precisa, motivo = (svc.precisa_de_proxy(project, "main") if project.info
                        else (False, "sem informação do arquivo"))
+    fontes = {}
+    for fonte in project.fontes_com_fala()[1:]:
+        p, m = svc.precisa_de_proxy(project, fonte)
+        ok = project.proxy_ok_de(fonte)
+        fontes[fonte] = {"ok": ok, "precisa": p, "detail": m, "toca": ok or not p}
     return {"ok": project.proxy_ok, "precisa": precisa, "detail": motivo,
             "size_bytes": (project.proxy_file.stat().st_size
-                           if project.proxy_ok else 0)}
+                           if project.proxy_ok else 0),
+            "fontes": fontes}
 
 
 @app.post("/api/projects/{pid}/adicionar-video")
