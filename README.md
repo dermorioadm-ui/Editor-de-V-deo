@@ -1810,8 +1810,12 @@ isso, e o resultado fica guardado.
 
 ### Logos 3D no gancho (Airbnb, Booking…), passando por trás de você
 
-Ponha o PNG do logo na biblioteca (aba **Pós → pôr logo**; os logos de
-plataforma não vêm com o programa — são marcas dos outros). Na primeira tela,
+Ponha o logo na biblioteca (aba **Pós → pôr logo**; os logos de plataforma
+não vêm com o programa — são marcas dos outros). Serve PNG transparente ou um
+**print/JPG com o logo sobre fundo liso** (o de uma busca de imagem): o fundo
+sai sozinho, a sobra do canto também, e o branco de dentro do logo fica. Um
+print com DOIS logos lado a lado é recusado — recorte um de cada vez
+(Win+Shift+S) e dê o nome de cada um (airbnb, booking). Na primeira tela,
 abaixo do **gancho**, escolha até 2 logos em **logos 3D no gancho** (vêm
 marcados os de plataforma). Em todo vídeo com gancho, cada logo:
 

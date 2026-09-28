@@ -369,6 +369,7 @@ def main() -> int:
     testar_marca_pelo_pdf()
     testar_gosto_aprendido_e_objetos_3d()
     testar_logo_3d_atras_da_pessoa_no_gancho()
+    testar_logo_de_print_com_fundo()
 
     print()
     if FALHAS:
@@ -9488,6 +9489,84 @@ def testar_logo_3d_atras_da_pessoa_no_gancho() -> None:
         tf = gancho3d._trajeto(0.8, 3.5, False, 0.0)
         check(tf[0]["x"] > 1.0 and all(k["x"] != 0.5 for k in tf),
               "sem recorte, entra pela borda e nunca passa pelo meio (o rosto)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+def testar_logo_de_print_com_fundo() -> None:
+    """ "Essa porra aí tá errada, não é a logo do Airbnb nem do Booking." Os
+    logos de plataforma chegam como PRINT/JPG, sobre fundo branco, às vezes
+    com o ícone da busca de imagem no canto e com degradê. A biblioteca tira
+    o fundo sozinha (o branco DENTRO do logo fica), joga fora a sobra do
+    canto, junta o degradê numa cor só, guarda o ponto de outra cor, e recusa
+    o print com dois logos juntos dizendo o que fazer."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import logo3d
+    from editor import marca as MK
+    from editor.config import FFMPEG
+
+    print("\n-- logo tirado de um print (fundo branco)")
+    tmp = Path(tempfile.mkdtemp(prefix="print_"))
+
+    def jpg(arr: np.ndarray, nome: str) -> Path:
+        h, w = arr.shape[:2]
+        p = tmp / nome
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                        "-s", f"{w}x{h}", "-i", "-", "-q:v", "3", "-frames:v", "1", str(p)],
+                       input=np.ascontiguousarray(arr).tobytes(), check=True)
+        return p
+
+    def circulo_com_b(w=400, h=400, cx=200, cy=200):
+        img = np.full((h, w, 3), 255, np.uint8)
+        yy, xx = np.mgrid[0:h, 0:w]
+        dentro = (yy - cy) ** 2 + (xx - cx) ** 2 < 150 ** 2
+        # azul em degradê (claro em cima, escuro embaixo)
+        t = ((yy - (cy - 150)) / 300.0).clip(0, 1)[..., None]
+        azul = (np.array([30, 77, 183]) * (1 - t) + np.array([16, 48, 122]) * t).astype(np.uint8)
+        img[dentro] = azul[dentro]
+        img[cy - 70:cy + 70, cx - 60:cx - 20] = 255                    # a haste branca
+        dot = (yy - (cy + 60)) ** 2 + (xx - (cx + 70)) ** 2 < 18 ** 2
+        img[dot] = (70, 156, 219)                                      # o ponto azul-claro
+        return img
+
+    try:
+        um = circulo_com_b(460, 440)
+        um[380:, :50] = (90, 90, 90)          # o ícone de busca, cortado no canto
+        a = jpg(um, "booking.jpg")
+        c = logo3d.camadas(str(a))
+        cores = [k["cor"] for k in c["camadas"]]
+        check(len(cores) == 3 and cores[1].startswith("#F") and "#46" in cores[2][:3] + cores[2][3:],
+              f"do print: o azul (degradê numa cor só), o branco e o ponto azul-claro ({cores})")
+        check(len(c["camadas"][0]["lacos"]) == 1,
+              "o fundo branco saiu e a sobra do canto também: a silhueta é um laço só")
+        antes = MK.logos_extras()
+        r = MK.guardar_logo(str(a), "booking-teste")
+        png = Path(r["caminho"])
+        arr = logo3d._ler(str(png))
+        check(r["fundo_tirado"] and png.suffix == ".png" and (arr[..., 3] < 10).mean() > 0.2
+              and arr[200, 200, 3] > 250,
+              "na biblioteca, o print vira PNG transparente (o branco do logo continua opaco)")
+        dois = np.full((440, 1000, 3), 255, np.uint8)
+        dois[:, :460] = circulo_com_b(460, 440)
+        dois[:, 540:] = circulo_com_b(460, 440)
+        b = jpg(dois, "dois.jpg")
+        try:
+            MK.guardar_logo(str(b), "dois")
+            ok, msg = False, ""
+        except ValueError as exc:
+            ok, msg = "2 logos" in str(exc), str(exc)
+        check(ok, f"o print com dois logos é recusado, dizendo para recortar ({msg[:60]})")
+        check(logo3d.quantos_logos(logo3d._ler(
+            str(Path(__file__).resolve().parent.parent / "marcas/hospedepay/logos/assinatura.png"))
+            [..., 3] > 128) == 1, "a assinatura (símbolo + nome) continua um logo só")
+        MK.apagar_logo("booking-teste")
+        check(MK.logos_extras().keys() == antes.keys(), "e sai da biblioteca quando apagado")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -235,13 +235,14 @@ function MarcaDoVideo({ projeto, marcaDoPlano }: { projeto: string; marcaDoPlano
   }
   const porLogo = async () => {
     try {
-      const r = await api.escolher('image', 'Escolher o PNG do logo (fundo transparente)')
+      const r = await api.escolher('image', 'Escolher o logo (PNG transparente, ou print/JPG sobre fundo liso)')
       if (r.cancelado) return
       const nome = window.prompt('Nome do logo (ex.: airbnb, booking):',
         String(r.path ?? '').split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? '') ?? ''
       const res = await api.marcaLogo(r.path, nome)
       setM(res)
-      toast('ok', `Logo "${res.nome}" pronto`, 'O Claude e o "+ logo" já podem usar.')
+      toast('ok', `Logo "${res.nome}" pronto`, (res.fundo_tirado ? 'Tirei o fundo da imagem sozinho. ' : '')
+        + 'O Claude, o "+ logo" e o 3D do gancho já podem usar.')
     } catch (e: any) {
       toast('warn', 'Não deu para pôr o logo', String(e.message ?? e))
     }

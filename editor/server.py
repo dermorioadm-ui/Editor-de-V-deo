@@ -2706,7 +2706,8 @@ def api_marca_logo(payload: dict = Body(...)) -> dict:
         r = MK.guardar_logo(str(payload.get("caminho") or ""), str(payload.get("nome") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "nome": r["nome"], **api_marca()}
+    return {"ok": True, "nome": r["nome"], "fundo_tirado": r.get("fundo_tirado", False),
+            **api_marca()}
 
 
 @app.delete("/api/marca/logos/{nome}")

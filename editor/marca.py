@@ -192,17 +192,31 @@ def caminho_do_logo(kit: dict | None, nome: str) -> str:
 
 
 def guardar_logo(origem: str, nome: str = "") -> dict:
-    """Copia um PNG do disco para a biblioteca de logos (nada sai da máquina)."""
+    """Põe um logo do disco na biblioteca (nada sai da máquina).
+
+    PNG/WebP com transparência entram como estão. Print ou JPG com o logo
+    sobre fundo liso (branco, cinza…) também servem: o fundo sai sozinho e o
+    logo vira PNG transparente — "o logo do Airbnb e do Booking" que ele tira
+    da internet chega assim."""
     src = Path(origem)
-    if not src.is_file() or src.suffix.lower() not in EXTENSOES:
-        raise ValueError("escolha um PNG (de preferência com fundo transparente)")
+    if not src.is_file() or src.suffix.lower() not in EXTENSOES + (".jpg", ".jpeg"):
+        raise ValueError("escolha a imagem do logo (PNG, WebP ou JPG)")
     if src.stat().st_size > 20 * 1024 * 1024:
         raise ValueError("arquivo grande demais para um logo")
     slug = _slug(nome or src.stem) or "logo"
     PASTA_DE_LOGOS.mkdir(parents=True, exist_ok=True)
-    destino = PASTA_DE_LOGOS / f"{slug}{src.suffix.lower()}"
-    shutil.copyfile(src, destino)
-    return {"nome": slug, "caminho": str(destino)}
+    from . import logo3d
+
+    base = PASTA_DE_LOGOS / slug
+    tmp = PASTA_DE_LOGOS / f".{slug}.novo"
+    r = logo3d.limpar_para_biblioteca(str(src), str(tmp))     # erro: o antigo fica
+    for ext in EXTENSOES:                     # o novo substitui o antigo com o mesmo nome
+        antigo = base.with_suffix(ext)
+        if antigo.is_file():
+            antigo.unlink()
+    destino = base.with_suffix(Path(r["caminho"]).suffix)
+    Path(r["caminho"]).replace(destino)
+    return {"nome": slug, "caminho": str(destino), "fundo_tirado": r["fundo_tirado"]}
 
 
 def apagar_logo(nome: str) -> bool:
