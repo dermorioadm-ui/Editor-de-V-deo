@@ -8085,6 +8085,16 @@ def testar_marca_logos_cenas() -> None:
     k2 = _chave_do_trecho(segs[0], plano(cenas=[moldura]), info, [], None)[0]
     ok(k1 != k2, "uma cena muda a chave do cache do trecho")
 
+    # "na hora da moldura a edição ficou piscando": a moldura que atravessa
+    # uma emenda recomeçava o fade do fundo no trecho seguinte (o fade do
+    # ffmpeg não aceita começo negativo) — o fundo sumia e voltava
+    v, _s = render(plano(cenas=[moldura], cortes=((0, 2), (2, 4))), "moldura_emenda")
+    ok(contar(v) == 120, f"moldura atravessando a emenda: {contar(v)} quadros")
+    lados = [quadro(v, t)[40:320, 20:200].reshape(-1, 3).mean(axis=0) for t in (1.95, 2.0, 2.04, 2.1)]
+    ok(all(abs(c[0] - 255) < 30 and c[1] < 110 for c in lados),
+       "moldura atravessando a emenda: o fundo da marca fica no lugar dos dois lados "
+       f"(sem piscar) — {[c.round().tolist() for c in lados]}")
+
     vidro = Cena(tipo="vidro3d", logos=["assinatura_branca"], out_start=0.8, out_end=3.4)
     v, segs = render(plano(cenas=[vidro], cortes=((0, 2), (2, 4))), "vidro")
     ok(contar(v) == 120, f"as camadas de vidro não mudam a contagem de quadros ({contar(v)})")

@@ -202,6 +202,30 @@ def geometria_moldura(cena, W: int, H: int, centro: tuple[float, float]) -> dict
             "cw": cw, "ch": ch, "cx0": cx0, "cy0": cy0, "s1": s1, "r": r}
 
 
+def _alpha_no_tempo(tag_in: str, tag_out: str, W: int, H: int, fps: float,
+                    a: float, d_in: float, b: float, d_out: float, p: str) -> str:
+    """A transparência de uma camada pela HORA DA CENA, e não pela do trecho.
+
+    O ``fade`` do ffmpeg só começa em t >= 0: numa cena que atravessa uma
+    emenda, o trecho seguinte começa com ``a`` negativo, o fade recomeçava do
+    zero ali e o fundo da moldura sumia e voltava num piscar — "a edição
+    ficou piscando na hora da moldura". Aqui o alpha é uma expressão de t
+    (sobe de ``a`` a ``a + d_in``, desce até ``b``), calculada numa fonte 2x2
+    e esticada — custo desprezível — e vale igual dos dois lados da emenda.
+    """
+    al = (f"min(clip((T-({a:.4f}))/{max(d_in, 1e-3):.4f},0,1),"
+          f"clip((({b:.4f})-T)/{max(d_out, 1e-3):.4f},0,1))")
+    return (f"color=c=white:s=2x2:r={fps:.6f},format=gray,geq=lum='255*{al}',"
+            f"scale={W}:{H}[{p}al];[{tag_in}][{p}al]alphamerge=shortest=1[{tag_out}]")
+
+
+def _logo_no_tempo(a: float, d_in: float, b: float, d_out: float) -> str:
+    """O mesmo, para um PNG que já tem transparência: multiplica o alpha dele."""
+    al = (f"min(clip((T-({a:.4f}))/{max(d_in, 1e-3):.4f},0,1),"
+          f"clip((({b:.4f})-T)/{max(d_out, 1e-3):.4f},0,1))")
+    return f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*{al}'"
+
+
 def _moldura(tag_in: str, tag_out: str, cena, W: int, H: int, fps: float,
              a: float, b: float, kit: dict | None, centro, img, pasta: Path,
              p: str) -> str:
@@ -219,14 +243,14 @@ def _moldura(tag_in: str, tag_out: str, cena, W: int, H: int, fps: float,
     fundo = cor_de_fundo(cena, kit, "desfoque")
     partes = [f"[{tag_in}]split=3[{p}a][{p}b][{p}c]"]
     # o fundo: aparece por cima do vídeo cheio junto com o encolher
-    fade = (f"fade=t=in:st={max(0.0, a):.3f}:d={ed * 0.8:.3f}:alpha=1,"
-            f"fade=t=out:st={max(0.0, b - sd):.3f}:d={sd * 0.9:.3f}:alpha=1")
     if fundo == "desfoque":
         partes.append(f"[{p}b]format=yuva420p,gblur=sigma={min(W, H) * 0.03:.1f},"
-                      f"eq=brightness=-0.13:saturation=0.8,{fade}[{p}bg]")
+                      f"eq=brightness=-0.13:saturation=0.8[{p}bx]")
     else:
         partes.append(f"[{p}b]format=yuva420p,drawbox=x=0:y=0:w=iw:h=ih:"
-                      f"color={_hex(fundo)}@1:t=fill,{fade}[{p}bg]")
+                      f"color={_hex(fundo)}@1:t=fill[{p}bx]")
+    partes.append(_alpha_no_tempo(f"{p}bx", f"{p}bg", W, H, fps, a, ed * 0.8,
+                                  b - sd * 0.1, sd * 0.9, p))
     partes.append(f"[{p}a][{p}bg]overlay=format=auto[{p}1]")
     # a sombra do cartão, que cresce e anda junto com ele
     partes.append(f"color=c=black:s={cw + 2 * m}x{ch + 2 * m}:r={fps:.6f},format=yuva420p[{p}sc]")
@@ -350,18 +374,17 @@ def _vidro3d(tag_in: str, tag_out: str, mascara_tag: str | None, cena, W: int, H
         lw, lh = int(lw) // 2 * 2, int(lh) // 2 * 2
         cx = W * (k + 1) / (n + 1)
         partes.append(f"[{img(caminho)}]format=rgba,scale={lw}:{lh}:flags=lanczos,"
-                      f"fade=t=in:st={max(0.0, a + e * 0.3):.3f}:d={e * 0.6:.3f}:alpha=1,"
-                      f"fade=t=out:st={max(0.0, b - s):.3f}:d={s * 0.7:.3f}:alpha=1[{p}lg{k}]")
+                      f"{_logo_no_tempo(a + e * 0.3, e * 0.6, b - s * 0.3, s * 0.7)}[{p}lg{k}]")
         partes.append(f"[{atual}][{p}lg{k}]overlay=x={cx - lw / 2:.1f}:y={H / 2 - lh / 2:.1f}"
                       f":format=auto:shortest=1[{p}l{k + 1}]")
         atual = f"{p}l{k + 1}"
     partes.append(f"[{atual}]format=yuva444p," + persp(f"{p}q1", 0.0))
     # o palco: a cor, e as placas de trás para a frente
     partes.append(f"[{p}a]drawbox=x=0:y=0:w=iw:h=ih:color={_hex(fundo)}@1:t=fill[{p}st]")
-    partes.append(f"[{p}st][{p}q0]overlay=format=auto[{p}s1]")
-    partes.append(f"[{p}s1][{p}q1]overlay=format=auto[{p}s2]")
+    partes.append(f"[{p}st][{p}q0]overlay=format=auto:shortest=1[{p}s1]")
+    partes.append(f"[{p}s1][{p}q1]overlay=format=auto:shortest=1[{p}s2]")
     if tem_pessoa:
-        partes.append(f"[{p}s2][{p}q2]overlay=format=auto,format={pix_fmt}[{tag_out}]")
+        partes.append(f"[{p}s2][{p}q2]overlay=format=auto:shortest=1,format={pix_fmt}[{tag_out}]")
     else:
         partes.append(f"[{p}s2]format={pix_fmt}[{tag_out}]")
     return ";".join(partes)
