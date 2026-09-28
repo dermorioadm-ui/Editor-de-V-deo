@@ -448,12 +448,16 @@ def _gerados(extra=()):
 def _do_programa(a):
     """O que vem PRONTO com o Sharkcut para esta assinatura (a mesma peça, em
     qualquer cor: a cor da marca é trocada na hora)."""
-    if not a or a.startswith("logo3d:"): return None
-    base,_,marca=a.rpartition(":")
+    if not a: return None
     try:
         idx=json.loads((PRONTOS/"indice.json").read_text(encoding="utf-8"))
     except (OSError,ValueError):
         return None
+    if a.startswith("logo3d:"):
+        # logo é o próprio desenho: só o MESMO logo serve, e a cor é a dele
+        return next((e for e in idx if e.get("assinatura")==a
+                     and (PRONTOS/e.get("arquivo","")).is_file()),None)
+    base,_,marca=a.rpartition(":")
     iguais=[e for e in idx if e.get("base")==base and (PRONTOS/e.get("arquivo","")).is_file()]
     if not iguais: return None
     return next((e for e in iguais if e.get("marca","").upper()==marca),iguais[0])
@@ -484,7 +488,7 @@ def _converter(entrada,destino,marca,ctx=None):
     h0,s0,_l0=_hsl(entrada.get("marca","#FF385C"))
     h1,s1,_l1=_hsl(marca)
     filtros=[]
-    if entrada.get("marca","").upper()!=marca.upper():
+    if marca and entrada.get("marca") and entrada["marca"].upper()!=marca.upper():
         filtros.append(f"hue=h={(h1-h0+540)%360-180:.1f}:s={max(0.0,min(4.0,s1/max(s0,1e-3))):.3f}")
     temp=destino.with_name(destino.stem+"-parcial.mov")
     destino.parent.mkdir(parents=True,exist_ok=True)
@@ -533,8 +537,8 @@ def pronto(cena,extra=(),ctx=None):
         return video,e["cena"]
     ent=_do_programa(a)
     if not ent: return None
-    marca=a.rpartition(":")[2]
-    pasta=_biblioteca()/f"{Path(ent['arquivo']).stem}-{marca.strip('#').lower()}"
+    marca="" if a.startswith("logo3d:") else a.rpartition(":")[2]
+    pasta=_biblioteca()/"-".join(x for x in (Path(ent['arquivo']).stem,marca.strip('#').lower()) if x)
     video=pasta/"arte.mov"
     feito=normalizar({**cena,**{k:ent[k] for k in ("duracao","largura","altura","fps")}})
     if ent.get("animacao") and feito.get("objetos"):

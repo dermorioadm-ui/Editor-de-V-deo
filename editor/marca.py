@@ -32,6 +32,9 @@ from .config import DATA_DIR
 PASTA_DO_PROGRAMA = Path(__file__).resolve().parent.parent / "marcas"
 PASTA_DO_USUARIO = DATA_DIR / "marcas"
 PASTA_DE_LOGOS = PASTA_DO_USUARIO / "_logos"
+# os logos de plataforma que já vêm com o programa (Airbnb, Booking), tirados
+# do print dele — o que ele puser com o mesmo nome em _logos vale por cima
+PLATAFORMAS = PASTA_DO_PROGRAMA / "_plataformas"
 EXTENSOES = (".png", ".webp")
 _SLUG = re.compile(r"[^a-z0-9_-]+")
 
@@ -169,12 +172,16 @@ def kit_do_plano(plan) -> dict | None:
 
 # ------------------------------------------------------------------ logos
 def logos_extras() -> dict[str, dict]:
-    """Os PNG que o usuário pôs (Airbnb, Booking…), pelo nome do arquivo."""
+    """Os logos de plataforma (Airbnb, Booking…): os que vêm com o programa e
+    os que o usuário pôs, pelo nome do arquivo (o dele vale por cima)."""
     out: dict[str, dict] = {}
-    if PASTA_DE_LOGOS.is_dir():
-        for p in sorted(PASTA_DE_LOGOS.iterdir()):
+    for pasta, uso in ((PLATAFORMAS, "logo de plataforma (vem com o programa)"),
+                       (PASTA_DE_LOGOS, "logo que você pôs")):
+        if not pasta.is_dir():
+            continue
+        for p in sorted(pasta.iterdir()):
             if p.suffix.lower() in EXTENSOES and p.is_file():
-                out[_slug(p.stem) or p.stem] = {"caminho": str(p), "uso": "logo que você pôs",
+                out[_slug(p.stem) or p.stem] = {"caminho": str(p), "uso": uso,
                                                 "da_marca": False}
     return out
 

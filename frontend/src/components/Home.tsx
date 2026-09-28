@@ -91,7 +91,7 @@ export default function Home() {
   const [gancho, setGancho] = useState('')
   // os logos que entram em 3D no gancho (null = ainda não escolheu: os de plataforma)
   const [ganchoLogos, setGanchoLogos] = useState<string[] | null>(() => {
-    try { const v = localStorage.getItem('sharkcut.ganchoLogos'); return v ? JSON.parse(v) : null } catch { return null }
+    try { const v = localStorage.getItem('sharkcut.ganchoLogos.v2'); return v ? JSON.parse(v) : null } catch { return null }
   })
   // o nome do vídeo na pasta (sem extensão); vazio = o nome do arquivo + "_editado"
   const [nomeArquivo, setNomeArquivo] = useState('')
@@ -780,12 +780,12 @@ export default function Home() {
                       const base = logosDoGancho.escolhidos
                       const novo = on ? base.filter((x) => x !== n) : [...base, n].slice(-2)
                       setGanchoLogos(novo)
-                      try { localStorage.setItem('sharkcut.ganchoLogos', JSON.stringify(novo)) } catch { /* só lembrança */ }
+                      try { localStorage.setItem('sharkcut.ganchoLogos.v2', JSON.stringify(novo)) } catch { /* só lembrança */ }
                     }}>{n}</button>
                 })}
                 <span className="text-[11px] text-slate-500 basis-full">
-                  até 2 · o PNG vira peça 3D no Blender desta máquina, sai de trás de você, flutua ao lado e volta ·
-                  Airbnb/Booking: ponha o PNG na aba Pós (pôr logo)
+                  até 2 · Airbnb e Booking já vêm prontos em 3D: saem de trás de você, flutuam ao lado e voltam ·
+                  outro logo: ponha o PNG na aba Pós (pôr logo)
                 </span>
               </span>
             )}
