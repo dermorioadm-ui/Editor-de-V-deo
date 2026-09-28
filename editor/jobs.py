@@ -87,9 +87,18 @@ class Hub:
 hub = Hub()
 
 
+# O 3D TEM FAIXA PRÓPRIA. Na fila única, um objeto 3D pedido pela IA
+# esperava atrás da exportação final de minutos (e a prévia saía antes, sem
+# ele) — "não me entrega os elementos do Blender como prioridade". Os renders
+# do Blender rodam numa linha só deles, um de cada vez (cada um já usa todos
+# os núcleos), e começam na hora em que são pedidos.
+FAIXA_PROPRIA = ("arte-3d",)
+
+
 class JobQueue:
     def __init__(self, workers: int = WORKERS) -> None:
         self._q: queue.Queue = queue.Queue()
+        self._q3d: queue.Queue = queue.Queue()
         self._jobs: dict[str, Job] = {}
         self._cancel: set[str] = set()
         self._lock = threading.Lock()
@@ -97,6 +106,8 @@ class JobQueue:
             threading.Thread(target=self._worker, daemon=True, name=f"job-{i}")
             for i in range(max(1, workers))
         ]
+        self._threads.append(threading.Thread(target=self._worker, args=(self._q3d,),
+                                              daemon=True, name="job-3d"))
         for t in self._threads:
             t.start()
 
@@ -120,9 +131,37 @@ class JobQueue:
         if paralelo:
             threading.Thread(target=self._executar, args=(job, fn), daemon=True,
                              name=f"job-{kind}-{job.id}").start()
+        elif kind in FAIXA_PROPRIA:
+            self._q3d.put((job, fn))
         else:
             self._q.put((job, fn))
         return job
+
+    def pendentes(self, project_id: str, kinds=FAIXA_PROPRIA) -> list[Job]:
+        """Os trabalhos destes tipos ainda na fila ou rodando neste projeto."""
+        with self._lock:
+            return [j for j in self._jobs.values() if j.project_id == project_id
+                    and j.kind in kinds and j.status in ("fila", "rodando")]
+
+    def esperar(self, project_id: str, ctx: "JobContext | None" = None,
+                kinds=FAIXA_PROPRIA, limite: float = 3600.0,
+                mensagem: str = "esperando o Blender terminar o 3D") -> int:
+        """Espera os trabalhos destes tipos terminarem (o vídeo final e a
+        prévia da direção não saem sem o 3D pedido). Devolve quantos esperou."""
+        inicio = time.time()
+        vistos: set[str] = set()
+        while True:
+            pend = self.pendentes(project_id, kinds)
+            if not pend or time.time() - inicio > limite:
+                return len(vistos)
+            vistos.update(j.id for j in pend)
+            if ctx is not None:
+                ctx.check()
+                rodando = next((j for j in pend if j.status == "rodando"), None)
+                detalhe = f" — {rodando.message}" if rodando and rodando.message else ""
+                ctx.progress(ctx.job.progress, f"{mensagem}: falta{'m' if len(pend) > 1 else ''} "
+                             f"{len(pend)}{detalhe}", "3d")
+            time.sleep(1.0)
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -152,13 +191,14 @@ class JobQueue:
             return job_id in self._cancel
 
     # --------------------------------------------------------------- interno
-    def _worker(self) -> None:
+    def _worker(self, fila: queue.Queue | None = None) -> None:
+        fila = fila or self._q
         while True:
-            job, fn = self._q.get()
+            job, fn = fila.get()
             try:
                 self._executar(job, fn)
             finally:
-                self._q.task_done()
+                fila.task_done()
 
     def _executar(self, job: Job, fn) -> None:
         if self.is_cancelled(job.id):

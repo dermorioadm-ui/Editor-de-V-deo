@@ -21,22 +21,128 @@ ANIMACOES = ("montar", "surgir", "flutuar", "nenhuma")
 PAPEIS_DE_COR = ("marca", "escura", "clara", "base", "texto")
 
 
+_achado: dict = {}
+
+
+def _candidatos_windows() -> list[Path]:
+    """Onde o blender.exe costuma ficar no Windows — sem varrer o disco: o
+    instalador oficial, a Microsoft Store, Steam, Scoop, Chocolatey, winget e
+    o ZIP portátil que alguém (ou um agente como o Codex) desempacotou em
+    Downloads/Desktop/Documentos/C:\tools."""
+    env = os.environ
+    home = Path(env.get("USERPROFILE") or Path.home())
+    locais = Path(env.get("LOCALAPPDATA") or home / "AppData" / "Local")
+    raizes_pf = [Path(env.get(k)) for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+                 if env.get(k)] or [Path("C:/Program Files")]
+    out: list[Path] = []
+    for pf in raizes_pf:
+        out += sorted((pf / "Blender Foundation").glob("Blender*/blender.exe"), reverse=True)
+        out.append(pf / "Blender Foundation" / "blender.exe")
+        out.append(pf / "Steam" / "steamapps" / "common" / "Blender" / "blender.exe")
+    out += sorted((locais / "Programs" / "Blender Foundation").glob("Blender*/blender.exe"),
+                  reverse=True)
+    out.append(locais / "Microsoft" / "WindowsApps" / "blender.exe")      # Microsoft Store
+    out.append(home / "scoop" / "apps" / "blender" / "current" / "blender.exe")
+    out += sorted(Path("C:/ProgramData/chocolatey/lib/blender/tools").glob("blender*/blender.exe"),
+                  reverse=True)
+    out += sorted((locais / "Microsoft" / "WinGet" / "Packages").glob(
+        "BlenderFoundation.Blender*/**/blender.exe"), reverse=True)
+    # o ZIP portátil: blender-4.5.9-windows-x64\blender.exe, até dois níveis
+    pastas = [home / n for n in ("Downloads", "Desktop", "Documents", "Área de Trabalho",
+                                 "Documentos", "tools", "Apps", ".codex", "blender")]
+    pastas += [home / "OneDrive" / n for n in ("Desktop", "Documents", "Área de Trabalho",
+                                              "Documentos")]
+    pastas += [Path("C:/tools"), Path("C:/Blender"), Path("C:/"), Path(__file__).resolve().parents[1]]
+    for base in pastas:
+        if not base.is_dir():
+            continue
+        try:
+            out += sorted(base.glob("[Bb]lender*/blender.exe"), reverse=True)
+            out += sorted(base.glob("*/[Bb]lender*/blender.exe"), reverse=True)
+        except OSError:
+            continue
+    try:                                            # o registro: App Paths e o .blend
+        import winreg
+
+        for raiz, chave in ((winreg.HKEY_LOCAL_MACHINE,
+                             r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\blender.exe"),
+                            (winreg.HKEY_CURRENT_USER,
+                             r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\blender.exe"),
+                            (winreg.HKEY_CLASSES_ROOT, r"blendfile\shell\open\command")):
+            try:
+                with winreg.OpenKey(raiz, chave) as k:
+                    v = str(winreg.QueryValue(k, None) or "")
+                v = v.strip().split('" ')[0].strip('"').split(" %")[0]
+                if v.lower().endswith("blender.exe"):
+                    out.append(Path(v))
+            except OSError:
+                continue
+    except ImportError:
+        pass
+    return out
+
+
 def executavel():
+    """O blender.exe: o que ele ESCOLHEU (tela), a variável EDITOR_BLENDER, o
+    PATH, e os lugares de instalação comuns. O achado fica guardado."""
     escolhido=os.environ.get("EDITOR_BLENDER", "")
     if escolhido:
         return str(Path(escolhido).resolve()) if Path(escolhido).is_file() else ""
+    try:
+        from . import db
+        salvo=str(db.get_setting("blender_caminho","") or "")
+    except Exception:  # noqa: BLE001 — sem banco (teste solto): segue procurando
+        salvo=""
+    if salvo and Path(salvo).is_file():
+        return salvo
+    if _achado.get("caminho") and Path(_achado["caminho"]).is_file():
+        return _achado["caminho"]
     encontrado=shutil.which("blender")
-    if encontrado: return encontrado
-    raiz=Path(os.environ.get("ProgramFiles", "C:/Program Files"))/"Blender Foundation"
-    candidatos=sorted(raiz.glob("Blender */blender.exe"),reverse=True) if raiz.is_dir() else []
-    candidatos += [Path("/Applications/Blender.app/Contents/MacOS/Blender"),Path("/usr/bin/blender")]
-    return next((str(p) for p in candidatos if p.is_file()), "")
+    if not encontrado:
+        candidatos=_candidatos_windows() if os.name=="nt" else []
+        candidatos += [Path("/Applications/Blender.app/Contents/MacOS/Blender"),Path("/usr/bin/blender"),
+                       Path("/snap/bin/blender")]
+        encontrado=next((str(p) for p in candidatos if p.is_file()), "")
+    if encontrado:
+        _achado["caminho"]=encontrado
+    return encontrado
+
+
+def versao(caminho: str = "") -> str:
+    """"Blender 4.5.9" — roda o executável de verdade (e prova que ele abre)."""
+    exe=caminho or executavel()
+    if not exe:
+        return ""
+    try:
+        r=subprocess.run([exe,"--version"],capture_output=True,text=True,timeout=45,
+                         creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    except (OSError,subprocess.TimeoutExpired):
+        return ""
+    linha=next((ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip().startswith("Blender")),"")
+    return linha
+
+
+def escolher(caminho: str) -> dict:
+    """Ele apontou o blender.exe pela janela do sistema: confere e guarda."""
+    from . import db
+    p=Path(str(caminho or ""))
+    if not p.is_file() or p.name.lower() not in ("blender.exe","blender","blender-launcher.exe"):
+        raise ValueError("escolha o arquivo blender.exe (na pasta onde o Blender está instalado)")
+    if p.name.lower()=="blender-launcher.exe" and (p.parent/"blender.exe").is_file():
+        p=p.parent/"blender.exe"      # o launcher abre janela; o blender.exe roda sem tela
+    v=versao(str(p))
+    if not v:
+        raise ValueError("esse blender.exe não abriu — confira se é o Blender 4.x ou 5.x")
+    db.set_setting("blender_caminho",str(p))
+    _achado.clear()
+    return estado()
 
 
 def estado():
     path=executavel()
     return {"disponivel":bool(path),"executavel":path,"local":True,
-            "instalacao":"Instale o Blender ou indique o executável na variável EDITOR_BLENDER antes de iniciar o Sharkcut.",
+            "instalacao":("Instale o Blender (blender.org) ou, se ele já está instalado, aponte o "
+                          "blender.exe em Pós → Artes e composição → Apontar o Blender."),
             "tipos":TIPOS,"saida":"vídeo com transparência, importável como sobreposição",
             "limites":{"objetos":24,"duracao":10,"pixels":2073600},
             "custo_do_render":"sem serviço pago; usa CPU local",

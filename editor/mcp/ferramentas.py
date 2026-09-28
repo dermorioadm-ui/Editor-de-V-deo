@@ -1674,8 +1674,12 @@ def gosto(c: Cliente, a: dict) -> str:
     "acao=transicao: faixas 3D da marca que TAMPAM a tela no instante em= (a troca de "
     "assunto) — no máximo 1 ou 2 por vídeo. acao=criar: cena livre com primitivas "
     "(cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo cubo/esfera/"
-    "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job: use consultar com job até "
-    "ok/erro ANTES de revisar. Não executa scripts arbitrários.",
+    "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job. PEÇA O 3D LOGO NO COMEÇO "
+    "do trabalho, assim que o plano estiver pronto: ele renderiza numa faixa própria enquanto "
+    "você faz o resto (cada um leva alguns minutos). Não fique parado esperando: o Sharkcut "
+    "espera todos os 3D terminarem antes da prévia final e do vídeo. Consulte (acao=consultar) "
+    "no fim, para conferir com ver_quadros e revisar. Se voltar erro de Blender, diga isso no "
+    "relatório. Não executa scripts arbitrários.",
     {"properties":{"projeto":{"type":"string"},
         "acao":{"type":"string","enum":["objeto","logo","transicao","criar","consultar"]},
         "logo":{"type":"string"},"atras":{"type":"boolean"},

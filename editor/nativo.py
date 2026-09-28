@@ -36,6 +36,7 @@ FILTROS = {
     "video": ("Vídeo", "*.mp4;*.mov;*.mkv;*.webm;*.m4v;*.avi;*.mpg;*.mpeg;*.wmv"),
     "texto": ("Texto", "*.txt"),
     "pdf": ("PDF", "*.pdf"),
+    "programa": ("Programa", "*.exe;blender"),
     "audio": ("Áudio", "*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma"),
     "image": ("Imagem", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff"),
     # material auxiliar: gravação de tela E print, na mesma janela — separar

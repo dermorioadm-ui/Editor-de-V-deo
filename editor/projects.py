@@ -1519,7 +1519,13 @@ def exportar_final(project: Project, ctx) -> dict:
     e ninguém saberia qual é o bom.
     """
     from .ffmpeg_utils import em_segundo_plano
+    from .jobs import get_queue
 
+    # O 3D PEDIDO ENTRA NO VÍDEO. Os objetos, logos e transições do Blender
+    # renderizam na faixa deles; o arquivo final espera os que ainda faltam
+    # (e relê o plano: é quando terminam que eles entram na linha do tempo)
+    if get_queue().esperar(project.id, ctx, mensagem="esperando o 3D do Blender para gerar o vídeo"):
+        project = load(project.id)
     em_segundo_plano(True)      # roda por baixo: cede a CPU para quem está retocando
     try:
         principal = export(project, ctx, {

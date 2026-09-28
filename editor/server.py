@@ -2998,6 +2998,28 @@ def api_compor(pid: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.get("/api/blender")
+def api_blender() -> dict:
+    """O Blender desta máquina: achado ou não, onde, e a versão (roda de verdade)."""
+    from . import blender_local as B
+    e = B.estado()
+    e["versao"] = B.versao() if e["disponivel"] else ""
+    return e
+
+
+@app.post("/api/blender")
+def api_blender_escolher(payload: dict = Body(...)) -> dict:
+    """Ele apontou o blender.exe pela janela do sistema (instalado pelo Codex,
+    portátil, em outra pasta): confere que abre e guarda."""
+    from . import blender_local as B
+    try:
+        e = B.escolher(str(payload.get("caminho") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    e["versao"] = B.versao()
+    return e
+
+
 @app.get("/api/projects/{pid}/arte")
 def api_arte_catalogo(pid: str) -> dict:
     from . import artes
@@ -3191,6 +3213,8 @@ def _pedir_diretor(pid: str, payload: dict) -> dict:
         r = svc._scoped(ctx, 0.0, 0.9, lambda c: editores.executar(pid, c, provedor, modo, pedido))
         if not r.get("ok"):
             raise RuntimeError(r.get("erro") or "direção incompleta")
+        # a prévia da direção já sai COM o 3D que a IA pediu
+        r["esperou_3d"] = get_queue().esperar(pid, ctx, mensagem="esperando o 3D do Blender")
         res = _previa_e_pronto(pid, ctx, {"diretor": r}, 0.9)
         res["final_job"] = get_queue().submit("exportacao", pid,
             lambda c: svc.exportar_final(svc.load(pid), c)).id

@@ -372,6 +372,7 @@ def main() -> int:
     testar_logo_de_print_com_fundo()
     testar_logo_no_canto_e_pos_rica()
     testar_cada_tomada_toca_na_previa()
+    testar_3d_tem_prioridade()
 
     print()
     if FALHAS:
@@ -9727,6 +9728,62 @@ def testar_cada_tomada_toca_na_previa() -> None:
             except Exception:  # noqa: BLE001
                 pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_3d_tem_prioridade() -> None:
+    """ "Ele não me entrega os elementos do Blender como prioridade quando peço
+    pra gerar." Na fila única, o objeto 3D pedido esperava atrás da exportação
+    de minutos, e a prévia/o vídeo saíam sem ele. Agora o 3D tem faixa
+    própria (começa na hora, mesmo com uma exportação rodando) e quem gera o
+    vídeo espera os 3D pendentes do projeto."""
+    import time as _t
+
+    from editor.jobs import JobQueue
+
+    print("\n-- o 3D do Blender como prioridade")
+    fila = JobQueue(workers=1)
+    marcas: dict[str, float] = {}
+
+    def longo(ctx):
+        _t.sleep(2.0)
+        marcas["export"] = _t.time()
+        return {}
+
+    def render(ctx):
+        _t.sleep(0.4)
+        marcas["3d"] = _t.time()
+        return {}
+
+    inicio = _t.time()
+    fila.submit("exportacao", "p1", longo)
+    fila.submit("arte-3d", "p1", render)
+    for _ in range(60):
+        if "3d" in marcas and "export" in marcas:
+            break
+        _t.sleep(0.1)
+    check(marcas.get("3d", 99) < marcas.get("export", 0) and marcas["3d"] - inicio < 1.5,
+          f"o 3D começa na hora, mesmo com a exportação ocupando a fila "
+          f"(3D em {marcas.get('3d', 0) - inicio:.1f} s, exportação em "
+          f"{marcas.get('export', 0) - inicio:.1f} s)")
+
+    class Ctx:
+        def __init__(self):
+            self.job = type("J", (), {"progress": 0.0})()
+            self.msgs = []
+
+        def check(self):
+            pass
+
+        def progress(self, f, m="", s=""):
+            self.msgs.append(m)
+
+    fila.submit("arte-3d", "p2", lambda c: (_t.sleep(1.2), {})[1])
+    ctx = Ctx()
+    t0 = _t.time()
+    n = fila.esperar("p2", ctx, mensagem="esperando o 3D")
+    check(n == 1 and _t.time() - t0 >= 1.0 and any("esperando o 3D" in m for m in ctx.msgs),
+          "quem gera o vídeo espera o 3D pendente do projeto, e diz que está esperando")
+    check(fila.esperar("outro", ctx) == 0, "sem 3D pendente, não espera nada")
 
 
 if __name__ == "__main__":

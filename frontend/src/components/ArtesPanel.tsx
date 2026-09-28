@@ -11,6 +11,8 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
   const [erro, setErro] = useState('')
   const [busy, setBusy] = useState(false)
   const [lado3d, setLado3d] = useState('esquerda')
+  const [blender, setBlender] = useState<any>(null)
+  useEffect(() => { api.blender().then(setBlender).catch(() => setBlender({ disponivel: false })) }, [])
   useEffect(() => {
     let ativo = true
     setCatalogo(null); setErro('')
@@ -84,6 +86,25 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
       <p className="text-[11px] text-slate-500">Modelados no Blender desta máquina, nas cores da marca,
         montando peça por peça. Leva alguns minutos; o vídeo continua editável enquanto isso.</p>
     </div>}
+    <div className="flex items-center gap-2 flex-wrap text-[11px]" data-blender-estado={blender?.disponivel ? 'ok' : 'falta'}>
+      <span className={blender?.disponivel ? 'text-emerald-300' : 'text-amber-300'}>
+        {blender == null ? 'procurando o Blender…'
+          : blender.disponivel ? `Blender pronto${blender.versao ? ` · ${blender.versao}` : ''}`
+          : 'Blender não encontrado nesta máquina'}</span>
+      <button className="btn btn-xs" data-apontar-blender onClick={async () => {
+        try {
+          const r = await api.escolher('programa', 'Apontar o blender.exe (a pasta onde o Blender está)')
+          if (r.cancelado || !r.path) return
+          const e = await api.blenderEscolher(r.path)
+          setBlender(e)
+          toast('ok', 'Blender pronto', `${e.versao || ''} — os objetos, logos e transições 3D já podem sair`)
+          api.artes(project.id).then(setCatalogo).catch(() => {})
+        } catch (e: any) { toast('warn', 'Não deu para usar esse Blender', String(e.message ?? e)) }
+      }}>{blender?.disponivel ? 'trocar o Blender' : 'Apontar o Blender'}</button>
+      {blender && !blender.disponivel && <span className="text-slate-500 basis-full">
+        Instalou pelo Codex ou em outra pasta? Clique em "Apontar o Blender" e escolha o blender.exe.
+        Sem ele, os objetos 3D, os logos 3D do gancho e a transição 3D não saem.</span>}
+    </div>
     {catalogo && <p className="text-xs text-slate-400">
       {catalogo.blender.disponivel
         ? 'Blender disponível: o diretor também pode criar objetos e texto 3D com luzes, câmera e transparência.'

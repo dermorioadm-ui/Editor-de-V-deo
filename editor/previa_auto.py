@@ -22,7 +22,7 @@ import threading
 
 ESPERA = 3.5
 # enquanto um destes roda, quem faz a prévia é ele, no fim
-_DONOS_DA_PREVIA = ("clique-unico", "claude", "pacote", "analise", "edicao")
+_DONOS_DA_PREVIA = ("clique-unico", "claude", "pacote", "analise", "edicao", "diretor")
 
 _trava = threading.Lock()
 _relogios: dict[str, threading.Timer] = {}

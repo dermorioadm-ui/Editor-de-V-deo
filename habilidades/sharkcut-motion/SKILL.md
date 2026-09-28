@@ -77,8 +77,11 @@ daqui.
   contrato/termo → `documento`; app/mensagem → `celular`; reserva/data →
   `calendario`; aprovado → `check`; avaliação → `estrela`; crescimento →
   `grafico`; hóspede/viagem → `mala`. Modelado no Blender, cores da marca,
-  monta peça por peça, 2–4 s, no lado livre (longe do rosto). Um por ideia;
-  no máximo 2 ou 3 por vídeo. Espere o job terminar antes de conferir.
+  monta peça por peça, 2–4 s, no lado livre (longe do rosto). Um por ideia.
+  QUANDO O DONO PEDE 3D, É PRIORIDADE: peça TODOS os 3D logo depois do plano,
+  antes do resto (eles renderizam numa faixa própria enquanto você faz os
+  gráficos); não fique parado esperando — o Sharkcut espera o 3D antes do
+  vídeo final. Consulte os jobs no fim, antes de revisar.
 - **Logo 3D de plataforma** (`arte_3d acao=logo`, logo=airbnb/booking…) — o
   PNG da biblioteca vira peça 3D nas cores dele, sai de TRÁS da pessoa,
   flutua ao lado e volta para trás. O GANCHO já leva os logos escolhidos na

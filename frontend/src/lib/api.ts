@@ -31,6 +31,8 @@ export const api = {
   criarArte3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/arte-3d`, dados),
   // objetos 3D prontos (casa, chave, cadeado…) e a transição 3D, no Blender local
   objeto3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/objeto-3d`, dados),
+  blender: () => req<any>('/api/blender'),
+  blenderEscolher: (caminho: string) => post<any>('/api/blender', { caminho }),
   transicao3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/transicao-3d`, dados),
   // o gosto do dono: as notas dele e o que ele já corrigiu no que a IA pôs
   gosto: () => req<any>('/api/gosto'),
@@ -45,7 +47,7 @@ export const api = {
   // então ele pode abrir o mesmo diálogo de qualquer programa e devolver o
   // caminho. Nada é enviado: o que atravessa é uma string.
   janela: () => req<{ disponivel: boolean }>('/api/janela'),
-  escolher: (kind: 'video' | 'audio' | 'image' | 'media' | 'texto' | 'pdf',
+  escolher: (kind: 'video' | 'audio' | 'image' | 'media' | 'texto' | 'pdf' | 'programa',
              titulo?: string, varios = false) =>
     post<{ ok: boolean; cancelado: boolean; path: string; paths: string[] }>(
       '/api/escolher', { kind, titulo, varios }),
