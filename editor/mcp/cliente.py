@@ -38,12 +38,16 @@ class Cliente:
     molde do TestClient do FastAPI, o MCP inteiro roda sem abrir socket nenhum.
     """
 
-    def __init__(self, base: str = "", transporte=None, timeout: float = 120.0):
+    def __init__(self, base: str = "", transporte=None, timeout: float = 120.0,
+                 origem: str = "claude", projeto: str = "", permitidas=None):
         from ..config import PORT
 
         self.base = (base or f"http://127.0.0.1:{PORT}").rstrip("/")
         self.transporte = transporte
         self.timeout = timeout
+        self.origem = origem
+        self.projeto = projeto
+        self.permitidas = permitidas
 
     # ------------------------------------------------------------- chamadas
     def pedir(self, metodo: str, rota: str, corpo: dict | None = None,

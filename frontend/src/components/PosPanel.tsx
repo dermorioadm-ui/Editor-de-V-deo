@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { timecode } from '../lib/format'
-import { getPlayhead, setPlayhead, setState, toast, useStore } from '../state/store'
+import { getPlayhead, setPlayhead, toast, useStore } from '../state/store'
 import { EFEITOS_CAMADA, TIPOS_CENA, TIPOS_GRAFICO, TIPOS_TRANSICAO } from './PosInspector'
+import DiretorPanel from './DiretorPanel'
+import ArtesPanel from './ArtesPanel'
 
 const NOME_TIPO = Object.fromEntries(TIPOS_GRAFICO)
 const NOME_EFEITO = Object.fromEntries(EFEITOS_CAMADA)
@@ -22,6 +24,9 @@ const RAPIDOS: { rotulo: string; tipo: 'graficos' | 'camadas' | 'cenas'; dados: 
     dados: { tipo: 'tela', texto: 'Tópico', prefixo: 'PARTE 1', entrada: 'pop' } },
   { rotulo: 'lista', tipo: 'graficos',
     dados: { tipo: 'lista', texto: 'Em 3 passos', itens: ['Primeiro', 'Segundo', 'Terceiro'] } },
+  { rotulo: 'comparação', tipo: 'graficos', dura: 6,
+    dados: { tipo: 'comparacao', texto: 'DUAS POSSIBILIDADES', entrada: 'cinema', estilo: 'vidro',
+      rotulos: ['01', '02'], itens: [{ texto: 'Primeira ideia', em: 0.4 }, { texto: 'Segunda ideia', em: 2 }] } },
   { rotulo: 'número', tipo: 'graficos', dados: { tipo: 'numero', numero: 100, sufixo: '%', texto: 'legenda' } },
   { rotulo: 'gráfico subindo (barras)', tipo: 'graficos',
     dados: { tipo: 'barras', texto: 'Resultado', valores: [12, 19, 27, 41],
@@ -53,8 +58,6 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
   const project = useStore((s) => s.project)
   const view = useStore((s) => s.timeline)
   const [recorte, setRecorte] = useState<any>(null)
-  const activeJob = useStore((s) => s.activeJob)
-  const claudeRodando = activeJob?.kind === 'claude' && ['fila', 'rodando'].includes(activeJob.status)
   const [baixando, setBaixando] = useState(false)
 
   useEffect(() => {
@@ -66,19 +69,24 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
   const camadas = view.camadas ?? []
   const transicoes = view.transicoes ?? []
   const cenas = (view as any).cenas ?? []
-  const doClaude = [...graficos, ...camadas, ...transicoes, ...cenas]
-    .filter((x: any) => x.origem === 'claude').length
+  const artes3d = (view.overlays ?? []).filter((o: any) => o.origem)
+  const autores = ['claude', 'codex'].map(origem => ({ origem,
+    nome: origem === 'codex' ? 'Codex' : 'Claude',
+    total: [...graficos, ...camadas, ...transicoes, ...cenas, ...artes3d].filter((x: any) => x.origem === origem).length,
+  }))
 
   const itens = [
+    ...artes3d.map((o: any) => ({ kind: 'overlay', id: o.id, t: o.out_start, fim: o.out_end,
+      rotulo: 'Arte 3D local', extra: 'sobreposição · ajuste na aba Mídia', origem: o.origem })),
     ...cenas.map((c: any) => ({ kind: 'cena', id: c.id, t: c.out_start, fim: c.out_end,
-      rotulo: `Cena: ${NOME_CENA[c.tipo] ?? c.tipo}`, extra: c.lado || '', claude: c.origem === 'claude' })),
+      rotulo: `Cena: ${NOME_CENA[c.tipo] ?? c.tipo}`, extra: c.lado || '', origem: c.origem })),
     ...graficos.map((g: any) => ({ kind: 'grafico', id: g.id, t: g.out_start, fim: g.out_end,
       rotulo: g.tipo === 'logo' ? `Logo: ${g.logo}` : `${NOME_TIPO[g.tipo] ?? g.tipo}${g.texto ? `: ${g.texto}` : ''}`,
-      extra: g.camada === 'atras' ? 'atrás da pessoa' : '', claude: g.origem === 'claude' })),
+      extra: g.camada === 'atras' ? 'atrás da pessoa' : '', origem: g.origem })),
     ...camadas.map((c: any) => ({ kind: 'camada', id: c.id, t: c.out_start, fim: c.out_end,
-      rotulo: NOME_EFEITO[c.efeito] ?? c.efeito, extra: '', claude: c.origem === 'claude' })),
+      rotulo: NOME_EFEITO[c.efeito] ?? c.efeito, extra: '', origem: c.origem })),
     ...transicoes.map((x: any) => ({ kind: 'transicao', id: x.id, t: x.emenda ?? 0, fim: null,
-      rotulo: `Transição: ${NOME_TRANS[x.tipo] ?? x.tipo}`, extra: '', claude: x.origem === 'claude' })),
+      rotulo: `Transição: ${NOME_TRANS[x.tipo] ?? x.tipo}`, extra: '', origem: x.origem })),
   ].sort((a, b) => a.t - b.t)
 
   const por = async (tipo: 'graficos' | 'camadas' | 'cenas', dados: any, dura = 3) => {
@@ -114,10 +122,10 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
     } finally { setBaixando(false) }
   }
 
-  const tirarDoClaude = async () => {
+  const tirarDoDiretor = async (origem: string) => {
     snapshot()
     try {
-      await api.posTirar(project.id, { tudo: true, origem: 'claude' })
+      await api.posTirar(project.id, { tudo: true, origem })
       await onChanged()
     } catch (e: any) {
       toast('warn', 'Não deu para tirar', String(e.message ?? e))
@@ -126,12 +134,13 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
 
   return (
     <div className="p-3 space-y-3" data-pos-panel="1">
+      <ArtesPanel onChanged={onChanged} onSelect={onSelect} snapshot={snapshot} />
       <div>
         <h2 className="text-sm font-semibold text-slate-100">Pós-edição</h2>
         <p className="text-[11px] text-slate-400 leading-snug">
           O que vai por cima do corte: títulos, telas de tópico, listas, números,
-          transições e as camadas (a pessoa separada do fundo). O Claude faz isso
-          pelo MCP{view.editor === 'claude' ? ' — ele é o editor deste vídeo' : ''};
+          transições e as camadas (a pessoa separada do fundo). Claude e Codex fazem isso
+          pelo MCP;
           aqui você confere e ajusta. Sai no mesmo encode, sem perder qualidade.
         </p>
       </div>
@@ -155,21 +164,7 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
       </div>
 
       <MarcaDoVideo projeto={project.id} marcaDoPlano={(view as any).marca ?? ''} />
-
-      <button className="btn btn-primary w-full" data-acao="claude-pos"
-              disabled={!!claudeRodando}
-              onClick={async () => {
-                try {
-                  const job = await api.claudePedir(project.id, '', 'pos')
-                  setState({ activeJob: job })
-                  toast('info', 'O Claude está fazendo a pós-edição',
-                    'Títulos, telas, transições e camadas por cima da edição. Acompanhe no topo.')
-                } catch (e: any) {
-                  toast('warn', 'Não deu para chamar o Claude', String(e.message ?? e))
-                }
-              }}>
-        {claudeRodando ? 'o Claude está trabalhando…' : 'O Claude faz a pós-edição (1 clique)'}
-      </button>
+      <DiretorPanel />
 
       <div>
         <span className="label">pôr no cursor</span>
@@ -183,16 +178,15 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
       </div>
 
       <div>
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
           <span className="label mb-0 flex-1">no vídeo ({itens.length})</span>
-          {doClaude > 0 && (
-            <button className="btn btn-xs text-red-300" onClick={tirarDoClaude}>
-              tirar o que o Claude pôs ({doClaude})</button>
-          )}
+          {autores.filter(a => a.total > 0).map(a =>
+            <button key={a.origem} className="btn btn-xs text-red-300" onClick={() => tirarDoDiretor(a.origem)}>
+              tirar o que o {a.nome} pôs ({a.total})</button>)}
         </div>
         {!itens.length && (
           <p className="text-[11px] text-slate-500">
-            Nada ainda. Peça ao Claude: “faz a pós-edição desse vídeo”, ou use os botões acima.</p>
+            Nada ainda. Use a direção criativa ou acrescente um item pelos botões acima.</p>
         )}
         <ul className="space-y-1">
           {itens.map((i) => (
@@ -204,7 +198,8 @@ export default function PosPanel({ onChanged, snapshot, onSelect }: {
                   {timecode(i.t)}{i.fim != null ? `–${timecode(i.fim)}` : ''}</span>
                 <span className="text-xs text-slate-200">{i.rotulo}</span>
                 {i.extra && <span className="text-[10px] text-cyan-300 ml-1">({i.extra})</span>}
-                {i.claude && <span className="text-[10px] text-amber-300 ml-1">Claude</span>}
+                {['claude', 'codex'].includes(i.origem) && <span className="text-[10px] text-amber-300 ml-1">
+                  {i.origem === 'codex' ? 'Codex' : 'Claude'}</span>}
               </button>
             </li>
           ))}

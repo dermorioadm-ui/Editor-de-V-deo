@@ -642,7 +642,7 @@ def broll_automatico(c: Cliente, a: dict) -> str:
                         "scale": {"type": "number"}, "opacity": {"type": "number"},
                         "rotation": {"type": "number"},
                         "easing": {"type": "string",
-                                   "enum": ["linear", "suave", "entra", "sai"]},
+                                   "enum": ["linear", "suave", "entra", "sai", "cinema", "organica"]},
                     },
                     "required": ["t"],
                 },
@@ -1177,7 +1177,7 @@ def pos_contexto(c: Cliente, a: dict) -> str:
          "recorte da pessoa: " + ("modelo ainda não baixado (baixa sozinho no "
                                   "primeiro uso)" if rec.get("runtime")
                                   else "falta o onnxruntime — camadas não saem")),
-        f"editor: {'Claude (Gemini fora)' if d.get('editor') == 'claude' else 'padrão'}",
+        f"editor: {d.get('editor') or 'padrão'}",
         "",
         "BLOCOS (clip_id · tempo no vídeo final · velocidade · zoom · etapa — "
         "a transição entra na emenda de ENTRADA do bloco):",
@@ -1274,7 +1274,7 @@ _ESQUEMA_GRAFICO = {
     "projeto": {"type": "string"},
     "id": {"type": "string", "description": "para MUDAR um gráfico que já existe"},
     "tipo": {"type": "string",
-             "enum": ["titulo", "tela", "lista", "destaque", "numero", "texto",
+             "enum": ["titulo", "tela", "lista", "comparacao", "destaque", "numero", "texto",
                       "nome", "seta", "circulo", "barra", "logo", "barras",
                       "linha", "rosca", "icone"],
              "description": "titulo: título com barra de destaque; tela: TELA "
@@ -1316,7 +1316,7 @@ _ESQUEMA_GRAFICO = {
     "x": {"type": "number", "description": "0–1, centro na largura"},
     "y": {"type": "number", "description": "0–1, centro na altura"},
     "tamanho": {"type": "number", "description": "0.4–2.5 (1 = normal)"},
-    "estilo": {"type": "string", "enum": ["vidro", "limpo", "escuro", "claro", "neon", "marca"],
+    "estilo": {"type": "string", "enum": ["vidro", "limpo", "editorial", "escuro", "claro", "neon", "marca"],
                "description": "vidro (PADRÃO) = painel translúcido, a imagem "
                               "aparece por trás; limpo = só o texto, com sombra. "
                               "escuro/claro/marca/neon são CARTÕES SÓLIDOS: ele não "
@@ -1324,7 +1324,7 @@ _ESQUEMA_GRAFICO = {
                               "por vidro, exceto em tipo=tela e no lado livre de "
                               "uma moldura"},
     "cor": {"type": "string", "description": "#RRGGBB da cor de destaque"},
-    "entrada": {"type": "string", "enum": ["pop", "slide", "subir", "3d", "digitar", "fade"]},
+    "entrada": {"type": "string", "enum": ["pop", "slide", "subir", "3d", "digitar", "fade", "cinema", "linhas"]},
     "saida": {"type": "string", "enum": ["fade", "slide", "pop", "corte"]},
     "camada": {"type": "string", "enum": ["frente", "atras"],
                "description": "atras = o gráfico passa ATRÁS da pessoa (precisa do recorte)"},
@@ -1373,7 +1373,7 @@ def grafico(c: Cliente, a: dict) -> str:
         corpo["itens"] = [({"texto": t, "em": em[i]} if i < len(em) else t)
                           for i, t in enumerate(a["itens"])]
     if not gid:
-        corpo["origem"] = "claude"
+        corpo["origem"] = c.origem
         if "out_start" not in corpo:
             return "faltou o início (segundo do vídeo final)."
         r = c.post(f"/api/projects/{pid}/pos/graficos", corpo)
@@ -1420,7 +1420,7 @@ def camada(c: Cliente, a: dict) -> str:
     else:
         if "out_start" not in corpo:
             return "faltou o início."
-        corpo["origem"] = "claude"
+        corpo["origem"] = c.origem
         r = c.post(f"/api/projects/{pid}/pos/camadas", corpo)
     x = r["item"]
     rec = r.get("recorte") or {}
@@ -1458,7 +1458,7 @@ def transicao(c: Cliente, a: dict) -> str:
     else:
         if "clip_id" not in corpo and "tempo" not in corpo:
             return "diga o bloco que entra (bloco) ou um tempo perto da emenda (tempo)."
-        corpo["origem"] = "claude"
+        corpo["origem"] = c.origem
         r = c.post(f"/api/projects/{pid}/pos/transicoes", corpo)
     x = r["item"]
     return (f"transição {x['id']}: {x['tipo']} de {x['duracao']} s na entrada do "
@@ -1530,7 +1530,7 @@ def cena(c: Cliente, a: dict) -> str:
     else:
         if "out_start" not in corpo:
             return "faltou o início."
-        corpo["origem"] = "claude"
+        corpo["origem"] = c.origem
         r = c.post(f"/api/projects/{pid}/pos/cenas", corpo)
     x = r["item"]
     rec = r.get("recorte") or {}
@@ -1558,8 +1558,113 @@ def tirar_da_pos(c: Cliente, a: dict) -> str:
     pid = str(a.get("projeto") or "")
     r = c.post(f"/api/projects/{pid}/pos/tirar",
                {"ids": list(a.get("ids") or []), "tudo": bool(a.get("tudo")),
-                "origem": "claude" if a.get("tudo") else ""})
+                "origem": c.origem if a.get("tudo") else ""})
     return f"{r.get('tirados', 0)} item(ns) tirado(s) da pós."
+
+
+@ferramenta(
+    "direcao",
+    "Plano editorial e revisão: ler informa o plano e os tempos a conferir; "
+    "planejar registra objetivo, linguagem e momentos da montagem FINAL; "
+    "revisar registra seu parecer após ver_quadros da versão atual. "
+    "Planeje antes de compor e atualize o plano se mudar o corte.",
+    {"properties": {
+        "projeto": {"type": "string"},
+        "acao": {"type": "string", "enum": ["ler", "planejar", "revisar"]},
+        "objetivo": {"type": "string"}, "linguagem": {"type": "string"},
+        "parecer": {"type": "string"},
+        "momentos": {"type": "array", "maxItems": 40, "items": {"type": "object",
+            "properties": {"inicio": {"type": "number"}, "fim": {"type": "number"},
+                           "fala": {"type": "string"}, "intencao": {"type": "string"}},
+            "required": ["inicio", "fim", "fala", "intencao"]}}},
+     "required": ["projeto", "acao"]},
+)
+def direcao(c: Cliente, a: dict) -> str:
+    import json
+    rota = f"/api/projects/{a['projeto']}/direcao"
+    r = c.get(rota) if a.get("acao") == "ler" else c.post(rota, a)
+    return json.dumps(r, ensure_ascii=False)
+
+
+@ferramenta(
+    "compor",
+    "Cria uma composição coordenada: gancho/fechamento com título em linhas, "
+    "comparacao em duas colunas que entram na fala (rotulos nomeia cada lado), passos com itens sincronizados, "
+    "prova com número fiel à fala. Leia analisar_cena para escolher x/y. "
+    "itens.em é o atraso em segundos desde inicio; depois confira com ver_quadros.",
+    {"properties": {
+        "projeto": {"type": "string"},
+        "tipo": {"type": "string", "enum": ["gancho", "comparacao", "passos", "prova", "fechamento"]},
+        "inicio": {"type": "number"}, "fim": {"type": "number"},
+        "titulo": {"type": "string"}, "apoio": {"type": "string"},
+        "x": {"type": "number"}, "y": {"type": "number"},
+        "estilo": {"type": "string", "enum": ["limpo", "editorial", "vidro", "marca", "claro", "escuro"]},
+        "numero": {"type": "number"}, "prefixo": {"type": "string"}, "sufixo": {"type": "string"},
+        "rotulos": {"type": "array", "maxItems": 2, "items": {"type": "string"}},
+        "itens": {"type": "array", "maxItems": 5, "items": {"type": "object",
+            "properties": {"texto": {"type": "string"}, "em": {"type": "number"}},
+            "required": ["texto", "em"]}}},
+     "required": ["projeto", "tipo", "inicio", "fim", "titulo"]},
+)
+def compor(c: Cliente, a: dict) -> str:
+    import json
+    r = c.post(f"/api/projects/{a['projeto']}/pos/compor", {**a, "origem": c.origem})
+    return json.dumps(r, ensure_ascii=False)
+
+
+@ferramenta(
+    "arte",
+    "Composição VETORIAL NATIVA. catalogo revela recursos e exemplo completo; criar/atualizar aceita "
+    "modelo (fluxo, tipografia, orbita, grafico) OU composicao livre. Elementos: grupo, texto, numero, "
+    "retangulo, elipse, tracado; id único, pai opcional declarado antes. tela=[1000,1000]; x/y em "
+    "unidades dessa prancheta, filhos locais ao grupo. marcos=[{t, x?,y?,escala?,rotacao?,opacidade?, "
+    "largura?,altura?,progresso?,morph?,valor?,curva?}], tempo relativo à composição; curvas linear, "
+    "suave, entrada, saida, organica, salto. Formas têm cor,contorno,espessura,raio; texto tem texto, "
+    "corpo,fonte opcional,negrito; numero usa valor,prefixo,sufixo,casas. tracado usa pontos=[[x,y],...] "
+    "e fechado; progresso desenha o traço, pontos_fim+morph transformam a forma. Cor #RRGGBB ou "
+    "marca/texto/fundo/nenhuma. inicio/fim dos elementos também são relativos. Até 48 elementos, "
+    "60 s. x/y externos normalizados posicionam a composição inteira. Planeje e confira com ver_quadros.",
+    {"properties": {"projeto":{"type":"string"}, "acao":{"type":"string","enum":["catalogo","criar","atualizar"]},
+        "id":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},"fim":{"type":"number"},
+        "modelo":{"type":"string","enum":["fluxo","tipografia","orbita","grafico"]},
+        "composicao":{"type":"object","properties":{"versao":{"type":"integer"},
+            "tela":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
+            "elementos":{"type":"array","maxItems":48,"items":{"type":"object"}}},"required":["elementos"]},
+        "x":{"type":"number"},"y":{"type":"number"},"tamanho":{"type":"number"},
+        "camada":{"type":"string","enum":["frente","atras"]},"estilo":{"type":"string"}},
+     "required":["projeto","acao"]},
+)
+def arte(c: Cliente, a: dict) -> str:
+    import json
+    if a.get("acao")=="catalogo":
+        return json.dumps(c.get(f"/api/projects/{a['projeto']}/arte"),ensure_ascii=False)
+    if a.get("acao")=="atualizar" and not a.get("id"):
+        return "informe id para atualizar a arte existente"
+    r=c.post(f"/api/projects/{a['projeto']}/pos/arte",{**a,"origem":c.origem})
+    return json.dumps(r,ensure_ascii=False)
+
+
+@ferramenta(
+    "arte_3d",
+    "Blender LOCAL opcional, sem serviço pago. Use arte catalogo para ver disponibilidade e esquema. "
+    "criar recebe cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo,posicao,rotacao, "
+    "escala,cor,metalico,rugosidade,texto,marcos:[{t,posicao?,rotacao?,escala?}]}]}. camera.marcos aceita "
+    "{t,posicao?,alvo?,lente?}. Tipos cubo/esfera/torus/ "
+    "cilindro/plano/texto; rotação em graus, t relativo. Câmera/luzes reais; saída com transparência. "
+    "Até 24 objetos/10 s. Retorna job; use consultar com job até ok/erro/cancelado ANTES de revisar. "
+    "Ao terminar, entra na timeline como sobreposição editável. Não executa scripts arbitrários.",
+    {"properties":{"projeto":{"type":"string"},"acao":{"type":"string","enum":["criar","consultar"]},
+        "job":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},
+        "cena":{"type":"object"}},"required":["projeto","acao"]},
+)
+def arte_3d(c: Cliente,a: dict) -> str:
+    import json
+    pid=a["projeto"]
+    if a.get("acao")=="consultar":
+        r=next((j for j in c.get("/api/jobs",project_id=pid) if j["id"]==a.get("job") and j["kind"]=="arte-3d"),None)
+        return json.dumps(r or {"erro":"job 3D não encontrado neste projeto"},ensure_ascii=False)
+    r=c.post(f"/api/projects/{pid}/arte-3d",{**a,"origem":c.origem})
+    return json.dumps(r,ensure_ascii=False)
 
 
 def chamar(c: Cliente, nome: str, argumentos: dict):

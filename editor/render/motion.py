@@ -30,14 +30,16 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 
 TIPOS = ("titulo", "tela", "lista", "destaque", "numero", "texto", "nome",
          "seta", "circulo", "barra", "logo", "barras", "linha", "rosca", "icone",
-         "gancho")
-ENTRADAS = ("pop", "slide", "subir", "3d", "digitar", "fade")
+         "gancho", "comparacao", "composicao")
+ENTRADAS = ("pop", "slide", "subir", "3d", "digitar", "fade", "cinema", "linhas")
 SAIDAS = ("fade", "slide", "pop", "corte")
-ESTILOS = ("escuro", "claro", "neon", "marca", "limpo", "vidro")
+ESTILOS = ("escuro", "claro", "neon", "marca", "limpo", "vidro", "editorial")
 CAMADAS = ("frente", "atras")
 
 # Onde cada tipo nasce quando ninguém disse: longe da legenda, que mora
@@ -48,7 +50,7 @@ POSICAO_PADRAO = {
     "nome": (0.06, 0.72), "seta": (0.5, 0.5), "circulo": (0.5, 0.5),
     "barra": (0.5, 0.14), "logo": (0.9, 0.16),
     "barras": (0.5, 0.36), "linha": (0.5, 0.36), "rosca": (0.5, 0.32),
-    "icone": (0.5, 0.26), "gancho": (0.5, 0.2),
+    "icone": (0.5, 0.26), "gancho": (0.5, 0.2), "comparacao": (0.5, 0.3),
 }
 # SÓLIDOS: os estilos de cartão cheio. Por cima da pessoa ele não quer ("não
 # gostei, aparecem em cima de mim uns cards sólidos"): a pós do Claude troca
@@ -69,6 +71,8 @@ PALETAS = {
                "sub": "#FFE4EA", "acento": "#FFFFFF"},
     "limpo":  {"fundo": "", "fundo_a": 0xFF, "texto": "#FFFFFF",
                "sub": "#F1F1F1", "acento": "#FFC400", "contorno": True},
+    "editorial": {"fundo": "", "fundo_a": 0xFF, "texto": "#F4F1E9",
+                   "sub": "#A4B3BF", "acento": "#75E0D1"},
     # VIDRO: o painel quase transparente, com um fio claro na borda — a
     # imagem continua aparecendo por trás. O texto ganha uma sombra macia
     # para não sumir em fundo claro.
@@ -77,7 +81,7 @@ PALETAS = {
 }
 
 # Duração de cada entrada e saída, em segundos. Encolhem em gráfico curto.
-DUR_ENTRADA = {"pop": 0.45, "slide": 0.5, "subir": 0.45, "3d": 0.65,
+DUR_ENTRADA = {"cinema": 0.6, "linhas": 0.6, "pop": 0.45, "slide": 0.5, "subir": 0.45, "3d": 0.65,
                "fade": 0.4, "crescer": 0.5, "cortina": 0.55, "nenhuma": 0.0,
                "crescer_v": 0.55, "revelar": 0.9, "acompanhar": 0.55, "onda": 0.55}
 DUR_SAIDA = {"fade": 0.3, "slide": 0.4, "pop": 0.3, "corte": 0.0,
@@ -160,8 +164,51 @@ _MEIO = set("ftr()[]-\"/ ")
 _LARGOS = set("mwMW@%")
 
 
+_metricas = ContextVar("motion_metricas", default=None)
+
+
+@lru_cache(maxsize=128)
+def _fonte_medida(nome: str, arquivos: tuple, negrito: bool):
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    alvo = nome.casefold().replace(" ", "")
+    for arquivo in arquivos:
+        try:
+            f = ImageFont.truetype(arquivo, 256)
+            familia, peso = f.getname()
+            nomes = [familia, familia + " " + peso, Path(arquivo).stem]
+            if alvo in [n.casefold().replace(" ", "").replace("-", "") for n in nomes]:
+                if negrito and "bold" not in peso.casefold():
+                    continue
+                return f
+        except (OSError, ValueError):
+            continue
+    # Pillow resolve as fontes do sistema quando instaladas. A aproximação
+    # antiga continua disponível em máquinas sem Pillow/fonte correspondente.
+    nomes = [nome + ".ttf"]
+    if nome.casefold() == "arial":
+        nomes = ["arialbd.ttf" if negrito else "arial.ttf"]
+    for candidato in nomes:
+        try:
+            return ImageFont.truetype(candidato, 256)
+        except OSError:
+            pass
+    return None
+
+
 def _largura(texto: str, corpo: float, negrito: bool = True) -> float:
     """Largura estimada do texto em pixels (Arial; medida contra o libass)."""
+    contexto = _metricas.get()
+    if contexto:
+        fonte, arquivos = contexto
+        nome, bold = str(fonte), negrito
+        if isinstance(fonte, _Fonte) and not fonte.negrito:
+            nome, bold = (fonte.titulo if negrito else str(fonte)), False
+        medida = _fonte_medida(nome, arquivos, bold)
+        if medida:
+            return float(medida.getlength(texto)) * corpo / 256
     tot = 0.0
     for ch in texto:
         if ch in _ESTREITOS:
@@ -282,6 +329,9 @@ def _tags_da_fase(el: _El, fase: str, ms: float) -> str:
     m = int(round(ms))
     if fase == "E":
         k = el.entrada
+        if k in ("cinema", "linhas"):
+            return (pos + org + "\\fscx96\\fscy96\\blur3"
+                    f"\\t(§0§,§{m}§,0.45,\\fscx100\\fscy100\\blur0)" + _fade_in(ms * 0.5))
         if k == "slide":
             dx = 0.24 * el.W * el.lado
             return (f"\\move({x + dx:.1f},{y:.1f},{x:.1f},{y:.1f},§0§,§{m}§)"
@@ -571,6 +621,13 @@ def _el(ctx: _Ctx, camada: int, x: float, y: float, an: int, tags: str,
 def _texto_com_entrada(ctx: _Ctx, camada, x, y, an, tags, linhas, aparece,
                        org, lado) -> list[_El]:
     """Texto que entra com a entrada do gráfico — ou digitado."""
+    if ctx.entrada == "linhas" and an == 5:
+        tamanho = re.search(r"\\fs([\d.]+)", tags)
+        altura = float(tamanho.group(1)) * 1.16 if tamanho else ctx.u * 0.08
+        atraso = min(0.14, ctx.dur * 0.12 / max(1, len(linhas)))
+        return [_el(ctx, camada, x, y + (i - (len(linhas) - 1) / 2) * altura, an,
+                    tags, li, entrada="cinema", aparece=aparece + i * atraso,
+                    org=org, lado=lado) for i, li in enumerate(linhas)]
     if ctx.entrada == "digitar":
         dur = min(max(0.35, 0.05 * sum(len(li) for li in linhas)), 1.8,
                   ctx.dur * 0.45)
@@ -682,7 +739,7 @@ def _horarios(itens: list, dur: float, inicio: float) -> list[float]:
 
 def _entrada_do_item(entrada: str) -> str:
     return {"slide": "slide", "3d": "3d", "fade": "fade", "digitar": "digitar",
-            "pop": "subir", "subir": "subir"}.get(entrada, "subir")
+            "pop": "subir", "subir": "subir", "cinema": "cinema", "linhas": "cinema"}.get(entrada, "subir")
 
 
 def _lista(ctx: _Ctx) -> list[_El]:
@@ -787,6 +844,59 @@ def _lista(ctx: _Ctx) -> list[_El]:
             risco.sd = 0.2
         els.append(risco)
         y += alt + entre
+    return els
+
+
+def _comparacao(ctx: _Ctx) -> list[_El]:
+    """Duas colunas editoriais, com hierarquia e revelação na fala de cada lado."""
+    W, H, u, p = ctx.W, ctx.H, ctx.u, ctx.p
+    itens = _itens(ctx.g)[:2]
+    if len(itens) != 2:
+        return _lista(ctx)
+    bw, pad, gap = W * 0.86, u * 0.045, u * 0.055
+    cw = (bw - 2 * pad - gap) / 2
+    ct, ci, cr = u * 0.057 * ctx.s, u * 0.061 * ctx.s, u * 0.029 * ctx.s
+    titulo = _esc(_v(ctx.g, "texto", ""))[:MAX_TEXTO]
+    # Corpos recuam juntos, preservando a relação de tamanhos.
+    for _ in range(14):
+        lt = _quebrar(titulo, ct, bw - 2 * pad)
+        linhas = [_quebrar(t, ci, cw) for t, _ in itens]
+        if (max([_largura(t, ci) for ls in linhas for t in ls] + [0]) <= cw
+                and max(map(len, linhas)) <= 4):
+            break
+        ct, ci, cr = ct * 0.9, ci * 0.9, cr * 0.9
+    alt_t = len(lt) * ct * 1.2 + u * 0.045
+    alt_c = cr * 2.1 + max(map(len, linhas)) * ci * 1.2
+    bh = 2 * pad + alt_t + alt_c
+    cx, cy = _encaixar(float(_v(ctx.g, "x", 0.5)) * W,
+                       float(_v(ctx.g, "y", 0.3)) * H, bw, bh, W, H, u * 0.035)
+    esq, topo = cx - bw / 2, cy - bh / 2
+    org = (cx, cy)
+    els = []
+    if p.get("fundo"):
+        r = ctx.canto(bw, bh, u * 0.025)
+        els.append(_el(ctx, 0, cx, cy + ctx.dy_sombra, 5, ctx.sombra,
+                       _ret(bw, bh, r), entrada="cinema", org=org))
+        els.append(_el(ctx, 1, cx, cy, 5, _painel_de(p, u),
+                       _ret(bw, bh, r), entrada="cinema", org=org))
+    els.append(_el(ctx, 3, esq + pad, topo + pad, 7,
+                   _texto(p, ct, p["texto"], ctx.fonte), "\\N".join(lt),
+                   entrada="cinema", org=org))
+    y = topo + pad + alt_t
+    horas = _horarios(itens, ctx.dur, 0.3)
+    rotulos = list(_v(ctx.g, "rotulos", []) or [])
+    for i, (ls, quando) in enumerate(zip(linhas, horas)):
+        x = esq + pad + i * (cw + gap)
+        label = _esc(rotulos[i] if i < len(rotulos) else f"0{i + 1}")[:24]
+        rc = cr * min(1.0, cw / max(1.0, _largura(label, cr, False)))
+        els.append(_el(ctx, 2, x + cw / 2, y, 5, _painel(p["acento"], 0),
+                       _ret(cw, max(1.5, u * 0.003)), entrada="cinema", aparece=quando, org=org))
+        els.append(_el(ctx, 3, x, y + cr * 0.45, 7,
+                       _texto(p, rc, p["sub"], ctx.fonte, negrito=False), label,
+                       entrada="cinema", aparece=quando, org=org))
+        els.append(_el(ctx, 3, x, y + cr * 2.1, 7,
+                       _texto(p, ci, p["texto"], ctx.fonte), "\\N".join(ls),
+                       entrada="cinema", aparece=quando + 0.08, org=org))
     return els
 
 
@@ -1659,6 +1769,7 @@ _MONTADORES = {
     "seta": _seta_el, "circulo": _circulo, "barra": _barra,
     "barras": _barras, "linha": _linha, "rosca": _rosca, "icone": _icone,
     "gancho": _gancho,
+    "comparacao": _comparacao,
 }
 
 
@@ -1712,7 +1823,11 @@ def elementos(g, W: int, H: int, fonte: str = "Arial",
                dur=max(0.1, float(_v(g, "out_end", 0)) - float(_v(g, "out_start", 0))),
                entrada=entrada if entrada in ENTRADAS else "pop",
                saida=saida if saida in SAIDAS else "fade", kit=kit)
-    return montar(ctx)
+    token = _metricas.set((ctx.fonte, tuple((kit or {}).get("fontes") or [])))
+    try:
+        return montar(ctx)
+    finally:
+        _metricas.reset(token)
 
 
 # ------------------------------------------------------------------ saída
@@ -1741,7 +1856,11 @@ def eventos(graficos, W: int, H: int, t0: float, dur: float,
                    key=lambda g: float(_v(g, "out_start", 0.0)))
     for i, g in enumerate(todos):
         gs, ge = float(_v(g, "out_start", 0.0)), float(_v(g, "out_end", 0.0))
-        base = 1 + 10 * i          # o gráfico que começa depois fica por cima
+        base = 1 + 100 * i         # espaço para até 48 elementos de arte livre
+        if _v(g, "tipo", "") == "composicao":
+            from . import composicao
+            linhas += composicao.eventos(g, W, H, t0, dur, base, fonte, kit)
+            continue
         for el in elementos(g, W, H, fonte, kit):
             linhas += _eventos_do_elemento(el, gs, ge, t0, t0 + dur + 0.05, base)
     return linhas
@@ -1872,4 +1991,7 @@ def normalizar(d: dict, duracao: float | None = None) -> dict:
     }
     if d.get("id"):
         out["id"] = str(d["id"])[:40]
+    if tipo == "composicao":
+        from . import composicao
+        out["composicao"] = composicao.normalizar(d.get("composicao"), b - a)
     return out

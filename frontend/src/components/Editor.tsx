@@ -656,6 +656,15 @@ export default function Editor() {
           no vídeo. E não saber é o mesmo que ela não ter botado. */}
       {analysed && (() => {
         const ia = project.analysis?.ai_cortes
+        const direcao = project.analysis?.diretor_edicao
+        if (direcao || view?.editor === 'codex') {
+          return <div className="px-4 py-2 border-b border-line flex gap-3 items-center text-xs" data-relatorio-diretor="1">
+            <span className="text-slate-200">Diretor: {(direcao?.provedor || view?.editor || 'codex').toUpperCase()}</span>
+            <span className={direcao?.ok ? 'text-emerald-300' : 'text-amber-300'}>
+              {direcao?.ok ? 'Etapa concluída' : direcao?.erro || 'Aguardando direção'}</span>
+            <button className="btn btn-xs ml-auto" onClick={() => setTab('pos')}>Plano e decisões</button>
+          </div>
+        }
         if (view?.editor === 'claude' || ia?.erro === 'claude') {
           // o Gemini saiu da frente DE PROPÓSITO: não é falha, é o combinado
           return <FaixaDoClaude projectId={project.id}
@@ -727,7 +736,7 @@ export default function Editor() {
         )
       })()}
 
-      {analysed && view?.editor !== 'claude' && project.analysis?.claude_edicao && (
+      {analysed && !project.analysis?.diretor_edicao && view?.editor !== 'claude' && project.analysis?.claude_edicao && (
         <FaixaDoClaude projectId={project.id} edicao={project.analysis.claude_edicao}
                        onVerPos={() => setTab('pos')} />
       )}

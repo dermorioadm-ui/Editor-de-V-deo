@@ -573,9 +573,9 @@ def _ajuda(caminho: str) -> str:
 # A trava é na lista de ferramentas, não só no pedido: no modo "edicao" as
 # ferramentas de gráfico não existem para ele; no "pos", as de corte não.
 MODOS = ("completo", "edicao", "pos")
-FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos"}
+FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos", "compor", "arte", "arte_3d"}
 FERRAMENTAS_DE_LEITURA = {"pos_contexto", "transcricao", "ver_projeto", "ver_quadros",
-                          "analisar_cena", "estado_do_editor", "marca"}
+                          "analisar_cena", "estado_do_editor", "marca", "direcao"}
 
 
 def _nomes() -> list[str]:
@@ -613,21 +613,24 @@ def ferramentas_negadas(modo: str = "completo") -> list[str]:
 # no mcp.json desta sessão, apagada quando ela acaba. Nada de fora — outra
 # máquina da rede, uma página aberta no navegador — chama as ferramentas.
 _chaves: dict[str, float] = {}
+_contextos: dict[str, dict] = {}
 _trava_chaves = threading.Lock()
 
 
-def abrir_chave() -> str:
+def abrir_chave(origem: str = "claude", projeto: str = "", modo: str = "completo") -> str:
     import secrets
 
     chave = secrets.token_urlsafe(24)
     with _trava_chaves:
         _chaves[chave] = time.time() + TETO_MINUTOS * 60 + 600
+        _contextos[chave] = {"origem": origem, "projeto": projeto, "modo": modo}
     return chave
 
 
 def fechar_chave(chave: str) -> None:
     with _trava_chaves:
         _chaves.pop(chave, None)
+        _contextos.pop(chave, None)
 
 
 def chave_ok(chave: str) -> bool:
@@ -635,11 +638,19 @@ def chave_ok(chave: str) -> bool:
     with _trava_chaves:
         for k in [k for k, fim in _chaves.items() if fim < agora]:
             _chaves.pop(k, None)
+            _contextos.pop(k, None)
         return bool(chave) and chave in _chaves
 
 
 def _porta() -> str:
     return str(os.environ.get("EDITOR_PORT") or PORT)
+
+
+def contexto_chave(chave: str) -> dict:
+    if not chave_ok(chave):
+        return {}
+    with _trava_chaves:
+        return dict(_contextos.get(chave, {}))
 
 
 def config_mcp(pasta: Path, chave: str) -> Path:
@@ -992,7 +1003,7 @@ def editar(pid: str, ctx, modelo: str | None = None, retoque: str = "",
         return _gravar(pid, saida, t0)
     project = svc.load(pid)
     pasta = project.dir / "claude"
-    chave = abrir_chave()
+    chave = abrir_chave("claude", pid, modo)
     try:
         return _conduzir(pid, ctx, project, pasta, chave, est, modelo, retoque, modo, saida, t0)
     finally:
@@ -1027,6 +1038,8 @@ def _conduzir(pid, ctx, project, pasta: Path, chave: str, est: dict, modelo, ret
     # 32767 caracteres, e o pedido não tem por que disputar esse espaço
     try:
         texto = pedido_de_retoque(project, retoque) if retoque.strip() else pedido(project, modo)
+        from .diretor import instrucoes
+        texto += instrucoes(project)
         proc.stdin.write(texto.encode("utf-8"))
         proc.stdin.close()
     except OSError:

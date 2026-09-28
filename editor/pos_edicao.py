@@ -414,7 +414,7 @@ def _sem_cartao_solido(project, novo: dict) -> dict:
     cima da pessoa vira VIDRO — a imagem continua aparecendo por trás. O
     sólido só fica onde não há ninguém atrás: a tela cheia e o lado livre da
     moldura. Na tela, à mão, a escolha é dele e fica."""
-    if (novo.get("origem") != "claude" or novo.get("estilo") not in MG.SOLIDOS
+    if (novo.get("origem") not in ("claude", "codex") or novo.get("estilo") not in MG.SOLIDOS
             or novo.get("tipo") in _SEM_CARTAO or _no_lado_livre(project, novo)):
         return novo
     return {**novo, "estilo": "vidro"}
@@ -605,11 +605,12 @@ def tirar(project, ids: list[str] | None = None, tudo: bool = False,
     plan = project.plan
     alvo = set(ids or [])
     n = 0
-    for nome in ("graficos", "camadas", "transicoes", "cenas"):
+    for nome in ("graficos", "camadas", "transicoes", "cenas", "overlays"):
         antes = getattr(plan, nome)
         fica = [x for x in antes
                 if not ((x.id in alvo)
-                        or (tudo and (not origem or getattr(x, "origem", "") == origem)))]
+                        or (tudo and (nome != "overlays" or getattr(x, "origem", ""))
+                            and (not origem or getattr(x, "origem", "") == origem)))]
         n += len(antes) - len(fica)
         if nome == "graficos" and any(getattr(x, "origem", "") == "gancho"
                                       for x in antes if x not in fica):

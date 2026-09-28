@@ -207,3 +207,41 @@ barra subindo, o traço se desenhando. Use SÓ números que a fala diz.
 Termine com um relatório curto, em tópicos: o que entrou, em que segundo e por
 quê (a frase que justificou cada cena). O Sharkcut gera a prévia e o arquivo
 sozinho — você não exporta.
+
+## 8. Direção registrada (Claude e Codex)
+
+Quando o projeto estiver com direção criativa ativa, o plano não fica apenas
+na conversa. Depois dos cortes, use `direcao acao=planejar` com objetivo,
+linguagem e momentos (`inicio`, `fim`, `fala`, `intencao`). Os tempos são do
+vídeo final. `direcao acao=ler` mostra os instantes que faltam conferir.
+Após as últimas alterações, peça `ver_quadros` nesses tempos, em lotes de até
+seis. Registre o parecer com `direcao acao=revisar`. Se mudar algo, confira de
+novo. Imagens estáticas não permitem afirmar que você ouviu o áudio ou
+conferiu todo o movimento.
+
+`compor` oferece gancho, comparação, passos, prova e fechamento. A comparação
+usa duas colunas, com `rotulos` para cada lado e `itens=[{texto, em}, ...]`:
+`em` é relativo ao início e deve acompanhar a fala. Os outros tipos usam
+títulos, listas e números que continuam editáveis. `entrada=cinema` é uma
+aproximação discreta com foco; `entrada=linhas` revela títulos linha por linha.
+
+Use as frequências acima como referências, não cotas. Uma intervenção precisa
+esclarecer, provar ou orientar o olhar. Silêncio visual também é uma decisão.
+Respeite as ressalvas da fala, sem transformar hipótese em promessa. No modo
+de acabamento, preserve cortes e ordem. Nunca recrie itens manualmente
+ajustados apenas para uniformizar o estilo.
+
+## 9. Composição livre e Blender local
+
+Consulte `arte acao=catalogo`. O motor tem formas, traçados, grupos,
+tipografia e números com keyframes independentes. Os modelos fluxo,
+tipografia, orbita e grafico são pontos de partida, não o limite das cenas.
+Construa uma composição para a ideia. Use cores da marca, preserve a pessoa
+e a faixa da legenda e confira os quadros. Não transforme números de exemplo
+em afirmações do vídeo. Não cubra a pessoa com painel opaco.
+
+`arte_3d` usa Blender local opcional. Consulte a disponibilidade primeiro;
+crie a cena com objetos, materiais e câmera em dados; aguarde o job concluir
+antes de revisar. O resultado é uma sobreposição com alfa. Não afirme que
+há rastreamento, rotoscopia livre, importação MOGRT ou avaliação do som apenas
+porque o render terminou. A documentação completa está em MOTOR-CRIATIVO.md.

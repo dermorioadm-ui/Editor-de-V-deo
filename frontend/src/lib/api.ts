@@ -26,6 +26,9 @@ const patch = <T>(url: string, body?: unknown) =>
 const del = <T>(url: string) => req<T>(url, { method: 'DELETE' })
 
 export const api = {
+  artes: (id: string) => req<any>(`/api/projects/${id}/arte`),
+  criarArte: (id: string, dados: any) => post<any>(`/api/projects/${id}/pos/arte`, dados),
+  criarArte3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/arte-3d`, dados),
   health: () => req<any>('/api/health'),
   browse: (path: string) => req<any>(`/api/browse?path=${encodeURIComponent(path)}`),
   locate: (name: string, size: number) =>
@@ -336,6 +339,11 @@ export const api = {
   recorteEstado: () => req<any>('/api/recorte/estado'),
   // O CLAUDE COMO EDITOR: o Claude Code desta máquina, sem janela
   claudeEstado: (forcar = false) => req<any>(`/api/claude/estado${forcar ? '?forcar=true' : ''}`),
+  codexEstado: () => req<any>('/api/codex/estado'),
+  codexConfig: (dados: { caminho?: string; modelo?: string }) => post<any>('/api/codex/config', dados),
+  direcao: (id: string) => req<any>(`/api/projects/${id}/direcao`),
+  diretorPedir: (id: string, provedor: string, modo: string, pedido = '') =>
+    post<Job>(`/api/projects/${id}/diretor`, { provedor, modo, pedido }),
   claudeConfig: (dados: { caminho?: string; modelo?: string; editor_padrao?: string;
                           pos_padrao?: boolean }) =>
     post<any>('/api/claude/config', dados),

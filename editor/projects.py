@@ -741,7 +741,7 @@ def gemini_permitido(project) -> bool:
     posição dos anexos e o plano de b-roll. Gerar imagem e vídeo continua sendo
     do Gemini — o Claude não gera imagem.
     """
-    return getattr(getattr(project, "plan", None), "editor", "") != "claude"
+    return getattr(getattr(project, "plan", None), "editor", "") not in ("claude", "codex")
 
 
 def _cortes_da_ia(project: Project, ctx, words: list[dict],
@@ -3047,6 +3047,8 @@ def timeline_summary(project: Project) -> dict:
         "cenas": [c.to_dict() for c in getattr(plan, "cenas", [])],
         "marca": getattr(plan, "marca", ""),
         "editor": getattr(plan, "editor", ""),
+        "pos_editor": getattr(plan, "pos_editor", None),
+        "direcao": getattr(plan, "direcao", {}),
         "speed_warn": [b["id"] for b in blocks
                        if b["speed"] > plan.speed.warn_above],
     }
