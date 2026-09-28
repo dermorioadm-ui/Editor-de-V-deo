@@ -35,21 +35,29 @@ daqui.
 
 **O critério, em ordem:**
 1. **O produto manda.** Cada peça ilustra o que está sendo dito sobre o
-   produto ou prova algo. Se você não consegue dizer em uma frase o que ela
-   explica, ela não entra. Enfeite é proibido.
-2. **Sóbrio e premium, nunca pirotécnico.** Movimento curto e com propósito.
-   Nada girando à toa, nada de cena que chama atenção para si mesma. A cena
-   `vidro3d` (camadas girando) está REPROVADA — não use, a menos que ele
-   peça com essas palavras.
-3. **Pouco, e bem escolhido.** Escolha de 2 a 4 recursos do vocabulário
-   abaixo que servem a ESTE vídeo e deixe o resto de fora. Vídeo cheio, só
-   ele falando, é uma escolha válida e frequente.
+   produto ou prova algo — no momento exato da fala. Enfeite solto não.
+2. **RICO EM DETALHE.** Ele reclamou dos dois lados: "engessado" (todo vídeo
+   igual) e "tá pobre em detalhes, tá faltando tudo". O certo é um vídeo
+   CHEIO de acabamento, com propósito:
+   - todo tópico novo da fala ganha um motion (texto atrás, ícone desenhado,
+     lista, gráfico, objeto 3D) — referência: algo novo a cada 3 a 6 s;
+   - toda explicação (passos, mecanismo, "como funciona") ganha MOLDURA com a
+     marca e a lista no lado livre;
+   - toda virada de assunto ganha TRANSIÇÃO (as da emenda; a 3D em 1 ou 2);
+   - toda coisa concreta nomeada (imóvel, chave, contrato, app, reserva)
+     ganha OBJETO 3D ou ícone; todo número vira gráfico andando;
+   - o LOGO no canto de cima já está lá do começo ao fim (o Sharkcut põe
+     sozinho e esconde quando outro gráfico entra) — não ponha outro;
+   - entre um elemento e outro, 1 a 2 s de respiro — nunca 10 s de vídeo
+     parado sem nada.
+3. **Premium, nunca pirotécnico.** Movimento com peso e curva boa, nada
+   girando à toa. A cena `vidro3d` (camadas girando) está REPROVADA — não
+   use, a menos que ele peça com essas palavras.
 4. **Imagem: o gosto é dele.** Não troque o look/cor que ele escolheu, não
-   ponha filtro forte, pele sempre natural. Correção de imagem só se ele
-   pediu.
-5. **Varie.** Não repita o mesmo recurso no mesmo lugar de vídeo para vídeo
-   (ex.: não abra todo vídeo com texto atrás da cabeça). Consulte `gosto`
-   para saber o que ele já viu muitas vezes.
+   ponha filtro forte, pele sempre natural.
+5. **Varie a FORMA, não a quantidade.** Não abra todo vídeo igual; troque o
+   recurso, o lado, a entrada. Consulte `gosto` para ver o que ele já viu
+   muitas vezes ou apagou.
 
 **O vocabulário aprovado** (use o que a fala pedir, na ordem que a fala pedir):
 - **Gancho** — se a primeira tela trouxe a copy, o Sharkcut já a pôs no
@@ -81,8 +89,8 @@ daqui.
   só em troca de assunto de verdade.
 - **Gráfico de dados** — número falado vira gráfico andando (§2b), só com
   números que ele disse.
-- **Logo de canto** — símbolo pequeno no canto; o Sharkcut o esconde
-  sozinho quando outro gráfico entra.
+- **Logo de canto** — o Sharkcut já põe o símbolo no canto de cima, o vídeo
+  inteiro, e o esconde sozinho quando outro gráfico entra. Não duplique.
 
 **Nunca:** cartão sólido por cima do rosto ou do corpo fora da moldura (o
 Sharkcut troca por vidro); dois recursos novos ao mesmo tempo; logo de

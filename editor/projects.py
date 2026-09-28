@@ -1358,12 +1358,13 @@ def _gancho_no_plano(project: Project) -> None:
     """O gancho da primeira tela entra (ou se ajusta) assim que o corte
     existe — o fim da primeira frase só é conhecido agora. Falhar aqui nunca
     impede o vídeo de sair."""
-    if not getattr(project.plan, "gancho", ""):
-        return
     try:
         from . import pos_edicao
 
-        pos_edicao.aplicar_gancho(project)
+        # o logo da marca no canto de cima, o vídeo inteiro (acompanha o corte)
+        pos_edicao.aplicar_logo_de_canto(project)
+        if getattr(project.plan, "gancho", ""):
+            pos_edicao.aplicar_gancho(project)
         project.save_plan()
     except Exception:  # noqa: BLE001
         pass

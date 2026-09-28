@@ -641,6 +641,8 @@ def aplicar_receita(project, payload: dict) -> None:
     if "nome_arquivo" in payload:
         # o nome do vídeo na pasta, limpo para o Windows ("" = o de sempre)
         plan.nome_arquivo = svc.nome_limpo(payload.get("nome_arquivo") or "")
+    if "logo_canto" in payload:
+        plan.logo_canto = bool(payload.get("logo_canto"))
     if isinstance(payload.get("gancho_logos"), list):
         # os logos que entram em 3D no gancho (nomes da biblioteca/kit)
         plan.gancho_logos = [str(x)[:40] for x in payload["gancho_logos"]

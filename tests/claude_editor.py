@@ -778,9 +778,12 @@ def main() -> int:
               and "mcp__sharkcut__cortar" not in permitidas
               and "mcp__sharkcut__respiro" not in permitidas,
               "na pós ele NÃO pode mexer na edição: corte, ritmo e fôlego ficam de fora")
-        check(len(proj.plan.graficos) == 1
+        dele = [g for g in proj.plan.graficos if g.origem != "canto"]
+        check(len(dele) == 1
               and not any(abs(c.speed - 1.12) < 0.01 for c in proj.plan.clips),
               "o gráfico entrou e a edição da regra ficou intacta")
+        check(len([g for g in proj.plan.graficos if g.origem == "canto"]) == 1,
+              "com a pós, o logo da marca entra sozinho no canto de cima")
         check(proj.plan.editor == "" and res.get("final_job")
               and (res.get("previa") or {}).get("ok") is not False,
               "quem editou continua sendo a regra; prévia e arquivo final saem depois da pós")
@@ -796,7 +799,8 @@ def main() -> int:
         job = http("POST", f"/api/projects/{p5['id']}/claude", {"modo": "pos"}, base=base)
         fim, _m = esperar(base, p5["id"], job["id"])
         proj = svc.load(p5["id"])
-        check(fim["status"] == "ok" and len(proj.plan.graficos) == 1
+        check(fim["status"] == "ok"
+              and len([g for g in proj.plan.graficos if g.origem != "canto"]) == 1
               and proj.plan.editor == "" and proj.plan.pos_claude,
               "um clique depois, a pós entra por cima — sem trocar quem editou")
 

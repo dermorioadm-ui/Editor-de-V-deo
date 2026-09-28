@@ -370,6 +370,7 @@ def main() -> int:
     testar_gosto_aprendido_e_objetos_3d()
     testar_logo_3d_atras_da_pessoa_no_gancho()
     testar_logo_de_print_com_fundo()
+    testar_logo_no_canto_e_pos_rica()
 
     print()
     if FALHAS:
@@ -9569,6 +9570,62 @@ def testar_logo_de_print_com_fundo() -> None:
         check(MK.logos_extras().keys() == antes.keys(), "e sai da biblioteca quando apagado")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+def testar_logo_no_canto_e_pos_rica() -> None:
+    """ "Tá faltando tudo na edição, coloca a logo no canto superior da tela…
+    tá pobre em detalhes." Com a marca ligada, o logo entra sozinho no canto
+    de CIMA, o vídeo inteiro, acompanhando o corte; apagado por ele, não volta;
+    e as instruções do diretor pedem edição rica (motion a cada tópico,
+    moldura em explicação, transição em virada), não contida."""
+    import tempfile
+    from pathlib import Path
+
+    from editor import claude_editor as CE
+    from editor import diretor
+    from editor import pos_edicao as PE
+    from editor import projects as P
+    from editor.mcp.cliente import Cliente
+    from tests.mcp import semear
+
+    print("\n-- logo no canto de cima e pós rica")
+    client = TestClient(app)
+    pid = semear(Cliente(transporte=client), Path(tempfile.mkdtemp(prefix="canto_")))
+    p = P.load(pid)
+    p.plan.marca = "hospedepay"
+    p.plan.pos_claude = False
+    P._gancho_no_plano(p)
+    check(not [g for g in P.load(pid).plan.graficos if g.origem == "canto"],
+          "com \"só a edição\", nada por cima — nem o logo do canto")
+    p = P.load(pid)
+    p.plan.pos_claude = True
+    P._gancho_no_plano(p)
+    p = P.load(pid)
+    cantos = [g for g in p.plan.graficos if g.origem == "canto"]
+    dur = P.duracao_de_saida(p)
+    check(len(cantos) == 1 and cantos[0].logo == "simbolo" and cantos[0].y <= 0.1
+          and cantos[0].x >= 0.85 and cantos[0].out_start == 0.0
+          and abs(cantos[0].out_end - dur) < 0.05,
+          f"o símbolo entra sozinho no canto de cima, do começo ao fim ({[(g.x, g.y, g.out_end) for g in cantos]})")
+    P._gancho_no_plano(P.load(pid))
+    check(len([g for g in P.load(pid).plan.graficos if g.origem == "canto"]) == 1,
+          "rodar de novo não duplica")
+    p = P.load(pid)
+    PE.tirar(p, [cantos[0].id])
+    p.save_plan()
+    P._gancho_no_plano(P.load(pid))
+    p = P.load(pid)
+    check(not [g for g in p.plan.graficos if g.origem == "canto"] and p.plan.logo_canto is False,
+          "apagado por ele, o logo do canto não volta sozinho")
+    p.plan.marca = "-"
+    p.plan.logo_canto = True
+    PE.aplicar_logo_de_canto(p)
+    check(not [g for g in p.plan.graficos if g.origem == "canto"], "sem marca, sem logo no canto")
+    habil = CE.habilidade()
+    check("RICO EM DETALHE" in habil and "Pouco, e bem escolhido" not in habil
+          and "RICO EM" in "\n".join(CE._com_habilidade([])) and "RICA" in diretor.GUIA,
+          "a habilidade e o diretor pedem edição rica: motion a cada tópico, moldura, transição")
 
 
 if __name__ == "__main__":

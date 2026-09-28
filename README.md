@@ -1765,10 +1765,16 @@ que o Claude pôs** leva só o que ele pôs, e o que você pôs à mão fica.
 
 ### O seu gosto, e não um roteiro
 
-A pós da IA (Claude ou Codex) não segue mais uma receita fixa. Cada vídeo é
-decidido pelo que aquele roteiro fala sobre o produto: 2 a 4 recursos que
-servem àquele vídeo, nada pirotécnico (a cena de camadas de vidro girando
-saiu do padrão), e vídeo cheio, só você falando, também é uma escolha.
+A pós da IA (Claude ou Codex) não segue mais uma receita fixa — cada vídeo é
+decidido pelo que aquele roteiro fala sobre o produto — mas sai RICA em
+detalhe: motion a cada tópico (algo novo a cada 3 a 6 s), moldura com a marca
+e a lista em toda explicação, transição em toda virada de assunto, objeto 3D
+ou ícone quando a fala nomeia uma coisa do produto, gráfico quando há número.
+Nada pirotécnico (a cena de camadas de vidro girando saiu do padrão).
+
+**O logo da marca no canto de cima** entra sozinho em todo vídeo com pós e marca
+ligada, do começo ao fim, e sai de cena enquanto outro gráfico, cena ou o
+gancho está na tela. Apagou o do canto na aba Pós: ele não volta.
 
 - **Meu gosto** (primeira tela): escreva do seu jeito ("nada pirotécnico",
   "3D só para mostrar o produto", "pele natural, sem filtro"). Vale para toda

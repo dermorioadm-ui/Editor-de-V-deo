@@ -696,9 +696,10 @@ SISTEMA = (
 
 GUIA_DA_POS = (
     "PÓS-EDIÇÃO seguindo a HABILIDADE DE MOTION (no fim deste pedido): gosto → marca → "
-    "pos_contexto → analisar_cena → um PLANO por momento do vídeo, escolhendo "
-    "só o que ESTE roteiro pede (nada de roteiro fixo, nada pirotécnico; "
-    "vidro3d está reprovada) → cena moldura quando explica, objeto 3D pronto "
+    "pos_contexto → analisar_cena → um PLANO por momento do vídeo, RICO EM "
+    "DETALHE (ele reclamou de edição pobre): motion a cada tópico novo, algo "
+    "novo a cada 3–6 s, moldura em toda explicação, transição em toda virada; "
+    "sem roteiro fixo e nada pirotécnico (vidro3d reprovada) → objeto 3D pronto "
     "(arte_3d acao=objeto) quando a fala nomeia uma coisa do produto, gráficos (títulos e listas em vidro, logo de lado, "
     "texto atrás da pessoa, e GRÁFICOS DE DADOS animados — barras que sobem, "
     "linha que se desenha, rosca, ícones desenhados — sempre que a fala tem "

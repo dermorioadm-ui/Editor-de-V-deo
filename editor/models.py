@@ -471,6 +471,9 @@ class EditPlan:
     # os logos (nomes da biblioteca) que entram em 3D no GANCHO, flutuando e
     # passando por trás dele — "quero que sempre apareça nos hooks"
     gancho_logos: list = field(default_factory=list)
+    # o LOGO DA MARCA no canto de cima, o vídeo inteiro (sai de cena sozinho
+    # quando outro gráfico entra). Ele apagou o do canto: fica desligado.
+    logo_canto: bool = True
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -523,6 +526,7 @@ class EditPlan:
             "gancho": self.gancho,
             "nome_arquivo": self.nome_arquivo,
             "gancho_logos": list(self.gancho_logos),
+            "logo_canto": bool(self.logo_canto),
             "version": self.version,
         }
 
@@ -581,6 +585,7 @@ class EditPlan:
         plan.nome_arquivo = str(data.get("nome_arquivo") or "")[:120]
         plan.gancho_logos = [str(x)[:40] for x in (data.get("gancho_logos") or [])
                              if isinstance(x, str)][:4]
+        plan.logo_canto = bool(data.get("logo_canto", True))
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]
         plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])

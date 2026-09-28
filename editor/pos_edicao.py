@@ -483,6 +483,42 @@ def aplicar_gancho(project):
     return g
 
 
+def aplicar_logo_de_canto(project):
+    """O LOGO DA MARCA NO CANTO DE CIMA, do começo ao fim — "coloca a logo no
+    canto superior da tela". Não depende da IA lembrar: com marca ligada, o
+    Sharkcut põe o símbolo pequeno no canto de cima; ele sai de cena sozinho
+    enquanto outro gráfico, cena ou o gancho está na tela (render/logos.py) e
+    volta depois. Se ele (ou o Claude) já pôs um logo de canto, esse vale.
+    Não grava."""
+    from .render import logos as LG
+
+    plan = project.plan
+    atuais = [g for g in plan.graficos if getattr(g, "origem", "") == "canto"]
+    kit = MK.do_projeto(project)
+    dur = _duracao(project)
+    da_marca = [n for n, d in (kit or {}).get("logos", {}).items() if d.get("da_marca")]
+    nome = "simbolo" if "simbolo" in da_marca else (da_marca[0] if da_marca else "")
+    # "só a edição" é escolha dele: sem pós, nada por cima (nem o logo)
+    pos_ligada = (getattr(plan, "pos_editor", None) in ("claude", "codex")
+                  or bool(getattr(plan, "pos_claude", False)))
+    if not getattr(plan, "logo_canto", True) or not nome or not dur or not pos_ligada:
+        if atuais:
+            plan.graficos = [g for g in plan.graficos if getattr(g, "origem", "") != "canto"]
+        return None
+    if atuais:
+        g = atuais[0]
+        g.out_start, g.out_end = 0.0, round(dur, 3)     # acompanha o corte
+        return g
+    if any(getattr(g, "tipo", "") == "logo" and LG.de_canto(g) for g in plan.graficos):
+        return None
+    g = Grafico(**MG.normalizar({
+        "tipo": "logo", "logo": nome, "x": 0.91, "y": 0.07, "tamanho": 0.75,
+        "opacidade": 0.92, "out_start": 0.0, "out_end": dur, "entrada": "fade",
+        "saida": "fade", "origem": "canto"}, dur))
+    plan.graficos.append(g)
+    return g
+
+
 def por_grafico(project, dados: dict, gid: str | None = None,
                 pela_mao: bool = False) -> Grafico:
     """Cria (sem ``gid``) ou atualiza um gráfico. Não grava. ``pela_mao``: a
@@ -620,5 +656,8 @@ def tirar(project, ids: list[str] | None = None, tudo: bool = False,
                                       for x in antes if x not in fica):
             # tirou o gancho: a copy sai junto (senão ele voltaria sozinho)
             plan.gancho = ""
+        if nome == "graficos" and any(getattr(x, "origem", "") == "canto"
+                                      for x in antes if x not in fica):
+            plan.logo_canto = False     # tirou o logo do canto: não volta sozinho
         setattr(plan, nome, fica)
     return n
