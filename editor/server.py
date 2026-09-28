@@ -2568,6 +2568,57 @@ def api_marca_ativa(payload: dict = Body(...)) -> dict:
     return api_marca()
 
 
+def _importar_marca_pdf(caminho: str) -> dict:
+    from . import marca as MK
+
+    try:
+        from . import marca_pdf
+    except ImportError as exc:
+        raise HTTPException(501, "falta o leitor de PDF — rode o instalar.bat de novo "
+                                 "(ele instala o pypdfium2)") from exc
+    try:
+        r = marca_pdf.importar(caminho)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "slug": r["slug"], "achado": r["achado"], **api_marca()}
+
+
+@app.post("/api/marca/pdf")
+def api_marca_pdf(payload: dict = Body(...)) -> dict:
+    """A MARCA PELO PDF (pelo caminho, vindo da janela do sistema): lê o manual
+    da identidade visual nesta máquina, grava o kit e o liga."""
+    return _importar_marca_pdf(str(payload.get("caminho") or ""))
+
+
+@app.post("/api/marca/pdf-arquivo")
+def api_marca_pdf_arquivo(arquivo: UploadFile = File(...)) -> dict:
+    """O mesmo, com o PDF SOLTO na tela: o navegador manda os bytes para este
+    servidor (que roda nesta máquina) — nada vai para a internet."""
+    import shutil
+    import tempfile
+
+    MAX_BYTES = 80 * 1024 * 1024      # o mesmo teto do marca_pdf (sem importar o PDFium aqui)
+    nome = Path(str(arquivo.filename or "marca.pdf")).name
+    if not nome.lower().endswith(".pdf"):
+        raise HTTPException(400, "solte o PDF da identidade visual")
+    pasta = Path(tempfile.mkdtemp(prefix="marca_up_"))
+    destino = pasta / nome
+    try:
+        total = 0
+        with open(destino, "wb") as f:
+            while True:
+                bloco = arquivo.file.read(1 << 20)
+                if not bloco:
+                    break
+                total += len(bloco)
+                if total > MAX_BYTES:
+                    raise HTTPException(400, "PDF grande demais (máx. 80 MB)")
+                f.write(bloco)
+        return _importar_marca_pdf(str(destino))
+    finally:
+        shutil.rmtree(pasta, ignore_errors=True)
+
+
 @app.post("/api/marca/logos")
 def api_marca_logo(payload: dict = Body(...)) -> dict:
     """Guarda um PNG do disco na biblioteca de logos (pelo caminho)."""

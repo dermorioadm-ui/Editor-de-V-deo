@@ -35,7 +35,7 @@ export const api = {
   // então ele pode abrir o mesmo diálogo de qualquer programa e devolver o
   // caminho. Nada é enviado: o que atravessa é uma string.
   janela: () => req<{ disponivel: boolean }>('/api/janela'),
-  escolher: (kind: 'video' | 'audio' | 'image' | 'media' | 'texto',
+  escolher: (kind: 'video' | 'audio' | 'image' | 'media' | 'texto' | 'pdf',
              titulo?: string, varios = false) =>
     post<{ ok: boolean; cancelado: boolean; path: string; paths: string[] }>(
       '/api/escolher', { kind, titulo, varios }),
@@ -345,6 +345,19 @@ export const api = {
   // A MARCA: o kit ligado, os logos, a marca de cada vídeo
   marca: () => req<any>('/api/marca'),
   marcaAtiva: (slug: string) => post<any>('/api/marca/ativa', { slug }),
+  // a identidade visual em PDF vira kit (lido nesta máquina, nada vai para a internet)
+  marcaPdf: (caminho: string) => post<any>('/api/marca/pdf', { caminho }),
+  marcaPdfArquivo: async (arquivo: File) => {
+    const fd = new FormData()
+    fd.append('arquivo', arquivo, arquivo.name)
+    const r = await fetch('/api/marca/pdf-arquivo', { method: 'POST', body: fd })
+    if (!r.ok) {
+      let detail = r.statusText
+      try { detail = (await r.json()).detail ?? detail } catch { /* corpo não-JSON */ }
+      throw new Error(detail)
+    }
+    return r.json()
+  },
   marcaLogo: (caminho: string, nome = '') => post<any>('/api/marca/logos', { caminho, nome }),
   marcaLogoApagar: (nome: string) => del<any>(`/api/marca/logos/${encodeURIComponent(nome)}`),
   marcaLogoUrl: (nome: string) => `/api/marca/logo/${encodeURIComponent(nome)}`,

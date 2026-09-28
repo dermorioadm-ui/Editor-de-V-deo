@@ -94,6 +94,7 @@ export default function Home() {
   const [posClaude, setPosClaude] = useState<boolean | null>(null)
   // A MARCA do vídeo: o kit que a pós usa (cores, fonte, logos, grafia)
   const [marcas, setMarcas] = useState<any>(null)
+  const [lendoPdf, setLendoPdf] = useState('')
   const [marcaDaVez, setMarcaDaVez] = useState<string | null>(null)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
@@ -237,6 +238,34 @@ export default function Home() {
   async function escolherMarca(slug: string) {
     setMarcaDaVez(slug)
     try { setMarcas(await api.marcaAtiva(slug)) } catch { /* só lembrança */ }
+  }
+
+  // A MARCA PELO PDF: o manual da identidade visual vira kit salvo e ligado.
+  // Lido nesta máquina (o navegador manda para o servidor local, nada sai).
+  async function marcaDoPdf(arquivo?: File) {
+    try {
+      let r: any
+      if (arquivo) {
+        setLendoPdf(`lendo ${arquivo.name}…`)
+        r = await api.marcaPdfArquivo(arquivo)
+      } else {
+        const e = await api.escolher('pdf', 'Escolher o PDF da identidade visual da marca')
+        if (e.cancelado || !e.path) return
+        setLendoPdf('lendo o PDF da marca…')
+        r = await api.marcaPdf(e.path)
+      }
+      setMarcas(r)
+      setMarcaDaVez(r.slug)
+      const a = r.achado ?? {}
+      toast('ok', `Marca ${r.kit?.nome ?? r.slug} salva e ligada`,
+        `${a.cores ?? 0} cores, ${a.logos ?? 0} logos, fonte ${a.fonte || '—'}` +
+        `${a.fonte && !a.fonte_arquivo ? ' (instale a fonte no Windows para sair igual)' : ''}, ` +
+        `${a.regras ?? 0} regras, ${a.voz ?? 0} de voz, ${a.frases ?? 0} frases`)
+    } catch (e: any) {
+      toast('error', 'Não consegui ler o PDF da marca', String(e.message ?? e))
+    } finally {
+      setLendoPdf('')
+    }
   }
 
   async function escolherPos(v: boolean) {
@@ -464,7 +493,10 @@ export default function Home() {
     setDragging(false)
     // TODOS os arquivos soltos, na ordem em que vieram. Pegar só o primeiro
     // fazia soltar três tomadas juntas parecer que funcionou e editar uma.
-    const arquivos = Array.from(ev.dataTransfer.files ?? [])
+    const todos = Array.from(ev.dataTransfer.files ?? [])
+    // o PDF solto na tela é a identidade visual da marca
+    for (const pdf of todos.filter((f) => /\.pdf$/i.test(f.name))) await marcaDoPdf(pdf)
+    const arquivos = todos.filter((f) => !/\.pdf$/i.test(f.name))
     if (!arquivos.length) return
     const achados: string[] = []
     const perdidos: string[] = []
@@ -645,7 +677,7 @@ export default function Home() {
                 : 'o vídeo sai só com a edição (cortes, ritmo, legenda, b-roll). Dá para pôr a pós depois, no editor, num clique.'}
             </span>
           </div>
-          {marcas && (marcas.lista ?? []).length > 0 && (
+          {marcas && (
             <div className="flex items-center gap-2 flex-wrap" data-marca-da-vez={(marcaDaVez ?? marcas.ativa) || 'nenhuma'}>
               <span className="text-sm text-slate-200 mr-1">Marca</span>
               {(marcas.lista ?? []).map((k: any) => (
@@ -656,10 +688,14 @@ export default function Home() {
               ))}
               <button className={`btn btn-xs ${!(marcaDaVez ?? marcas.ativa) ? 'btn-primary' : ''}`}
                       onClick={() => escolherMarca('')} data-marca="nenhuma">nenhuma</button>
+              <button className="btn btn-xs" data-marca-pdf="1" disabled={!!lendoPdf}
+                      title="Solte aqui (ou escolha) o PDF da identidade visual: cores, logos, fonte, regras e voz viram o kit da marca"
+                      onClick={() => marcaDoPdf()}>
+                {lendoPdf || '+ marca pelo PDF'}</button>
               <span className="text-[11px] text-slate-500 basis-full">
                 {(marcaDaVez ?? marcas.ativa)
-                  ? 'a pós sai na identidade dela: cores, fonte, logos e o nome escrito certo (também na legenda)'
-                  : 'sem marca: a pós usa os estilos padrão do Sharkcut'}
+                  ? 'a pós sai na identidade dela: cores, fonte, logos e o nome escrito certo (também na legenda). Empresa nova? Solte o PDF da identidade visual aqui na tela.'
+                  : 'sem marca: a pós usa os estilos padrão do Sharkcut. Solte o PDF da identidade visual de uma empresa aqui na tela e ela vira marca.'}
               </span>
             </div>
           )}

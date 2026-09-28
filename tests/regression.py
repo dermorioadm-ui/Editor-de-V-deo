@@ -366,6 +366,7 @@ def main() -> int:
     testar_gancho_no_comeco()
     testar_nome_do_arquivo_escolhido()
     testar_previa_com_animacoes_sempre_em_dia()
+    testar_marca_pelo_pdf()
 
     print()
     if FALHAS:
@@ -1751,7 +1752,7 @@ def testar_janela_do_sistema() -> None:
     """A janela de escolher arquivo é a DO SISTEMA, não uma imitação em HTML."""
     from editor import nativo
 
-    check(set(nativo.FILTROS) == {"video", "audio", "image", "media", "texto"},
+    check(set(nativo.FILTROS) == {"video", "audio", "image", "media", "texto", "pdf"},
           "todo tipo que o editor aceita tem filtro, inclusive o 'media' do "
           "material auxiliar (vídeo e imagem na MESMA janela: separar obriga a "
           "abrir duas vezes para anexar uma gravação de tela e um print)")
@@ -9219,6 +9220,77 @@ def testar_previa_com_animacoes_sempre_em_dia() -> None:
             except Exception:  # noqa: BLE001
                 pass
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+def testar_marca_pelo_pdf() -> None:
+    """ "Quero na primeira tela poder jogar em pdf a identidade visual da marca
+    e daí fica salvo." O PDF (aqui, o manual sintético da Pousada Brisa) vira
+    um kit de marca de verdade: nome, cores com papel, fonte, logo com fundo
+    transparente, voz — gravado na pasta do usuário, ligado, e lido pelo resto
+    do programa como qualquer kit. Nada sai da máquina (o PDF vai do navegador
+    para o servidor local)."""
+    import json
+    from pathlib import Path
+
+    from editor import marca as MK
+    from editor.render import logos as LG
+
+    print("\n-- marca pelo PDF")
+    from editor import db
+
+    antes = db.get_setting("marca_ativa", None)
+    fixture = Path(__file__).resolve().parent / "fixtures" / "marca_sintetica.pdf"
+    client = TestClient(app)
+    with open(fixture, "rb") as f:
+        r = client.post("/api/marca/pdf-arquivo",
+                        files={"arquivo": ("identidade pousada.pdf", f, "application/pdf")})
+    check(r.status_code == 200, f"soltar o PDF na tela importa a marca ({r.status_code} {r.text[:160]})")
+    d = r.json() if r.status_code == 200 else {}
+    slug = d.get("slug", "")
+    check(slug == "pousada-brisa" and d.get("ativa") == slug
+          and any(k["slug"] == slug for k in d.get("lista", [])),
+          f"a marca fica salva e ligada ({slug}, ativa={d.get('ativa')})")
+    kit = MK.carregar(slug) or {}
+    check(kit.get("nome") == "Pousada Brisa" and kit["grafia"]["exata"] == "Pousada Brisa",
+          f"o nome sai do logo, na grafia do manual ({kit.get('nome')})")
+    check(kit.get("cores", {}).get("marca") == "#1E6FD9" and "texto" in kit.get("cores", {}),
+          f"as cores ganham papel pelo rótulo escrito no manual ({kit.get('cores')})")
+    check(kit.get("fonte", {}).get("texto") == "Brisa Sans",
+          f"a fonte citada no manual ({kit.get('fonte', {}).get('texto')})")
+    logos = kit.get("logos") or {}
+    png = next(iter(logos.values()), {}).get("caminho", "")
+    check(bool(png) and LG.dims_png(png) is not None
+          and Path(png).parent.parent == MK.PASTA_DO_USUARIO / slug,
+          f"o logo do manual vira PNG do kit ({sorted(logos)})")
+    check(bool(kit.get("voz")) and kit["regras"][0].startswith("O nome é sempre Pousada Brisa"),
+          f"voz e regras do manual vão para o kit ({kit.get('voz')})")
+    check("Pousada Brisa" in MK.resumo(kit), "o Claude recebe a marca nova no pedido")
+    publico = json.dumps(d)
+    check(str(MK.PASTA_DO_USUARIO) not in publico and "caminho" not in publico,
+          "a resposta não devolve caminho do disco")
+
+    # o que foi ajustado à mão fica: importar de novo só completa
+    arq = MK.PASTA_DO_USUARIO / slug / "marca.json"
+    bruto = json.loads(arq.read_text(encoding="utf-8"))
+    bruto.pop("origem", None)
+    bruto["regras"] = ["regra que eu escrevi"]
+    arq.write_text(json.dumps(bruto, ensure_ascii=False), encoding="utf-8")
+    r = client.post("/api/marca/pdf", json={"caminho": str(fixture)})
+    kit = MK.carregar(slug) or {}
+    check(r.status_code == 200 and kit.get("regras") == ["regra que eu escrevi"]
+          and kit["cores"].get("marca") == "#1E6FD9",
+          "importar de novo não apaga o que foi ajustado à mão (o PDF só completa)")
+
+    r = client.post("/api/marca/pdf-arquivo",
+                    files={"arquivo": ("nao.pdf", b"isso nao e pdf", "application/pdf")})
+    check(r.status_code == 400, f"arquivo que não é PDF: erro claro ({r.status_code} {r.text[:80]})")
+    r = client.post("/api/marca/pdf", json={"caminho": str(fixture.with_suffix(".txt"))})
+    check(r.status_code == 400, "caminho que não é PDF: erro claro")
+    # devolve o programa como estava (a marca de teste não vaza para os outros testes)
+    shutil.rmtree(MK.PASTA_DO_USUARIO / slug, ignore_errors=True)
+    db.ex("DELETE FROM settings WHERE key=?", ("marca_ativa",)) if antes is None \
+        else db.set_setting("marca_ativa", antes)
 
 
 if __name__ == "__main__":

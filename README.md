@@ -1766,6 +1766,30 @@ escura e branca) e as regras de uso e de voz. Na primeira tela, **Marca**
 escolhe a marca daquele vídeo (ou nenhuma — você tem outros negócios); na aba
 **Pós**, dá para trocar a marca de um vídeo já feito.
 
+**Empresa nova: solte o PDF da identidade visual.** Na primeira tela, arraste
+o PDF do manual da marca para a tela (ou clique em **+ marca pelo PDF**). Em
+~2 segundos, nesta máquina, sem IA e sem internet, ele vira um kit salvo e
+ligado — e o seu modelo de edição (gancho, moldura, lista com motion, ícone
+desenhado no disco da cor da marca, logo de canto que sai de cena) passa a
+sair na cara da empresa nova:
+
+- **nome** — o escrito ao lado do logo (ou o título da capa);
+- **cores com papel** — os códigos escritos no manual (`#1E6FD9 · marca`,
+  RGB ou CMYK) viram *marca*, *confirma*, *alerta*, *texto*, *fundo*… pelo
+  rótulo; sem rótulo, a cor viva que mais aparece é a marca;
+- **logos** — os logos EM VETOR são recortados sozinhos, com fundo
+  transparente, e ganham papel: símbolo, negativo, preto e branco,
+  assinatura, assinatura branca;
+- **fonte** — a citada no manual; o arquivo vai junto quando está embutido
+  inteiro no PDF (senão, instale a fonte no Windows para o vídeo sair igual);
+- **regras, voz e frases** — pelas seções do manual (*Cor*, *Tipografia*,
+  *Não faça*, *Voz*, *Assim* / *Nunca*, as amostras de tipografia).
+
+O kit fica em `dados/marcas/<nome>/` (um `marca.json` que dá para ajustar à
+mão). Importar de novo o mesmo PDF **não apaga** o que você ajustou: o PDF só
+completa o que falta. PDF escaneado (só imagem) não dá para ler — exporte o
+manual direto do programa de design.
+
 Com a marca ligada:
 
 - o nome sai sempre certo — **hospedepay**, minúsculo, junto — no gráfico, na

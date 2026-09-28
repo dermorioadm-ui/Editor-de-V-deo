@@ -20,3 +20,9 @@ httpx>=0.27
 onnxruntime>=1.16
 
 # ffmpeg NÃO é pacote Python. Veja a seção "Instalar o ffmpeg" do README.
+
+# Marca pelo PDF — lê o manual da identidade visual NESTA máquina (cores,
+# logos em vetor, fonte, regras) e grava o kit. PDFium, licença Apache/BSD,
+# wheel pronta para Windows. Sem ele o editor funciona inteiro; só o botão
+# "marca pelo PDF" avisa que falta.
+pypdfium2>=4.30
