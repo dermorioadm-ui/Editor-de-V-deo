@@ -1413,51 +1413,112 @@ def _fade(samples: np.ndarray, ms: int = FADE_MS) -> np.ndarray:
     return samples
 
 
+# a emenda da fala: meia janela de cada lado do corte (10 ms no total)
+EMENDA_MS = 10
+
+
 def build_audio_track(plan: EditPlan, timeline: Timeline, sources: dict,
                       clip_durations: dict, on_progress: Callable | None = None,
                       warnings: list | None = None,
                       limpas: dict | None = None) -> np.ndarray:
     """Monta o áudio em PCM, cada bloco com a duração EXATA do vídeo medido.
 
+    SEM ESTICAR e SEM BURACO. O vídeo de cada bloco sai arredondado para o
+    quadro (10 a 30 ms a mais que o corte). Esticar o áudio para caber mudava
+    o tom (o "digitalizado"); completar com silêncio, com um fade de saída e
+    outro de entrada, abria um buraco de até ~57 ms em CADA emenda — nos
+    cortes seguidos da fala (a parte dos tópicos) era o "leg entre os cortes".
+    Agora cada bloco lê da gravação exatamente o trecho que o vídeo mostra
+    (os milissegundos a mais são o som real de baixo daqueles quadros) e um
+    pouquinho além das bordas, e as emendas se cruzam em 10 ms: sem buraco,
+    sem estalo, sem tom mudado. O começo de cada bloco continua no lugar.
+
     ``limpas``: fonte -> WAV com a voz já limpa pelo redutor (audio/voz.py).
     Ele tem o MESMO relógio do arquivo original (segundo X lá é segundo X
     aqui), então o bloco é lido com os mesmos tempos — só o som é outro.
     """
-    chunks: list[np.ndarray] = []
-    total = max(len(timeline), 1)
+    h = max(1, int(AUDIO_SR * EMENDA_MS / 2000))
+    blocos: list[tuple[np.ndarray, int, tuple | None]] = []   # (pcm estendido, alvo, fim na fonte)
+    total_blocos = max(len(timeline), 1)
     for n, placed in enumerate(timeline):
         clip = placed.clip
         target = int(round(clip_durations.get(clip.id, placed.out_duration) * AUDIO_SR))
         if target <= 0:
             continue
-        if clip.kind == "photo" or clip.audio == "mute":
-            chunks.append(np.zeros(target, dtype=np.float32))
-            continue
         path = sources.get(clip.source, {}).get("path")
-        if not path:
-            chunks.append(np.zeros(target, dtype=np.float32))
+        if clip.kind == "photo" or clip.audio == "mute" or not path:
+            blocos.append((np.zeros(target + 2 * h, dtype=np.float32), target, None))
             continue
         path = (limpas or {}).get(clip.source) or path
-        af = None
-        if abs(clip.speed - 1.0) > 1e-4:
-            af = _atempo(clip.speed)
+        speed = clip.speed if clip.speed and clip.speed > 0 else 1.0
+        af = _atempo(speed) if abs(speed - 1.0) > 1e-4 else None
+        # o trecho da FONTE que o vídeo mostra, mais a meia janela de cada lado
+        mostra = target / AUDIO_SR * speed
+        borda = h / AUDIO_SR * speed
+        ini = clip.src_start - borda
+        falta_ini = 0
+        if ini < 0:
+            falta_ini = int(round(-ini / speed * AUDIO_SR))
+            ini = 0.0
+        fim = clip.src_start + mostra + borda
         try:
-            pcm = decode_pcm(path, clip.src_start, clip.src_end,
-                             sample_rate=AUDIO_SR, channels=1, filters=af)
+            pcm = decode_pcm(path, ini, fim, sample_rate=AUDIO_SR, channels=1, filters=af)
         except FFmpegError:
-            pcm = np.zeros(target, dtype=np.float32)
-        pcm, stretched = _no_tamanho(pcm, target)
-        if stretched and warnings is not None:
-            warnings.append(
-                f"o áudio da fonte é mais curto que o vídeo no bloco que começa "
-                f"em {placed.out_start:.1f} s — o que falta virou silêncio em "
-                f"vez de esticar a voz")
-        chunks.append(pcm)
+            pcm = np.zeros(0, dtype=np.float32)
+        if falta_ini:
+            pcm = np.concatenate([np.zeros(falta_ini, dtype=np.float32), pcm])
+        quer = target + 2 * h
+        if len(pcm) < quer:
+            if quer - len(pcm) > max(2048, int(target * 0.01)) and warnings is not None:
+                warnings.append(
+                    f"o áudio da fonte é mais curto que o vídeo no bloco que começa "
+                    f"em {placed.out_start:.1f} s — o que falta virou silêncio em "
+                    f"vez de esticar a voz")
+            real = _fade(pcm.astype(np.float32)) if len(pcm) else pcm
+            pcm = np.concatenate([real, np.zeros(quer - len(pcm), dtype=np.float32)])
+        else:
+            pcm = pcm[:quer].astype(np.float32)
+        blocos.append((pcm, target, (clip.source, round(speed, 4),
+                                     clip.src_start, clip.src_start + mostra)))
         if on_progress:
-            on_progress((n + 1) / total, f"áudio: bloco {n + 1}/{total}")
-    if not chunks:
+            on_progress((n + 1) / total_blocos, f"áudio: bloco {n + 1}/{total_blocos}")
+    if not blocos:
         return np.zeros(0, dtype=np.float32)
-    return np.concatenate(chunks)
+    total = sum(t for _p, t, _f in blocos)
+    out = np.zeros(total, dtype=np.float32)
+    pos = 0
+    for pcm, t, _f in blocos:
+        out[pos:pos + t] = pcm[h:h + t]
+        pos += t
+    # as emendas: o fim de um bloco (com o som real logo depois) cruza com o
+    # começo do próximo (com o som real logo antes), centrado no corte
+    x = np.linspace(0.0, np.pi / 2, 2 * h, dtype=np.float32)
+    sai_p, entra_p = np.cos(x), np.sin(x)                   # potência igual (corte)
+    entra_l = np.linspace(0.0, 1.0, 2 * h, dtype=np.float32)  # linear (continua igual)
+    pos = 0
+    for k in range(len(blocos) - 1):
+        (pa, ta, fa), (pb, tb, fb) = blocos[k], blocos[k + 1]
+        pos += ta
+        if ta < 2 * h or tb < 2 * h:
+            continue
+        cauda = pa[ta:ta + 2 * h]
+        cabeca = pb[0:2 * h]
+        # o próximo bloco começa exatamente onde este acaba na mesma gravação
+        # (o corte só dividiu o bloco): é o mesmo som, a soma tem de ser 1
+        continuo = (fa and fb and fa[0] == fb[0] and fa[1] == fb[1]
+                    and abs(fb[2] - fa[3]) < 0.002)
+        if continuo:
+            mix = cauda * (1 - entra_l) + cabeca * entra_l
+        else:
+            mix = cauda * sai_p + cabeca * entra_p
+        lo, hi = pos - h, pos + h
+        out[lo:hi] = mix
+    # a borda do vídeo inteiro: 3 ms de entrada e de saída, sem estalo
+    r = min(len(out) // 2, int(AUDIO_SR * 0.003))
+    if r > 0:
+        out[:r] *= np.linspace(0.0, 1.0, r, dtype=np.float32)
+        out[-r:] *= np.linspace(1.0, 0.0, r, dtype=np.float32)
+    return out
 
 
 def _atempo(speed: float) -> str:

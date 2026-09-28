@@ -212,8 +212,11 @@ class DiretorTests(unittest.TestCase):
         self.p.save_plan()
         with patch.object(X, "editar", return_value={"ok": True, "relatorio": "Ficou ótimo"}):
             resultado = E.executar(self.pid, Contexto(), "codex", "pos")
-        self.assertFalse(resultado["ok"])
-        self.assertIn("conferência", resultado["erro"])
+        # a direção NÃO fica aprovada sem conferir — mas a edição que ela fez
+        # vale e segue para a prévia e o vídeo final, com o aviso na tela
+        self.assertFalse(resultado["qualidade"]["aprovada"])
+        self.assertTrue(resultado["ok"])
+        self.assertIn("conferência", resultado["aviso"])
 
     def test_cancelar_encerra_processo_e_revoga_chave(self):
         fake = Path(TMP.name) / "codex_lento.py"

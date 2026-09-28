@@ -25,9 +25,12 @@ def executar(pid, ctx, provedor: str, modo: str, pedido: str = "") -> dict:
         qualidade = diretor.estado(p)
         resultado["qualidade"] = qualidade
         if not qualidade["aprovada"]:
-            resultado["ok"] = False
-            resultado["erro"] = ("A direção ainda não concluiu a conferência dos quadros da "
-                                 "montagem atual. Veja o plano e peça para concluir a revisão.")
+            # A EDIÇÃO ACONTECEU: o que a IA pôs está no plano. Faltar o
+            # registro da conferência dos quadros é aviso, não erro — antes
+            # isto derrubava o trabalho inteiro, a prévia e o vídeo final não
+            # saíam, e ele ficava sem ter onde "disparar" a correção.
+            resultado["aviso"] = ("a IA terminou sem registrar a conferência de todos os "
+                                  "quadros — confira na prévia")
     resultado["provedor"] = provedor
     p.analysis["diretor_edicao"] = resultado
     p.save_analysis()

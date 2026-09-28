@@ -8724,22 +8724,8 @@ def testar_audio_nao_e_esticado() -> None:
         projeto.plan.audio.voz_ia = False
         projeto.plan.audio.voz_estudio = False
         projeto.save_plan()
-        diferencas = []
-        orig = R._no_tamanho
-
-        def espiao(s, alvo):
-            diferencas.append(len(s) - alvo)
-            return orig(s, alvo)
-
-        R._no_tamanho = espiao
-        try:
-            r = svc.export(svc.load(projeto.id), Ctx(quiet=True),
-                           {"filename": "tom.mp4", "overwrite": True, "output_dir": str(tmp)})
-        finally:
-            R._no_tamanho = orig
-        check(any(d != 0 for d in diferencas),
-              f"o vídeo dos blocos sai arredondado para o quadro (diferenças {diferencas} "
-              f"amostras) — é o caso que o esticamento 'resolvia'")
+        r = svc.export(svc.load(projeto.id), Ctx(quiet=True),
+                       {"filename": "tom.mp4", "overwrite": True, "output_dir": str(tmp)})
         a = decode_pcm(r["output"], sample_rate=sr)
         blocos = svc.timeline_summary(svc.load(projeto.id))["blocks"]
         freqs = []
@@ -8752,6 +8738,47 @@ def testar_audio_nao_e_esticado() -> None:
         check(all(abs(f - 1000.0) < 1.0 for f in freqs),
               f"o tom sai em 1000 Hz em todos os blocos ({[round(f, 1) for f in freqs]}) — "
               f"esticado, cada bloco saía num tom diferente")
+
+        # "tá dando leg entre os cortes da fala": a sobra de até um quadro no
+        # fim de cada bloco virava SILÊNCIO, com fade de saída e de entrada —
+        # um buraco de até ~57 ms em cada emenda. Com um som contínuo (ruído)
+        # na gravação, nenhuma janela de 4 ms perto de um corte pode cair
+        # para quase nada.
+        ruido = (0.2 * np.random.default_rng(7).standard_normal(int(sr * dur))).astype(np.float32)
+        wav2 = tmp / "ruido.wav"
+        write_wav(wav2, ruido, sr)
+        fonte2 = tmp / "fonte2.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=s=320x180:r=30:d=12", "-i", str(wav2), "-map", "0:v",
+                        "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-c:a", "pcm_s16le", "-shortest", str(fonte2)], check=True)
+        p2 = svc.create(str(fonte2), "ruido", "VSL")
+        try:
+            p2.plan.clips = [Clip(src_start=a0, src_end=b0) for a0, b0 in cortes]
+            p2.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                          preset="ultrafast", crf=30)
+            p2.plan.audio.voz_ia = False
+            p2.plan.audio.voz_estudio = False
+            p2.save_plan()
+            r2 = svc.export(svc.load(p2.id), Ctx(quiet=True),
+                            {"filename": "ruido.mp4", "overwrite": True, "output_dir": str(tmp)})
+            b2 = decode_pcm(r2["output"], sample_rate=sr)
+            nivel = float(np.sqrt(np.mean(b2[int(0.5 * sr):int(1.5 * sr)] ** 2)))
+            janela = int(0.004 * sr)
+            piores = []
+            for blk in svc.timeline_summary(svc.load(p2.id))["blocks"][1:]:
+                c0 = int(blk["out_start"] * sr)
+                rms = [float(np.sqrt(np.mean(b2[i:i + janela] ** 2)))
+                       for i in range(c0 - int(0.04 * sr), c0 + int(0.04 * sr), janela // 2)]
+                piores.append(round(min(rms) / nivel, 2))
+            check(all(x > 0.35 for x in piores),
+                  f"sem buraco de silêncio nas emendas da fala (pior janela de 4 ms / nível: "
+                  f"{piores}) — antes caía a ~0 por dezenas de ms em cada corte")
+        finally:
+            try:
+                svc.delete_project(p2.id)
+            except Exception:  # noqa: BLE001
+                pass
     finally:
         if projeto is not None:
             try:

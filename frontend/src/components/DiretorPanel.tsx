@@ -5,7 +5,6 @@ import { timecode } from '../lib/format'
 
 export default function DiretorPanel() {
   const project = useStore(s => s.project)
-  const job = useStore(s => s.activeJob)
   const [provedor, setProvedor] = useState('codex')
   const [modo, setModo] = useState('pos')
   const [pedido, setPedido] = useState('')
@@ -23,7 +22,13 @@ export default function DiretorPanel() {
     return () => { vivo = false }
   }, [project?.id, project?.analysis, project?.plan])
   if (!project) return null
-  const rodando = enviando || (job?.project_id === project.id && ['fila', 'rodando'].includes(job.status))
+  // ocupado SÓ com direção de verdade: a prévia que se refaz sozinha, o logo
+  // 3D renderizando e a exportação também são "job ativo", e deixavam o botão
+  // travado em "Diretor trabalhando…" — não havia onde disparar a correção
+  const dirigindo = useStore(s => !!project && (Object.values(s.jobs ?? {}) as any[]).some(
+    (j: any) => j.project_id === project.id && ['diretor', 'claude', 'clique-unico'].includes(j.kind)
+      && ['fila', 'rodando'].includes(j.status)))
+  const rodando = enviando || dirigindo
   const relatorio = project.analysis?.diretor_edicao
   async function pedir() {
     if (!project) return
@@ -53,13 +58,16 @@ export default function DiretorPanel() {
         </select>
       </label>
     </div>
-    <label className="block text-xs">Orientação para o diretor
-      <textarea className="field w-full" rows={2} value={pedido} onChange={e => setPedido(e.target.value)}
-        placeholder="Ex.: preserve as pausas de impacto, explique o mecanismo em etapas e dê destaque à prova." />
+    <label className="block text-xs">O que corrigir / orientação para o diretor
+      <textarea className="field w-full" rows={3} value={pedido} onChange={e => setPedido(e.target.value)}
+        data-campo="correcao"
+        placeholder="Ex.: a lista entrou atrasada; troque o ícone do minuto 0:42 por um objeto 3D de casa; ponha transição na virada do 1:10." />
     </label>
-    <button className="btn btn-primary w-full" disabled={rodando} onClick={pedir}>
-      {rodando ? 'Diretor trabalhando…' : 'Dirigir esta etapa'}</button>
+    <button className="btn btn-primary w-full" disabled={rodando} onClick={pedir} data-disparar-direcao="1">
+      {rodando ? 'Diretor trabalhando…' : pedido.trim() ? 'Corrigir agora' : 'Dirigir esta etapa'}</button>
+    <p className="text-[11px] text-slate-500">A IA mexe no que você pediu e, no fim, a prévia e o vídeo final são refeitos sozinhos.</p>
     {relatorio?.erro && <p className="text-xs text-amber-300" role="alert">{relatorio.erro}</p>}
+    {relatorio?.aviso && !relatorio?.erro && <p className="text-xs text-slate-400">{relatorio.aviso}</p>}
     {(plano?.momentos?.length > 0 || relatorio?.relatorio) && <>
       <button className="btn btn-xs" aria-expanded={aberto} onClick={() => setAberto(!aberto)}>Plano e decisões</button>
       {aberto && <div className="space-y-2 text-xs">
