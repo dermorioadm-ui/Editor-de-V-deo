@@ -306,6 +306,8 @@ export const api = {
     post<any>(`/api/projects/${id}/audio/preview`, payload),
   // a voz de estúdio: estado do redutor e a prévia antes/depois (12 s)
   vozEstado: (id: string) => req<any>(`/api/projects/${id}/audio/voz`),
+  // a prévia renderizada (com TODAS as animações) que existe, e se está em dia
+  previaEstado: (id: string) => req<any>(`/api/projects/${id}/previa`),
   vozPrevia: (id: string, payload: any) =>
     post<any>(`/api/projects/${id}/audio/voz-previa`, payload),
   // a exportação AUTOMÁTICA: mesmo arquivo, sobrescrevendo, com cache

@@ -47,6 +47,79 @@ def dims_png(caminho: str | Path) -> tuple[int, int] | None:
     return (int(w), int(h)) if w > 0 and h > 0 else None
 
 
+# O LOGO DE CANTO SAI DE CENA. "A logo deve sumir quando aparece esse tipo
+# de situação": com um ícone, uma lista, um título ou uma cena na tela, o
+# símbolo no canto é uma coisa a mais disputando o olho. Ele sai um pouco
+# antes do outro elemento entrar e volta um pouco depois de ele sair; entre
+# dois elementos próximos ele nem volta (piscar é pior que ficar fora).
+MARGEM_SOME = 0.25
+JUNTA = 1.5
+MIN_VISIVEL = 1.0
+
+
+def de_canto(g) -> bool:
+    """O logo pequeno, num canto — a assinatura discreta do vídeo. Um logo
+    grande no meio ou no lado livre da moldura É o gráfico da vez e fica."""
+    try:
+        x, y = float(_v(g, "x", 0.9)), float(_v(g, "y", 0.16))
+        s = float(_v(g, "tamanho", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return False
+    return (x <= 0.22 or x >= 0.78) and (y <= 0.25 or y >= 0.75) and s <= 1.2
+
+
+def _copia(g, **mudancas):
+    if isinstance(g, dict):
+        return {**g, **mudancas}
+    from dataclasses import replace
+
+    return replace(g, **mudancas)
+
+
+def efetivos(graficos, cenas=()) -> list:
+    """Os gráficos como o render os desenha: o logo de canto vira os pedaços
+    em que ele fica visível — fora das janelas em que outro gráfico ou uma
+    cena está na tela. O plano (e a tela) continuam com UM item de logo; isto
+    é só na hora de desenhar, e entra na chave do cache do trecho."""
+    graficos = list(graficos or [])
+    cantos = [g for g in graficos if _v(g, "tipo") == "logo" and _v(g, "enabled", True)
+              and de_canto(g)]
+    if not cantos:
+        return graficos
+    ids_cantos = {id(g) for g in cantos}
+    ocupado = [(float(_v(o, "out_start", 0.0)), float(_v(o, "out_end", 0.0)))
+               for o in graficos if id(o) not in ids_cantos and _v(o, "enabled", True)]
+    ocupado += [(float(_v(c, "out_start", 0.0)), float(_v(c, "out_end", 0.0)))
+                for c in cenas or [] if _v(c, "enabled", True)]
+    janelas: list[list[float]] = []
+    for a, b in sorted((a - MARGEM_SOME, b + MARGEM_SOME) for a, b in ocupado if b > a):
+        if janelas and a <= janelas[-1][1] + JUNTA:
+            janelas[-1][1] = max(janelas[-1][1], b)
+        else:
+            janelas.append([a, b])
+    out = []
+    for g in graficos:
+        if id(g) not in ids_cantos:
+            out.append(g)
+            continue
+        a, b = float(_v(g, "out_start", 0.0)), float(_v(g, "out_end", 0.0))
+        livres, cursor = [], a
+        for ja, jb in janelas:
+            if jb <= cursor or ja >= b:
+                continue
+            if ja > cursor:
+                livres.append((cursor, min(ja, b)))
+            cursor = max(cursor, jb)
+        if cursor < b:
+            livres.append((cursor, b))
+        gid = str(_v(g, "id", "") or "logo")
+        for k, (x, y) in enumerate(p for p in livres if p[1] - p[0] >= MIN_VISIVEL):
+            out.append(_copia(g, id=f"{gid}~{k}", out_start=round(x, 3), out_end=round(y, 3),
+                              entrada=_v(g, "entrada", "pop") if abs(x - a) < 1e-6 else "fade",
+                              saida=_v(g, "saida", "fade") if abs(y - b) < 1e-6 else "fade"))
+    return out
+
+
 def no_trecho(graficos, t0: float, dur: float, camadas: tuple = ("frente",)) -> list:
     out = []
     for g in graficos or []:

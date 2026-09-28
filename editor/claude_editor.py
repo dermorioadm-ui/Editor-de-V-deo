@@ -869,6 +869,10 @@ def pedido(project, modo: str = "completo") -> str:
                         "OLHANDO e broll_do_banco para pôr — termos em português que tenham "
                         "a ver com o assunto do vídeo inteiro. Sem chave do banco, "
                         "broll_automatico.")
+    if getattr(plan, "gancho", ""):
+        linhas.append(f"GANCHO: a copy dele (\"{plan.gancho[:120]}\") já abre o vídeo, "
+                      f"no gráfico tipo=gancho dos primeiros segundos — é dele: não mude o "
+                      f"texto, não tire e não ponha nada por cima enquanto ele está na tela.")
     try:
         dura_br = float(br.get("duracao") or 0.0)
     except (TypeError, ValueError):

@@ -666,7 +666,9 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # depois do enquadramento (a máscara foi calculada desta mesma imagem) e
     # ANTES do desfoque de proteção e do b-roll por cima: o que protege uma
     # placa ou um rosto continua protegendo, com ou sem camada.
-    graficos = getattr(plan, "graficos", None) or []
+    # o logo de canto já em pedaços: fora das janelas de outros gráficos/cenas
+    graficos = LG.efetivos(getattr(plan, "graficos", None) or [],
+                           getattr(plan, "cenas", None) or [])
     camadas_da_frente = ("frente", "atras")
     mascara = ""
     if recorte and recorte.get("path") and recorte.get("tem_pessoa", True):
@@ -978,8 +980,11 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     seg_overlays = [_relativo(o.to_dict()) for o in plan.overlays
                     if o.enabled and o.out_end > t0
                     and o.out_start < t0 + seg.nominal]
+    # os MESMOS gráficos que o render desenha (o logo de canto em pedaços):
+    # pôr um ícone perto muda onde o logo sai de cena — a chave muda junto
     seg_graficos = [_relativo(g.to_dict())
-                    for g in (getattr(plan, "graficos", None) or [])
+                    for g in LG.efetivos(getattr(plan, "graficos", None) or [],
+                                         getattr(plan, "cenas", None) or [])
                     if g.enabled and g.out_end > t0
                     and g.out_start < t0 + seg.nominal]
     seg_camadas = [_relativo(c.to_dict())
@@ -1083,8 +1088,9 @@ def _gravar_manifesto(path: Path, manifest: dict) -> None:
 def _janelas_do_recorte(seg: VideoSegment, plan: EditPlan) -> list[tuple[float, float]]:
     """Onde este trecho precisa da máscara da pessoa ([] = não precisa)."""
     cam = CM.no_trecho(getattr(plan, "camadas", None) or [], seg.t_start, seg.nominal)
-    atras = MG.no_trecho(getattr(plan, "graficos", None) or [], seg.t_start,
-                         seg.nominal, ("atras",))
+    atras = MG.no_trecho(LG.efetivos(getattr(plan, "graficos", None) or [],
+                                     getattr(plan, "cenas", None) or []),
+                         seg.t_start, seg.nominal, ("atras",))
     vidros = CN.janelas_de_recorte(getattr(plan, "cenas", None) or [],
                                    seg.t_start, seg.nominal)
     if not cam and not atras and not vidros:

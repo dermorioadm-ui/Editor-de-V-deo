@@ -1028,6 +1028,13 @@ uma pasta que uma pessoa acha:
 O botão **📁 abrir a pasta** abre o Explorer (ou o Finder) já com o arquivo
 selecionado. **trocar** muda a pasta para onde você quiser.
 
+**O nome do vídeo** você escolhe na primeira tela, em **nome do vídeo na
+pasta** (o Sharkcut tira o que o Windows não aceita: `\ / : * ? " < > |`).
+Vazio, ele sai com o nome do arquivo gravado + `_editado`. A exportação
+automática regrava o PRÓPRIO arquivo a cada retoque (a pasta não enche), mas
+nunca apaga o vídeo de outro projeto que ganhou o mesmo nome: esse sai como
+`nome (2).mp4`.
+
 Junto do `.mp4` saem o `.srt` e o `.ass` com o mesmo nome. Exportar de novo
 **não sobrescreve**: vira `nome (2).mp4`.
 
@@ -1781,12 +1788,37 @@ Com a marca ligada:
 | **barras** | as colunas sobem uma a uma, o número contando em cima de cada uma, a última na cor da marca |
 | **linha** | a linha se desenha da esquerda para a direita, subindo, com a área em vidro embaixo e o ponto que acende na ponta, com o valor final contando |
 | **rosca** | o anel enche até a porcentagem, com o número no meio |
-| **ícone** | um desenho que se escreve no traço (check, x, seta, casa, cadeado, chave, dinheiro, relógio, estrela, alerta, calendário, pessoa, gráfico) num disco de vidro — o check sai no verde de confirmação da marca e o alerta no laranja |
+| **ícone** | um desenho feito NA HORA — a caneta segue o traço (check, x, casa riscada/"vulnerável", seta, casa, cadeado, chave, dinheiro, relógio, estrela, alerta, calendário, pessoa, gráfico) — num disco SÓLIDO da cor da marca, com o traço branco e um rótulo embaixo |
 
 O Claude usa sempre que a fala traz número, crescimento, comparação ou um
 sim/não (só com números que você falou). Na aba **Pós** há atalhos (*gráfico
 subindo*, *gráfico de linha*, *rosca %*, *ícone ✓*) e, no inspetor, os
 números separados por `;` e os nomes por vírgula.
+
+**A lista anda com a fala.** Cada tópico entra quando é falado, com o próprio
+movimento: o selo do número estoura com uma onda em volta, o texto sobe, uma
+linha se desenha embaixo dele — e quando o próximo chega, o anterior esmaece
+e a linha passa para o novo.
+
+**O logo de canto sai de cena sozinho.** Enquanto um ícone, uma lista, um
+título ou uma cena está na tela, o símbolo pequeno do canto sai (um pouco
+antes) e volta depois; entre dois elementos próximos ele nem volta — piscar
+seria pior. O logo grande (o da abertura da moldura) nunca é cortado.
+
+**O gancho.** Na primeira tela, **gancho — a copy que abre o vídeo**: ela
+entra nos primeiros segundos (até o fim da primeira frase, entre 2,5 e 4,5 s),
+palavra por palavra, grande, com contorno, e a palavra entre *asteriscos*
+(ou a última, sem asterisco) ganha uma pílula na cor da marca. Ela aparece na
+aba Pós como um gráfico "gancho" — mexer no texto lá muda a copy; apagar o
+gráfico tira o gancho. O Claude é avisado para não pôr nada por cima.
+
+**O modelo de edição.** A habilidade de motion tem, no topo, o **seu modelo**
+— tirado das partes que você aprovou —, que o Claude segue em toda pós e vale
+para qualquer marca (as cores, o logo e a fonte vêm do kit de cada uma):
+gancho; pergunta forte em texto grande atrás de você; explicação na moldura
+com a marca grande e a lista em cartão da cor da marca no lado livre; ícones
+no disco da marca ao seu lado; o logo de canto que sai de cena; um movimento
+desenhado a cada tópico, nunca dois ao mesmo tempo.
 
 Um kit é uma pasta `marcas/<nome>/` com um `marca.json`, `logos/` e
 `fontes/`; os seus ficam em `%LOCALAPPDATA%\Editor de Video\marcas\`.

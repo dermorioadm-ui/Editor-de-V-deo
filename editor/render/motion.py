@@ -33,7 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TIPOS = ("titulo", "tela", "lista", "destaque", "numero", "texto", "nome",
-         "seta", "circulo", "barra", "logo", "barras", "linha", "rosca", "icone")
+         "seta", "circulo", "barra", "logo", "barras", "linha", "rosca", "icone",
+         "gancho")
 ENTRADAS = ("pop", "slide", "subir", "3d", "digitar", "fade")
 SAIDAS = ("fade", "slide", "pop", "corte")
 ESTILOS = ("escuro", "claro", "neon", "marca", "limpo", "vidro")
@@ -47,7 +48,7 @@ POSICAO_PADRAO = {
     "nome": (0.06, 0.72), "seta": (0.5, 0.5), "circulo": (0.5, 0.5),
     "barra": (0.5, 0.14), "logo": (0.9, 0.16),
     "barras": (0.5, 0.36), "linha": (0.5, 0.36), "rosca": (0.5, 0.32),
-    "icone": (0.5, 0.26),
+    "icone": (0.5, 0.26), "gancho": (0.5, 0.2),
 }
 # SÓLIDOS: os estilos de cartão cheio. Por cima da pessoa ele não quer ("não
 # gostei, aparecem em cima de mim uns cards sólidos"): a pós do Claude troca
@@ -78,7 +79,7 @@ PALETAS = {
 # Duração de cada entrada e saída, em segundos. Encolhem em gráfico curto.
 DUR_ENTRADA = {"pop": 0.45, "slide": 0.5, "subir": 0.45, "3d": 0.65,
                "fade": 0.4, "crescer": 0.5, "cortina": 0.55, "nenhuma": 0.0,
-               "crescer_v": 0.55, "revelar": 0.9, "acompanhar": 0.55}
+               "crescer_v": 0.55, "revelar": 0.9, "acompanhar": 0.55, "onda": 0.55}
 DUR_SAIDA = {"fade": 0.3, "slide": 0.4, "pop": 0.3, "corte": 0.0,
              "cortina": 0.45}
 
@@ -260,6 +261,8 @@ class _El:
     H: int = 0
     clip: tuple | None = None       # revelar: a caixa (x0, y0, x1, y1) na tela
     de: tuple | None = None         # acompanhar: de onde vem (sobe com a barra)
+    dura: float | None = None       # a peça vive só isto (s desde que aparece);
+    #                                 None = até o fim do gráfico
 
 
 def _fade_in(ms: float) -> str:
@@ -304,6 +307,10 @@ def _tags_da_fase(el: _El, fase: str, ms: float) -> str:
             # não tem curva — com curva na barra, o número entrava nela
             return (pos + org + f"\\fscy0\\t(§0§,§{m}§,\\fscy100)"
                     + _fade_in(ms * 0.2))
+        if k == "onda":
+            # o anel que estoura em volta do selo e some: a "batida" do tópico
+            return (pos + org + "\\fscx60\\fscy60"
+                    f"\\t(§0§,§{m}§,0.6,\\fscx185\\fscy185\\alpha&HFF&)")
         if k == "acompanhar" and el.de:
             return (f"\\move({el.de[0]:.1f},{el.de[1]:.1f},{x:.1f},{y:.1f},§0§,§{m}§)"
                     + org + _fade_in(ms * 0.3))
@@ -359,12 +366,17 @@ def _ts(cs: int) -> str:
 def _eventos_do_elemento(el: _El, gs: float, ge: float, t0: float,
                          t1: float, camada_base: int) -> list[str]:
     a = gs + max(0.0, el.aparece)
+    if el.dura is not None:
+        ge = min(ge, a + max(0.1, el.dura))
     if a >= ge - 0.05:
         return []
     total = ge - a
     ed = el.ed if el.ed is not None else DUR_ENTRADA.get(el.entrada, 0.4)
     sd = el.sd if el.sd is not None else DUR_SAIDA.get(el.saida, 0.3)
-    ed = min(ed, total * 0.45) if el.entrada != "nenhuma" else 0.0
+    # peça de vida curta (dura): a entrada pode ocupar a vida inteira — a
+    # onda do selo é SÓ entrada; cortada a 45%, ela reapareceria parada
+    ed = (0.0 if el.entrada == "nenhuma"
+          else min(ed, total) if el.dura is not None else min(ed, total * 0.45))
     sd = min(sd, total * 0.35)
     fases = []
     if ed > 0.02:
@@ -718,27 +730,62 @@ def _lista(ctx: _Ctx) -> list[_El]:
     horas = _horarios(itens, ctx.dur, 0.35 if lt or p.get("fundo") else 0.0)
     ent = _entrada_do_item(ctx.entrada)
     cor_num = "#12151B" if _claro_demais(p["acento"]) else "#FFFFFF"
+    # MOTION A CADA TÓPICO ("tinha que ter um motion a cada tópico que viesse
+    # a aparecer"): o selo estoura com uma onda em volta, o texto entra, uma
+    # linha se DESENHA embaixo dele como caneta — e quando o próximo tópico
+    # chega, o anterior esmaece e a linha passa para o novo. O destaque anda
+    # pela lista junto com a fala.
+    esmaece = "{\\1a&H78&}"
     for k, (ls, alt, quando) in enumerate(zip(li, alturas, horas)):
         yc = y + alt / 2 if len(ls) <= 1 else y + lhi / 2
         bx = esq + pad + bol / 2
+        proximo = horas[k + 1] if k + 1 < len(horas) else None
+        if ent != "fade":
+            onda = _el(ctx, 1, bx, yc, 5,
+                       f"\\p1\\1a&HFF&\\bord{max(1.5, bol * 0.07):.1f}"
+                       f"\\3c{_cor(p['acento'])}\\3a&H20&\\shad0\\blur0.8",
+                       _elipse(bol * 0.62, bol * 0.62), entrada="onda", aparece=quando,
+                       org=(bx, yc), ed=0.55)
+            onda.dura, onda.saida = 0.55, "corte"
+            els.append(onda)
         els.append(_el(ctx, 2, bx, yc, 5, _painel(p["acento"], 0),
                        _ret(bol, bol, bol * 0.28),
                        entrada="pop" if ent != "fade" else "fade", aparece=quando,
-                       org=org, lado=lado))
+                       org=(bx, yc), lado=lado))
         els.append(_el(ctx, 3, bx, yc, 5,
                        _texto({}, ci * 0.72, cor_num, ctx.fonte),
                        str(k + 1), entrada="pop" if ent != "fade" else "fade",
-                       aparece=quando, org=org, lado=lado))
+                       aparece=quando, org=(bx, yc), lado=lado))
         tags = _texto(p, ci, p["texto"], ctx.fonte, negrito=False)
+        tx = esq + pad + bol + gap
+        ty = y + (alt - len(ls) * lhi) / 2
         if ent == "digitar":
             dur = min(max(0.3, 0.045 * sum(len(x) for x in ls)), 1.4)
-            els.append(_el(ctx, 3, esq + pad + bol + gap, y + (alt - len(ls) * lhi) / 2, 7,
-                           tags, _digitado(ls, dur, quando), entrada="nenhuma",
+            variantes = _digitado(ls, dur, quando)
+            if proximo is not None:
+                variantes = variantes + [(proximo, esmaece + variantes[-1][1])]
+            els.append(_el(ctx, 3, tx, ty, 7, tags, variantes, entrada="nenhuma",
                            aparece=quando, org=org, lado=lado))
         else:
-            els.append(_el(ctx, 3, esq + pad + bol + gap, y + (alt - len(ls) * lhi) / 2, 7,
-                           tags, "\\N".join(ls), entrada=ent, aparece=quando + 0.05,
-                           org=org, lado=lado))
+            texto_item = "\\N".join(ls)
+            variantes = [(0.0, texto_item)]
+            if proximo is not None:
+                variantes.append((proximo, esmaece + texto_item))
+            els.append(_el(ctx, 3, tx, ty, 7, tags, variantes, entrada=ent,
+                           aparece=quando + 0.05, org=org, lado=lado))
+        # a linha que se desenha embaixo do tópico da vez
+        largura = max(_largura(x, ci, False) for x in ls) if ls else ci * 3
+        yb = ty + len(ls) * lhi + ci * 0.08
+        esp = max(2.0, ci * 0.07)
+        desenha = 0.35
+        risco = _El(camada=3, x=0.0, y=0.0, an=7, tags=_desenho(p["acento"], 0x00),
+                    variantes=_desenhado([[(tx, yb), (tx + largura * 0.92, yb)]], esp,
+                                         quando + 0.2, desenha),
+                    entrada="nenhuma", saida="fade", aparece=quando + 0.2, W=W, H=H)
+        if proximo is not None:
+            risco.dura = max(0.3, proximo - quando - 0.2)
+            risco.sd = 0.2
+        els.append(risco)
         y += alt + entre
     return els
 
@@ -1088,9 +1135,9 @@ def _barra(ctx: _Ctx) -> list[_El]:
 # mesmo sentido somam, sentido contrário vira furo (medido). Todo traço é
 # orientado no mesmo sentido; o furo da rosca é o único desenhado ao contrário.
 
-ICONES = ("check", "x", "seta_cima", "seta_baixo", "casa", "cadeado", "chave",
-          "dinheiro", "relogio", "estrela", "alerta", "calendario", "pessoa",
-          "grafico")
+ICONES = ("check", "x", "seta_cima", "seta_baixo", "casa", "casa_x", "cadeado",
+          "chave", "dinheiro", "relogio", "estrela", "alerta", "calendario",
+          "pessoa", "grafico")
 MAX_VALORES = 8
 
 
@@ -1412,6 +1459,9 @@ _TRACOS_DOS_ICONES = {
     "seta_baixo": [[(50, 14), (50, 84)], [(24, 58), (50, 84), (76, 58)]],
     "casa": [[(12, 50), (50, 16), (88, 50)], [(24, 42), (24, 86), (76, 86), (76, 42)],
              [(42, 86), (42, 64), (58, 64), (58, 86)]],
+    # a casa riscada: "vulnerável", "sem proteção"
+    "casa_x": [[(8, 46), (42, 16), (76, 46)], [(18, 38), (18, 80), (66, 80), (66, 38)],
+               [(60, 58), (92, 90)], [(92, 58), (60, 90)]],
     "cadeado": [[(32, 50)] + _circ(50, 36, 18, 180, 360, 12) + [(68, 50)],
                 [(20, 50), (80, 50), (80, 88), (20, 88), (20, 50)], [(50, 64), (50, 74)]],
     "chave": [_circ(28, 50, 15), [(43, 50), (88, 50)], [(74, 50), (74, 63)],
@@ -1434,12 +1484,135 @@ _TRACOS_DOS_ICONES = {
 }
 
 
+def _palavras_do_gancho(texto: str) -> list[tuple[str, bool]]:
+    """A copy em palavras, com o destaque: o que está entre *asteriscos*; sem
+    asterisco nenhum, a última palavra (em geral é a que fisga)."""
+    out, dentro = [], False
+    for bruta in str(texto or "").split():
+        abre, fecha = bruta.startswith("*"), bruta.endswith("*") and len(bruta) > 1
+        limpa = bruta.strip("*")
+        if not limpa:
+            dentro = not dentro
+            continue
+        destaque = dentro or abre
+        out.append((limpa, destaque))
+        if abre and not fecha:
+            dentro = True
+        elif fecha:
+            dentro = False
+    if out and not any(d for _p, d in out) and len(out) >= 2:
+        out[-1] = (out[-1][0], True)
+    return out
+
+
+def _gancho(ctx: _Ctx) -> list[_El]:
+    """O GANCHO do começo do vídeo: a copy dele em tipografia animada — as
+    palavras estouram uma a uma, grandes, com contorno para ler sobre
+    qualquer imagem, e a palavra que fisga numa pílula da cor da marca que
+    cresce do centro. Moderno, curto, na marca: é o que faz parar o dedo."""
+    W, H, u, p, s = ctx.W, ctx.H, ctx.u, ctx.p, ctx.s
+    palavras = [(_esc(t), d) for t, d in _palavras_do_gancho(_v(ctx.g, "texto", ""))]
+    palavras = [(t, d) for t, d in palavras if t][:24]
+    if not palavras:
+        return []
+    corpo = u * 0.095 * s
+    maxw = W * 0.86
+    for _ in range(10):
+        esp_palavra = corpo * 0.22
+        pad = corpo * 0.22
+        linhas: list[list[tuple[str, bool, float]]] = [[]]
+        larg = 0.0
+        for t, d in palavras:
+            w = _largura(t, corpo) + (2 * pad if d else 0)
+            extra = w + (esp_palavra if linhas[-1] else 0)
+            if linhas[-1] and larg + extra > maxw:
+                linhas.append([])
+                larg, extra = 0.0, w
+            linhas[-1].append((t, d, w))
+            larg += extra
+        largs = [sum(w for _t, _d, w in ln) + esp_palavra * (len(ln) - 1) for ln in linhas]
+        if len(linhas) <= 3 and max(largs) <= maxw:
+            break
+        corpo *= 0.9
+    lh = corpo * 1.3
+    bh = lh * len(linhas)
+    cx, cy = _encaixar(float(_v(ctx.g, "x", 0.5)) * W, float(_v(ctx.g, "y", 0.2)) * H,
+                       max(largs), bh, W, H, u * 0.03)
+    cores = (ctx.kit or {}).get("cores") or {}
+    cor = str(_v(ctx.g, "cor", "") or "").strip()
+    pilula = (("#" + cor.lstrip("#")) if re.fullmatch(r"#?[0-9a-fA-F]{6}", cor)
+              else cores.get("marca") or PALETAS["marca"]["fundo"])
+    n = len(palavras)
+    passo = min(0.13, max(0.06, (ctx.dur * 0.3) / n))
+    els: list[_El] = []
+    k = 0
+    for i, ln in enumerate(linhas):
+        yc = cy - bh / 2 + lh * (i + 0.5)
+        x = cx - largs[i] / 2
+        for t, d, w in ln:
+            xc = x + w / 2
+            quando = 0.08 + passo * k
+            if d:
+                els.append(_el(ctx, 1, xc, yc, 5, _painel(pilula, 0),
+                               _ret(w, corpo * 1.18, corpo * 0.3), entrada="crescer",
+                               aparece=max(0.0, quando - 0.04), org=(xc, yc), ed=0.32))
+                tags = _texto(PALETAS["marca"], corpo, "#FFFFFF", ctx.fonte)
+            else:
+                tags = _texto(PALETAS["limpo"], corpo, "#FFFFFF", ctx.fonte)
+            els.append(_el(ctx, 2, xc, yc, 5, tags, t,
+                           entrada="pop" if ctx.entrada != "fade" else "fade",
+                           aparece=quando, org=(xc, yc), ed=0.3))
+            x += w + esp_palavra
+            k += 1
+    return els
+
+
+def _cortar_caminho(linhas, comprimento: float) -> list:
+    """As polilinhas até ``comprimento`` (em pixels, pelo caminho): é a
+    caneta — traço por traço, na ordem em que o desenho é feito."""
+    out, resta = [], comprimento
+    for pts in linhas:
+        if resta <= 0:
+            break
+        parcial = [pts[0]]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            seg = math.hypot(x1 - x0, y1 - y0)
+            if seg <= resta:
+                parcial.append((x1, y1))
+                resta -= seg
+            else:
+                f = resta / seg if seg else 0.0
+                parcial.append((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f))
+                resta = 0
+                break
+        out.append(parcial)
+    return out
+
+
+def _desenhado(linhas, esp: float, inicio: float, dur: float) -> list[tuple]:
+    """As variantes de um desenho feito NA HORA: a cada 1/30 s a caneta anda
+    um pouco mais pelo caminho (rápida no começo, freando no fim). É o
+    "motion sendo desenhado" — antes o ícone inteiro aparecia por um recorte
+    que abria da esquerda para a direita."""
+    total = sum(math.hypot(x1 - x0, y1 - y0)
+                for pts in linhas for (x0, y0), (x1, y1) in zip(pts, pts[1:]))
+    passos = max(6, int(dur * 30))
+    out = [(0.0, "")]
+    for k in range(1, passos + 1):
+        f = 1 - (1 - k / passos) ** 2.2
+        out.append((inicio + dur * k / passos, _tracos(_cortar_caminho(linhas, total * f), esp)))
+    return out
+
+
 def _icone(ctx: _Ctx) -> list[_El]:
-    """Ícone desenhado no traço: o disco de vidro acende, o traço se escreve
-    da esquerda para a direita (o "desenho animado"), o rótulo vem depois."""
+    """Ícone num disco — por padrão SÓLIDO na cor da marca ("o card redondo é
+    rosa") com o traço branco DESENHADO NA HORA, seguindo o caminho como uma
+    caneta. vidro = disco translúcido com o traço na cor da marca; limpo = só
+    o traço. O disco entra com pop, a caneta desenha, o rótulo vem depois."""
     W, H, u, p, s = ctx.W, ctx.H, ctx.u, ctx.p, ctx.s
     nome = str(_v(ctx.g, "icone", "") or "check")
     nome = nome if nome in _TRACOS_DOS_ICONES else "check"
+    estilo = str(_v(ctx.g, "estilo", "marca") or "marca")
     lado = u * 0.16 * s
     esp = max(3.0, lado * 0.075)
     rotulo = _esc(_v(ctx.g, "texto", ""))[:60]
@@ -1448,36 +1621,35 @@ def _icone(ctx: _Ctx) -> list[_El]:
     cx, cy = _encaixar(float(_v(ctx.g, "x", 0.5)) * W, float(_v(ctx.g, "y", 0.3)) * H,
                        lado * 1.4, alto_total, W, H, u * 0.03)
     cy_i = cy - (cr * 0.8 if rotulo else 0)
-    cor = p["acento"]
-    if ctx.kit and not str(_v(ctx.g, "cor", "") or "").strip():
-        c = ctx.kit.get("cores") or {}
-        # na marca: verde SÓ confirma, laranja SÓ alerta
-        if nome == "check" and c.get("confirma"):
-            cor = c["confirma"]
-        elif nome in ("alerta", "x") and c.get("alerta"):
-            cor = c["alerta"]
+    solido = bool(p.get("fundo")) and not p.get("vidro")
+    if estilo == "limpo" or not p.get("fundo"):
+        traco = p["texto"]
+    elif solido and estilo in ("marca", "escuro"):
+        traco = p["texto"]                 # branco sobre o disco da marca
+    else:
+        traco = p["acento"]                # vidro/claro/neon: o traço colorido
     els: list[_El] = []
+    ent = "pop" if ctx.entrada != "fade" else "fade"
     if p.get("fundo"):
         r = lado * 0.7
-        els.append(_el(ctx, 1, cx, cy_i, 5, _painel_de(p, u), _elipse(r, r),
-                       entrada="pop" if ctx.entrada != "fade" else "fade",
-                       org=(cx, cy_i)))
+        if solido:
+            els.append(_el(ctx, 0, cx, cy_i + ctx.dy_sombra * 0.6, 5, ctx.sombra,
+                           _elipse(r, r), entrada=ent, org=(cx, cy_i)))
+        els.append(_el(ctx, 1, cx, cy_i, 5,
+                       _painel(p["fundo"], 0) if solido else _painel_de(p, u),
+                       _elipse(r, r), entrada=ent, org=(cx, cy_i)))
     k = lado / 100.0
     linhas = [[(cx - lado / 2 + x * k, cy_i - lado / 2 + y * k) for x, y in tr]
               for tr in _TRACOS_DOS_ICONES[nome]]
-    caixa = (int(cx - lado / 2 - esp * 2), int(cy_i - lado / 2 - esp * 2),
-             int(cx + lado / 2 + esp * 2), int(cy_i + lado / 2 + esp * 2))
-    els.append(_El(camada=3, x=0.0, y=0.0, an=7,
-                   tags=_desenho(cor, 0x00) + f"\\bord{max(1.0, esp * 0.18):.1f}"
-                   "\\3c&H000000&\\3a&HB0&",
-                   variantes=[(0.0, _tracos(linhas, esp))], entrada="revelar",
-                   saida=ctx.saida, aparece=0.18, ed=min(0.75, max(0.35, ctx.dur * 0.3)),
-                   W=W, H=H, clip=caixa))
+    desenha = min(0.9, max(0.4, ctx.dur * 0.3))
+    contorno = ("" if solido else f"\\bord{max(1.0, esp * 0.18):.1f}\\3c&H000000&\\3a&HB0&")
+    els.append(_El(camada=3, x=0.0, y=0.0, an=7, tags=_desenho(traco, 0x00) + contorno,
+                   variantes=_desenhado(linhas, esp, 0.22, desenha), entrada="nenhuma",
+                   saida=ctx.saida, aparece=0.22, W=W, H=H))
     if rotulo:
         els.append(_el(ctx, 3, cx, cy_i + lado * 0.7 + cr * 0.85, 5,
-                       _texto(p if p.get("fundo") else PALETAS["limpo"], cr, p["texto"],
-                              ctx.fonte),
-                       rotulo, entrada="fade", aparece=0.45))
+                       _texto(PALETAS["vidro"], cr, "#FFFFFF", ctx.fonte),
+                       rotulo, entrada="fade", aparece=0.22 + desenha * 0.6))
     return els
 
 
@@ -1486,6 +1658,7 @@ _MONTADORES = {
     "numero": _numero_el, "texto": _texto_simples, "nome": _nome,
     "seta": _seta_el, "circulo": _circulo, "barra": _barra,
     "barras": _barras, "linha": _linha, "rosca": _rosca, "icone": _icone,
+    "gancho": _gancho,
 }
 
 
@@ -1675,7 +1848,10 @@ def normalizar(d: dict, duracao: float | None = None) -> dict:
         "x": _num(d.get("x"), x0, 0.0, 1.0),
         "y": _num(d.get("y"), y0, 0.0, 1.0),
         "tamanho": _num(d.get("tamanho"), 1.0, 0.4, 2.5),
-        "estilo": d.get("estilo") if d.get("estilo") in ESTILOS else ESTILO_PADRAO,
+        # o ícone mora num disco SÓLIDO da marca ("o card redondo é rosa");
+        # o resto nasce em vidro
+        "estilo": (d.get("estilo") if d.get("estilo") in ESTILOS
+                   else "marca" if tipo == "icone" else ESTILO_PADRAO),
         "cor": cor,
         "entrada": d.get("entrada") if d.get("entrada") in ENTRADAS else "pop",
         "saida": d.get("saida") if d.get("saida") in SAIDAS else "fade",

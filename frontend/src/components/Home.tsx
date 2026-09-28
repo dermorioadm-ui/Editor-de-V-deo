@@ -81,6 +81,11 @@ export default function Home() {
   const [editor, setEditor] = useState<'claude' | 'gemini' | 'regra' | ''>('')
   const [claude, setClaude] = useState<any>(null)
   const [pedidoClaude, setPedidoClaude] = useState('')
+  // O GANCHO: a copy que abre o vídeo ("pra pessoa clicar"). *palavra* ganha
+  // a pílula na cor da marca; sem asterisco, a última palavra
+  const [gancho, setGancho] = useState('')
+  // o nome do vídeo na pasta (sem extensão); vazio = o nome do arquivo + "_editado"
+  const [nomeArquivo, setNomeArquivo] = useState('')
   const [claudeCaminho, setClaudeCaminho] = useState('')
   const [testandoClaude, setTestandoClaude] = useState(false)
   const [entrandoClaude, setEntrandoClaude] = useState(false)
@@ -294,6 +299,8 @@ export default function Home() {
       // a pós do Claude vale para QUALQUER editor: com o Gemini cortando, o
       // Claude entra só com títulos, telas, transições e camadas
       pos_claude: posDaVez && !!claude?.instalado,
+      gancho: gancho.trim(),
+      nome_arquivo: nomeArquivo.trim(),
       ...(marcas ? { marca: (marcaDaVez ?? marcas.ativa ?? '') || '-' } : {}),
       ...(corte >= 0 ? { cut: { aggressiveness: corte } } : {}),
       alvo_duracao: alvo,
@@ -656,6 +663,29 @@ export default function Home() {
               </span>
             </div>
           )}
+          <label className="block" data-nome-arquivo="1">
+            <span className="label">nome do vídeo na pasta (opcional)</span>
+            <input className="field w-full text-sm" value={nomeArquivo} maxLength={120}
+                   data-campo="nome-arquivo"
+                   placeholder="ex.: hospedepay — anúncio check-in 01"
+                   onChange={(e) => setNomeArquivo(e.target.value.replace(/[\\/:*?"<>|]/g, ''))} />
+            <span className="text-[11px] text-slate-500">
+              {nomeArquivo.trim()
+                ? `sai como "${nomeArquivo.trim()}.mp4" na pasta de vídeos (se já existir um de outro vídeo, vira "(2)")`
+                : 'vazio: sai com o nome do arquivo gravado + "_editado"'}
+            </span>
+          </label>
+          <label className="block" data-gancho-home="1">
+            <span className="label">gancho — a copy que abre o vídeo (opcional)</span>
+            <input className="field w-full text-sm" value={gancho} maxLength={160}
+                   data-campo="gancho"
+                   placeholder="ex.: Quem *dorme* no seu imóvel hoje?"
+                   onChange={(e) => setGancho(e.target.value)} />
+            <span className="text-[11px] text-slate-500">
+              entra nos primeiros segundos, palavra por palavra, na identidade da marca ·
+              ponha *asteriscos* na palavra que fisga (ela ganha a cor da marca)
+            </span>
+          </label>
           {editorDaVez !== 'claude' && posDaVez && claude?.instalado && (
             <label className="block">
               <span className="label">o que você quer na pós (opcional)</span>

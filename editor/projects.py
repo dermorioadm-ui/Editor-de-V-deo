@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 import time
 import uuid
@@ -168,6 +169,12 @@ class Project:
     def save_plan(self) -> None:
         db.ex("UPDATE projects SET plan_json=?, updated_at=? WHERE id=?",
               (db.jdumps(self.plan.to_dict()), time.time(), self.id))
+        # quem quer saber que o plano mudou (a prévia automática do servidor)
+        for aviso in list(ao_salvar_plano):
+            try:
+                aviso(self.id)
+            except Exception:  # noqa: BLE001 — avisar nunca impede de gravar
+                pass
 
     def save_analysis(self) -> None:
         db.ex("UPDATE projects SET analysis_json=?, updated_at=? WHERE id=?",
@@ -1124,12 +1131,66 @@ def previa_da_edicao(project: Project, ctx) -> dict:
         em_segundo_plano(False)
 
 
+def rev_do_plano(project: Project) -> str:
+    """A revisão do plano: muda quando QUALQUER coisa da edição muda (corte,
+    legenda, pós, áudio). É o que diz se a prévia renderizada está em dia."""
+    import hashlib
+
+    bruto = json.dumps(project.plan.to_dict(), sort_keys=True, default=str)
+    return hashlib.sha1(bruto.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def estado_da_previa(project: Project) -> dict:
+    """A prévia renderizada que existe (com TODAS as animações) e se ela está
+    em dia com o plano."""
+    try:
+        info = json.loads((project.dir / "exports" / "previa.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        info = {}
+    arquivo = str(info.get("arquivo") or "")
+    existe = bool(arquivo) and (project.dir / "exports" / arquivo).exists()
+    atual = rev_do_plano(project)
+    return {"download": (f"/api/projects/{project.id}/download/{arquivo}" if existe else None),
+            "rev": info.get("rev") if existe else None, "rev_atual": atual,
+            "em_dia": existe and info.get("rev") == atual}
+
+
 def _export_previa(project: Project, ctx) -> dict:
+    """A prévia num arquivo POR REVISÃO (previa-<rev>.mp4), nunca regravada
+    no lugar: regravar o arquivo que o player está tocando (ele lê por
+    pedaços) dava quadros misturados e trancos. Revisão igual = o arquivo já
+    existe e nada é renderizado."""
+    pasta = project.dir / "exports"
+    rev = rev_do_plano(project)
+    nome = f"previa-{rev}.mp4"
+    pronto = estado_da_previa(project)
+    if pronto["em_dia"] and (pasta / nome).exists():
+        ctx.progress(1.0, "a prévia já está em dia")
+        return {"download": pronto["download"], "nome": nome, "pasta": str(pasta),
+                "reaproveitada": True}
+    res = _render_previa(project, ctx, nome)
+    try:
+        (pasta / "previa.json").write_text(json.dumps({"arquivo": nome, "rev": rev}),
+                                           encoding="utf-8")
+    except OSError:
+        pass
+    # fica a atual e a anterior (o player pode estar tocando a anterior)
+    antigas = sorted((p for p in pasta.glob("previa-*.mp4") if p.name != nome),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+    for velha in antigas[1:]:
+        try:
+            velha.unlink()
+        except OSError:
+            pass            # no Windows, arquivo aberto no player: fica para a próxima
+    return res
+
+
+def _render_previa(project: Project, ctx, nome: str) -> dict:
     return export(project, ctx, {
         # SEM restart: era ele que apagava a pasta de trabalho inteira a cada
         # prévia, levando junto o cache da exportação final. O cache por hash
         # é o que faz um retoque custar segundos em vez do vídeo inteiro.
-        "filename": "previa-edicao.mp4", "restart": False,
+        "filename": nome, "restart": False,
         # dentro do projeto, NÃO na pasta de Vídeos: a prévia é um arquivo de
         # trabalho de 240p e não pode ficar ao lado do vídeo final com cara
         # de ser ele.
@@ -1293,6 +1354,21 @@ def resumir_para_alvo(project: Project, ctx, alvo: float | None = None) -> dict:
     return saida
 
 
+def _gancho_no_plano(project: Project) -> None:
+    """O gancho da primeira tela entra (ou se ajusta) assim que o corte
+    existe — o fim da primeira frase só é conhecido agora. Falhar aqui nunca
+    impede o vídeo de sair."""
+    if not getattr(project.plan, "gancho", ""):
+        return
+    try:
+        from . import pos_edicao
+
+        pos_edicao.aplicar_gancho(project)
+        project.save_plan()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
               para_o_claude: bool = False, sem_previa: bool = False) -> dict:
     """O clique único — TUDO antes de o editor abrir.
@@ -1323,6 +1399,7 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
     if extras:
         project.analysis = load(project.id).analysis
     b = _scoped(ctx, 0.52, 0.60, lambda c: auto_edit(project, c))
+    _gancho_no_plano(project)
     if para_o_claude:
         # O CLAUDE EDITA A PARTIR DAQUI. O resumo, o b-roll e a pós são
         # decisões dele; a prévia só depois que ele terminar (quem chama —
@@ -1365,6 +1442,7 @@ def one_click(project: Project, ctx, fontes_extras: list[str] | None = None,
         except Exception as exc:  # noqa: BLE001 — o vídeo sai sem b-roll
             ctx.progress(0.72, f"b-roll automático não entrou ({exc})")
             br = {"ok": False, "erro": str(exc)}
+    _gancho_no_plano(project)
     if sem_previa:
         # a pós-edição do Claude entra AGORA, por cima da edição pronta, e a
         # prévia só depois dela (quem chama — server.api_oneclick — cuida)
@@ -1436,7 +1514,7 @@ def exportar_final(project: Project, ctx) -> dict:
               if e and e != "fonte"
               and abs(PROPORCOES.get(e, 0.0) - prop_fonte) > 0.01]
     saidas = [{"aspecto": "fonte", **principal}]
-    base = _nome_de_arquivo(project.name)
+    base = nome_base(project)
     for i, aspecto in enumerate(extras):
         rotulo = aspecto.replace(":", "x")
         try:
@@ -1576,10 +1654,64 @@ def cue_list(project: Project) -> list[dict]:
 
 
 # --------------------------------------------------------------- exportação
+# chamados a cada plano gravado, com o id do projeto (a prévia automática do
+# servidor se inscreve aqui quando o app sobe)
+ao_salvar_plano: list = []
+
+
 def _nome_de_arquivo(nome: str) -> str:
     """Nome de projeto -> nome de arquivo que o Windows aceita."""
     limpo = "".join(c for c in nome if c not in '\\/:*?"<>|').strip()
     return (limpo or "video") + "_editado"
+
+
+_RESERVADOS_WINDOWS = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                       *(f"LPT{i}" for i in range(1, 10))}
+
+
+def nome_limpo(texto: str) -> str:
+    """O nome que ELE digitou -> um nome de arquivo que o Windows aceita: sem
+    \\ / : * ? " < > | nem caracteres de controle, sem ponto ou espaço no fim
+    (o Windows os some calado), sem nome reservado (CON, NUL, COM1...), sem
+    a extensão se ele a digitou, e com tamanho que cabe no caminho."""
+    t = "".join(c for c in str(texto or "") if c not in '\\/:*?"<>|' and ord(c) >= 32)
+    t = " ".join(t.split())
+    if t.lower().endswith(".mp4"):
+        t = t[:-4]
+    t = t.strip(" .")[:120].strip(" .")
+    if t.split(".")[0].upper() in _RESERVADOS_WINDOWS:
+        t = f"{t}_"
+    return t
+
+
+def nome_base(project: Project) -> str:
+    """O nome do vídeo na pasta: o que ele escolheu, ou o de sempre."""
+    return nome_limpo(getattr(project.plan, "nome_arquivo", "")) or _nome_de_arquivo(project.name)
+
+
+def _saidas_do_projeto(project: Project) -> set[str]:
+    try:
+        return set(json.loads((project.dir / "saidas.json").read_text(encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _e_nosso(project: Project, dest: Path) -> bool:
+    """Este arquivo foi gravado por ESTE projeto? Projeto de antes do registro
+    (sem saidas.json) reconhece o nome antigo — senão a primeira exportação
+    depois da atualização viraria um "(2)" à toa."""
+    if str(Path(dest).resolve()) in _saidas_do_projeto(project):
+        return True
+    return (not (project.dir / "saidas.json").exists()
+            and Path(dest).stem.startswith(_nome_de_arquivo(project.name)))
+
+
+def _lembrar_saida(project: Project, dest: Path) -> None:
+    saidas = _saidas_do_projeto(project) | {str(Path(dest).resolve())}
+    try:
+        (project.dir / "saidas.json").write_text(json.dumps(sorted(saidas)), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def build_proxy_job(project: Project, ctx) -> dict:
@@ -1627,12 +1759,22 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
     out_dir = Path(options["output_dir"]).expanduser() if options.get("output_dir") \
         else output_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = options.get("filename") or f"{_nome_de_arquivo(project.name)}.mp4"
+    name = options.get("filename") or f"{nome_base(project)}.mp4"
     dest = out_dir / Path(name).name
-    if dest.exists() and not options.get("overwrite"):
+    # SOBRESCREVER, SÓ O QUE É DESTE PROJETO. A exportação automática grava
+    # sempre no mesmo arquivo (é o que faz o retoque não encher a pasta) — mas
+    # com o nome escolhido por ele, dois vídeos podem ganhar o mesmo nome, e o
+    # segundo apagaria o primeiro. Arquivo que existe e não foi este projeto
+    # que gravou vira "nome (2).mp4".
+    dentro_do_projeto = project.dir.resolve() in dest.resolve().parents
+
+    def pode_sobrescrever(d: Path) -> bool:
+        return bool(options.get("overwrite")) and (dentro_do_projeto or _e_nosso(project, d))
+
+    if dest.exists() and not pode_sobrescrever(dest):
         # não sobrescreve a exportação anterior em silêncio
         base, i = dest.with_suffix(""), 2
-        while dest.exists():
+        while dest.exists() and not pode_sobrescrever(dest):
             dest = base.with_name(f"{base.name} ({i})").with_suffix(".mp4")
             i += 1
     work = project.dir / "work"
@@ -1662,6 +1804,8 @@ def export(project: Project, ctx, options: dict | None = None) -> dict:
     for clip in plan.clips:
         clip.measured_duration = None
     project.set_status("exportado")
+    if not dentro_do_projeto:
+        _lembrar_saida(project, dest)
     ctx.progress(1.0, f"pronto: {dest.name}")
     payload = result.to_dict()
     payload["download"] = f"/api/projects/{project.id}/download/{dest.name}"
@@ -1680,7 +1824,9 @@ def validate(project: Project, ctx, output: str | None = None) -> dict:
     # logo depois de exportar.
     candidatos = list((project.dir / "exports").glob("*.mp4"))
     candidatos += [p for p in output_dir().glob("*.mp4")
-                   if p.stem.startswith(_nome_de_arquivo(project.name))]
+                   if p.stem.startswith(_nome_de_arquivo(project.name))
+                   or p.stem.startswith(nome_base(project))
+                   or str(p.resolve()) in _saidas_do_projeto(project)]
     exports = sorted(candidatos, key=lambda p: -p.stat().st_mtime)
     target = Path(output) if output else (exports[0] if exports else None)
     if target is None or not target.exists():

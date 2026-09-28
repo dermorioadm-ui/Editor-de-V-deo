@@ -1299,8 +1299,11 @@ _ESQUEMA_GRAFICO = {
                             "enche até 'numero' % com o número no meio (texto = "
                             "legenda); icone = ícone DESENHADO no traço (campo "
                             "icone: check, x, seta_cima, seta_baixo, casa, "
-                            "cadeado, chave, dinheiro, relogio, estrela, alerta, "
-                            "calendario, pessoa, grafico; texto = rótulo)"},
+                            "casa_x (vulnerável), cadeado, chave, dinheiro, "
+                            "relogio, estrela, alerta, calendario, pessoa, "
+                            "grafico; texto = rótulo). O ícone nasce num disco "
+                            "SÓLIDO da cor da marca com o traço branco desenhado "
+                            "na hora"},
     "inicio": {"type": "number", "description": "segundo do vídeo final"},
     "fim": {"type": "number", "description": "segundo do vídeo final"},
     "texto": {"type": "string"},
@@ -1338,8 +1341,8 @@ _ESQUEMA_GRAFICO = {
                 "description": "barras/linha: o nome de cada valor (jan, fev… ou "
                                "'antes', 'depois'), curtos"},
     "icone": {"type": "string",
-              "enum": ["check", "x", "seta_cima", "seta_baixo", "casa", "cadeado",
-                       "chave", "dinheiro", "relogio", "estrela", "alerta",
+              "enum": ["check", "x", "seta_cima", "seta_baixo", "casa", "casa_x",
+                       "cadeado", "chave", "dinheiro", "relogio", "estrela", "alerta",
                        "calendario", "pessoa", "grafico"],
               "description": "tipo icone: qual desenho"},
 }

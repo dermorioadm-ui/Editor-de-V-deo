@@ -41,6 +41,11 @@ async def _startup() -> None:
     db.connect()
     hub.bind(asyncio.get_running_loop())
     get_queue()
+    # a prévia com todas as animações se refaz sozinha a cada plano gravado
+    from . import previa_auto
+
+    if previa_auto.plano_mudou not in svc.ao_salvar_plano:
+        svc.ao_salvar_plano.append(previa_auto.plano_mudou)
 
 
 # ------------------------------------------------------------------ helpers
@@ -460,6 +465,7 @@ def api_oneclick(pid: str, payload: dict = Body(default={})) -> dict:
 
 
 def _previa_e_pronto(pid: str, ctx, res: dict, lo: float) -> dict:
+    svc._gancho_no_plano(svc.load(pid))
     p = svc.load(pid)
     try:
         res["previa"] = svc._scoped(ctx, lo, 1.0, lambda c: svc.previa_da_edicao(p, c))
@@ -600,6 +606,17 @@ def aplicar_receita(project, payload: dict) -> None:
         plan.pedido_claude = str(payload.get("pedido_claude") or "")[:4000]
     if "pos_claude" in payload:
         plan.pos_claude = bool(payload.get("pos_claude"))
+    if "nome_arquivo" in payload:
+        # o nome do vídeo na pasta, limpo para o Windows ("" = o de sempre)
+        plan.nome_arquivo = svc.nome_limpo(payload.get("nome_arquivo") or "")
+    if "gancho" in payload:
+        # a copy do começo do vídeo ("pra pessoa clicar"); com o corte já
+        # feito, o gráfico entra (ou muda) na hora
+        plan.gancho = " ".join(str(payload.get("gancho") or "").split())[:160]
+        if plan.clips:
+            from . import pos_edicao as _pe
+
+            _pe.aplicar_gancho(project)
     if "marca" in payload:
         # a marca DESTE vídeo: o slug do kit, "-" = nenhuma, "" = a do programa
         from . import marca as MK
@@ -2090,27 +2107,28 @@ def api_deesser(pid: str, payload: dict = Body(default={})) -> dict:
 
 @app.post("/api/projects/{pid}/preview")
 def api_preview(pid: str, payload: dict = Body(default={})) -> dict:
-    """Prévia rápida em 480p, sem tocar na configuração da exportação final.
+    """Refaz a prévia COM TODAS AS ANIMAÇÕES agora (o botão da tela).
 
-    Os parâmetros degradados vão como override EM MEMÓRIA dentro do job.
-    Persistir antes e restaurar num finally deixava o plano preso em 480p
-    para sempre quando o job era cancelado ainda na fila.
+    UM perfil só de prévia (o mesmo do clique único e da automática): antes
+    este botão usava outro (preset, fps e áudio diferentes), e como o perfil
+    entra na chave do cache de cada trecho, ele reencodava o vídeo inteiro
+    logo depois da prévia do clique único — medido, 22 de 22 trechos. Os
+    parâmetros de ``payload`` ficam ignorados de propósito.
     """
     _project(pid)
-    override = {
-        "scale": str(payload.get("scale", "480")),
-        "crf": int(payload.get("crf", 26)),
-        "preset": "veryfast",
-        "codec": "h264",
-        "audio_bitrate": "128k",
-    }
-    return _run("previa", pid, lambda ctx: svc.export(
-        svc.load(pid), ctx,
-        # sem restart: apagar a pasta de trabalho aqui levava junto o cache
-        # da exportação final e o retoque seguinte reencodava o vídeo inteiro
-        {"filename": "previa480.mp4", "restart": False, "overwrite": True,
-         "output_dir": str(svc.load(pid).dir / "exports"),
-         "export_override": override}))
+    return _run("previa", pid, lambda ctx: svc.previa_da_edicao(svc.load(pid), ctx),
+                paralelo=True)
+
+
+@app.get("/api/projects/{pid}/previa")
+def api_previa_estado(pid: str) -> dict:
+    """A prévia renderizada que existe (com as animações) e se está em dia —
+    o editor busca ao abrir o projeto, em vez de cair na prévia leve."""
+    project = _project(pid)
+    estado = svc.estado_da_previa(project)
+    estado["atualizando"] = any(j.kind == "previa" and j.status in ("fila", "rodando")
+                                for j in get_queue().list(pid))
+    return estado
 
 
 @app.get("/api/projects/{pid}/safe-zone")

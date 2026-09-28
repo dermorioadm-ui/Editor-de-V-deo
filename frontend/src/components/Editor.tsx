@@ -133,6 +133,12 @@ export default function Editor() {
   // a prévia renderizada nao acompanha edicao ao vivo: marca-se velha e ela
   // se refaz sozinha, enquanto o player cai na copia leve para nao ficar preso
   const [previaVelha, setPreviaVelha] = useState(false)
+  // COM ANIMAÇÕES (a prévia renderizada: gráficos, cenas, logos, transições,
+  // exatamente o que vai baixar) ou AO VIVO (a cópia leve, que acompanha cada
+  // retoque na hora, sem a pós). Com animações é o padrão.
+  const [animada, setAnimada] = useState<boolean>(() => {
+    try { return localStorage.getItem('sharkcut.previaAnimada') !== '0' } catch { return true }
+  })
   // o aviso de "ficou pronto": quanto demorou, quanto de vídeo saiu e o
   // tamanho do arquivo (que chega depois, quando a exportação termina)
   const [pronto, setPronto] = useState<{ segundos: number; duracao: number
@@ -194,22 +200,50 @@ export default function Editor() {
     return fresh
   }, [project])
 
-  useEffect(() => {
-    if (activeJob?.kind !== 'previa') return
-    if (activeJob.status === 'ok' && activeJob.result?.download) {
-      setPreviewUrl(`${activeJob.result.download}?v=${activeJob.id}`)
-      setPreviewBusy(false)
-      setPreviaVelha(false)
+  // A PRÉVIA COM TODAS AS ANIMAÇÕES, venha de onde vier: o clique único, a
+  // pós do Claude, a prévia que o servidor refaz sozinho a cada mudança (da
+  // tela, do Claude ou do MCP) ou o botão. Antes só o `activeJob` era olhado
+  // — e ele já tinha virado a exportação final quando o clique único
+  // terminava, então o editor abria na prévia leve, SEM a pós, com a prévia
+  // renderizada pronta no disco. Aqui a store devolve uma STRING estável: só
+  // muda quando uma prévia nova fica pronta.
+  const chavePrevia = useStore((s) => {
+    if (!project) return ''
+    let ultimo: any = null
+    for (const j of Object.values(s.jobs ?? {}) as any[]) {
+      if (j.project_id !== project.id || j.status !== 'ok') continue
+      const url = j.kind === 'previa' ? j.result?.download : j.result?.previa?.download
+      if (!url) continue
+      if (!ultimo || (j.updated_at ?? 0) >= (ultimo.updated_at ?? 0)) ultimo = { id: j.id, url }
     }
-    if (['erro', 'cancelado'].includes(activeJob.status)) setPreviewBusy(false)
-  }, [activeJob?.id, activeJob?.status])
+    return ultimo ? `${ultimo.id}|${ultimo.url}` : ''
+  })
+  useEffect(() => {
+    if (!chavePrevia) return
+    const [id, url] = chavePrevia.split('|')
+    setPreviewUrl(`${url}?v=${id}`)
+    setPreviaVelha(false)
+    // a mudança pode ter vindo do Claude ou do MCP: a tela se atualiza junto
+    refresh().catch(() => {})
+  }, [chavePrevia])
+  const refazendoPrevia = useStore((s) => !!project && (Object.values(s.jobs ?? {}) as any[])
+    .some((j) => j.project_id === project.id && j.kind === 'previa'
+                 && ['fila', 'rodando'].includes(j.status)))
+  useEffect(() => { setPreviewBusy(refazendoPrevia) }, [refazendoPrevia])
+  // ABRIU O PROJETO (ou recarregou a página): a prévia com as animações que
+  // já existe no disco entra direto — antes voltava sempre para a prévia leve
+  useEffect(() => {
+    if (!project?.id) return
+    api.previaEstado(project.id).then((e) => {
+      if (!e?.download) return
+      setPreviewUrl(`${e.download}?v=${e.rev}`)
+      setPreviaVelha(!e.em_dia)
+    }).catch(() => {})
+  }, [project?.id])
 
-  // O clique único já entrega a prévia da edição renderizada: é ela que toca
-  // sem tranco (arquivo linear, zero busca) e com o zoom e a legenda queimados.
+  // O clique único: quanto demorou e o que saiu (a prévia vem pela chave acima)
   useEffect(() => {
     if (activeJob?.kind !== 'clique-unico' || activeJob.status !== 'ok') return
-    const url = activeJob.result?.previa?.download
-    if (url) { setPreviewUrl(`${url}?v=${activeJob.id}`); setPreviaVelha(false) }
     // QUANTO DEMOROU E O QUE SAIU. O editor abria e o usuário não tinha como
     // saber se a máquina levou 40 s ou 6 minutos, nem quanto vídeo sobrou.
     const seg = Math.max(0, (activeJob.updated_at ?? 0) - (activeJob.created_at ?? 0))
@@ -269,19 +303,9 @@ export default function Editor() {
     }).catch(() => {})
   }, [previaVelha, project?.id, proxyUrl])
 
-  // Editou? A prévia renderizada ficou velha. Ela se refaz sozinha, depois de
-  // uns segundos parado — refazer a cada clique seria uma fila de renders.
-  useEffect(() => {
-    if (!previewUrl || !previaVelha || !project) return
-    const t = window.setTimeout(async () => {
-      try {
-        setPreviewBusy(true)
-        const job = await api.preview(project.id, { scale: '240', crf: 32 })
-        setState({ activeJob: job })
-      } catch { setPreviewBusy(false) }
-    }, 4000)
-    return () => window.clearTimeout(t)
-  }, [previaVelha, previewUrl, project?.id])
+  // Editou? A prévia renderizada ficou velha — e QUEM a refaz é o servidor,
+  // uns segundos depois da última mudança (editor/previa_auto.py), para
+  // qualquer origem da mudança. A prévia nova chega pela chave acima.
 
   // recarrega quando um job termina
   useEffect(() => {
@@ -878,8 +902,14 @@ export default function Editor() {
                     ? [project.info.display_width || project.info.width,
                        project.info.display_height || project.info.height]
                     : null}
-                  previewUrl={previaVelha ? null : previewUrl}
-                  previaVelha={previaVelha}
+                  previewUrl={previaVelha || !animada ? null : previewUrl}
+                  previaVelha={previaVelha && animada}
+                  animada={animada}
+                  temPrevia={!!previewUrl}
+                  onAnimada={(v) => {
+                    setAnimada(v)
+                    try { localStorage.setItem('sharkcut.previaAnimada', v ? '1' : '0') } catch { /* sem memória */ }
+                  }}
                   formato={formatoAtual}
                   formatos={['fonte', ...((project.plan?.export?.extras ?? []) as string[])
                     .filter((f) => f && f !== 'fonte')]}
@@ -946,10 +976,7 @@ export default function Editor() {
                   previewBusy={previewBusy}
                   onRequestPreview={async () => {
                     setPreviewBusy(true)
-                    setPreviewUrl(null)
-                    const job = await api.preview(project.id,
-                      { scale: '240', crf: 32 })
-                    setState({ activeJob: job })
+                    try { await api.preview(project.id, {}) } catch { setPreviewBusy(false) }
                   }}
                   safeZone={safeZone?.band?.found
                     ? { top: safeZone.band.top, bottom: safeZone.band.bottom } : null} />

@@ -37,6 +37,10 @@ interface Props {
   previewUrl?: string | null
   onRequestPreview?: () => void
   previewBusy?: boolean
+  /** com animações (renderizada) ou ao vivo (cópia leve) */
+  animada?: boolean
+  temPrevia?: boolean
+  onAnimada?: (v: boolean) => void
   // cópia leve da FONTE, para tocar sem engasgo. A linha do tempo é idêntica
   // à do original, então nada no cálculo de tempo muda.
   proxyUrl?: string | null
@@ -94,6 +98,7 @@ interface Props {
 export default function Player({ projectId, blocks, cues, duration, style, safeZone,
                                 sourceSize, zoomAnchor, previaVelha,
                                  previewUrl, onRequestPreview, previewBusy,
+                                 animada, temPrevia, onAnimada,
                                  proxyUrl, onDeleteSelection, onCutCue,
                                  overlays, cutaways, media,
                                  onOverlayChange, onOverlayDelete, onCutawayDelete,
@@ -868,8 +873,9 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
         )}
         {linear && (
           <span className="absolute top-1.5 left-1.5 chip border-accent/60
-                           text-accent bg-ink-900/80">
-            o que vai baixar
+                           text-accent bg-ink-900/80"
+                title="a prévia renderizada: gráficos, cenas, logos, transições e camadas, exatamente como vão para o arquivo">
+            com animações · o que vai baixar
           </span>
         )}
         {(formatos ?? []).length > 1 && (
@@ -916,7 +922,14 @@ export default function Player({ projectId, blocks, cues, duration, style, safeZ
             refazendo a prévia…
           </span>
         )}
-        {!linear && !previaVelha && proxyUrl && (
+        {!linear && !previaVelha && !animada && (
+          <span className="absolute top-1.5 left-1.5 chip border-line
+                           text-slate-300 bg-ink-900/80"
+                title="Ao vivo: cortes, velocidade, zoom e legenda na hora — sem as animações da pós. Clique em 'com animações' embaixo.">
+            ao vivo · sem a pós
+          </span>
+        )}
+        {!linear && !previaVelha && animada && proxyUrl && (
           <span className="absolute top-1.5 left-1.5 chip border-emerald-800/70
                            text-emerald-300 bg-ink-900/80"
                 title="Tocando uma cópia de 480p, feia de propósito, para a edição
@@ -1243,15 +1256,29 @@ agora neste instante. Dois marcos em instantes diferentes e a janela se move."
       <div className="flex items-center gap-2">
         <p className="hint flex-1">
           {linear
-            ? 'Tocando a prévia renderizada em 480p. A exportação final continua em '
-              + 'qualidade cheia.'
-            : 'Prévia com cortes, velocidades e legendas aplicados — nada é '
-              + 'renderizado. Espaço toca/pausa, setas movem 0,1 s (1 s com Shift).'}
+            ? 'Com TODAS as animações (gráficos, cenas, logos, transições), em 240p. '
+              + 'Ela se refaz sozinha uns segundos depois de cada mudança; o arquivo '
+              + 'final sai em qualidade cheia.'
+            : animada
+            ? 'A prévia com as animações está sendo refeita — enquanto isso toca ao vivo, '
+              + 'sem a pós. Espaço toca/pausa, setas movem 0,1 s (1 s com Shift).'
+            : 'Ao vivo: cortes, velocidades e legendas na hora, sem as animações da pós. '
+              + 'Espaço toca/pausa, setas movem 0,1 s (1 s com Shift).'}
         </p>
+        {onAnimada && (
+          <span className="flex shrink-0" data-modo-previa={animada ? 'animada' : 'viva'}>
+            <button className={`btn btn-xs rounded-r-none ${animada ? 'btn-primary' : ''}`}
+                    title="a prévia renderizada, com gráficos, cenas, logos e transições"
+                    onClick={() => onAnimada(true)}>com animações</button>
+            <button className={`btn btn-xs rounded-l-none ${!animada ? 'btn-primary' : ''}`}
+                    title="a cópia leve, que acompanha cada retoque na hora (sem a pós)"
+                    onClick={() => onAnimada(false)}>ao vivo</button>
+          </span>
+        )}
         {onRequestPreview && (
           <button className="btn btn-xs shrink-0" disabled={previewBusy}
                   onClick={onRequestPreview}>
-            {previewBusy ? 'renderizando…' : (linear ? 'refazer prévia' : 'prévia 480p')}
+            {previewBusy ? 'renderizando…' : (temPrevia ? 'refazer com animações' : 'gerar com animações')}
           </button>
         )}
       </div>

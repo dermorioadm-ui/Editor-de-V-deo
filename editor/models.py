@@ -453,6 +453,13 @@ class EditPlan:
     # A MARCA deste vídeo (kit em marcas/<slug>): "" = a marca ligada no
     # programa, "-" = nenhuma. Ver editor/marca.py.
     marca: str = ""
+    # O GANCHO: a copy que ele escreveu na primeira tela para abrir o vídeo
+    # ("pra pessoa clicar"). O Sharkcut mantém um gráfico tipo="gancho" no
+    # começo com este texto (pos_edicao.aplicar_gancho); "" = sem gancho.
+    gancho: str = ""
+    # O NOME DO ARQUIVO que vai para a pasta (sem extensão), escolhido na
+    # primeira tela — "" = o nome do projeto + "_editado", como sempre foi
+    nome_arquivo: str = ""
     audit: list = field(default_factory=list)
     audit_fixed: list = field(default_factory=list)   # bordas acertadas sozinho
     zoom_audit: list = field(default_factory=list)    # avisos do enquadramento
@@ -500,6 +507,8 @@ class EditPlan:
             "pedido_claude": self.pedido_claude,
             "pos_claude": self.pos_claude,
             "marca": self.marca,
+            "gancho": self.gancho,
+            "nome_arquivo": self.nome_arquivo,
             "version": self.version,
         }
 
@@ -548,6 +557,8 @@ class EditPlan:
         plan.pedido_claude = str(data.get("pedido_claude") or "")[:4000]
         plan.pos_claude = bool(data.get("pos_claude", False))
         plan.marca = str(data.get("marca") or "")[:40]
+        plan.gancho = str(data.get("gancho") or "")[:160]
+        plan.nome_arquivo = str(data.get("nome_arquivo") or "")[:120]
         plan.graficos = [_from_dict(Grafico, g) for g in data.get("graficos", [])
                          if isinstance(g, dict)]
         plan.camadas = [_from_dict(Camada, c) for c in data.get("camadas", [])

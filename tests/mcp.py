@@ -36,6 +36,8 @@ from tests.synth import build, write_video
 
 # a voz de estúdio (rede de IA) só roda no teste dela
 os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
+# a prévia automática do servidor (threads por plano gravado) fica de fora
+os.environ.setdefault("SHARKCUT_PREVIA_AUTO", "0")
 
 FALHAS: list[str] = []
 

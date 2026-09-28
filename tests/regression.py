@@ -33,6 +33,8 @@ from pathlib import Path
 os.environ["EDITOR_DATA_DIR"] = tempfile.mkdtemp(prefix="editor-reg-")
 # a voz de estúdio (rede de IA) só roda no teste dela
 os.environ.setdefault("SHARKCUT_VOZ_IA", "0")
+# a prévia automática do servidor (threads por plano gravado) fica de fora
+os.environ.setdefault("SHARKCUT_PREVIA_AUTO", "0")
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -359,6 +361,11 @@ def main() -> int:
     testar_cena_de_vidro_colada_na_emenda()
     testar_audio_nao_e_esticado()
     testar_musica_em_relacao_a_voz()
+    testar_logo_de_canto_sai_de_cena()
+    testar_lista_com_motion_a_cada_topico()
+    testar_gancho_no_comeco()
+    testar_nome_do_arquivo_escolhido()
+    testar_previa_com_animacoes_sempre_em_dia()
 
     print()
     if FALHAS:
@@ -8033,14 +8040,16 @@ def testar_marca_logos_cenas() -> None:
         return int(r.stdout.strip() or 0)
 
     original, _s = render(plano(), "original")
-    logo = Grafico(tipo="logo", logo="simbolo", x=0.85, y=0.25, tamanho=1.0, opacidade=1.0,
+    # x=0.7: fora do canto — o logo de CANTO sai de cena enquanto outro gráfico
+    # está na tela (testar_logo_de_canto_sai_de_cena); aqui o assunto é a cor
+    logo = Grafico(tipo="logo", logo="simbolo", x=0.7, y=0.25, tamanho=1.0, opacidade=1.0,
                    out_start=0.2, out_end=3.8, entrada="fade")
     titulo = Grafico(tipo="titulo", texto="hospedepay", estilo="claro", x=0.3, y=0.8,
                      out_start=0.5, out_end=3.5)
     v, segs = render(plano([logo, titulo]), "logo")
     q = quadro(v, 2.0)
     pw, ph = LG.tamanho(logo, kit["logos"]["simbolo"]["caminho"], 640, 360)
-    cx, cy = int(0.85 * 640), int(0.25 * 360)
+    cx, cy = int(0.7 * 640), int(0.25 * 360)
     canto = q[cy - ph // 2 + 6, cx - pw // 2 + pw // 2 - pw // 3]     # o coral do quadrado
     ok(canto[0] > 200 and canto[1] < 110 and canto[2] < 140,
           f"o logo sai no quadro, na cor dele (pixel {list(canto)})")
@@ -8526,16 +8535,32 @@ def testar_graficos_de_dados_e_sem_cartao_solido() -> None:
               f"rosca de 75%: pintada aos 90° e aos 200°, vazia aos 330° "
               f"({no_anel(90).tolist()}, {no_anel(330).tolist()})")
 
-        # ÍCONE: o check da marca é verde (confirma); o alerta, laranja
+        # ÍCONE: disco SÓLIDO na cor da marca ("o card redondo é rosa") com o
+        # traço branco desenhado NA HORA, seguindo o caminho como uma caneta
         ic = [MG.normalizar({"tipo": "icone", "icone": "check", "out_start": 0,
                              "out_end": 3, "x": 0.3, "y": 0.3}),
               MG.normalizar({"tipo": "icone", "icone": "alerta", "out_start": 0,
                              "out_end": 3, "x": 0.7, "y": 0.3})]
-        img = quadro(ic, 1.5)
-        verde, laranja = kit["cores"]["confirma"], kit["cores"]["alerta"]
-        check(conta(img, verde, (0, 0, W // 2, H)) > 150
-              and conta(img, laranja, (W // 2, 0, W, H)) > 150,
-              "ícones: o check sai no verde de confirmação e o alerta no laranja da marca")
+        check(all(g["estilo"] == "marca" for g in ic),
+              "ícone nasce no disco da marca (não em vidro)")
+        fim_ic = quadro(ic, 2.2)
+        check(conta(fim_ic, coral, (0, 0, W // 2, H)) > 1500
+              and conta(fim_ic, coral, (W // 2, 0, W, H)) > 1500,
+              f"os dois discos saem coral ({conta(fim_ic, coral, (0, 0, W // 2, H))} e "
+              f"{conta(fim_ic, coral, (W // 2, 0, W, H))} px)")
+        u = min(W, H)
+        lado = u * 0.16
+        cxi, cyi = 0.3 * W, 0.3 * H
+        caixa_i = (int(cxi - lado / 2), int(cyi - lado / 2), int(cxi + lado / 2), int(cyi + lado / 2))
+        esq_i = (caixa_i[0], caixa_i[1], int(cxi), caixa_i[3])
+        dir_i = (int(cxi + lado * 0.1), caixa_i[1], caixa_i[2], caixa_i[3])
+        cedo_ic = quadro(ic, 0.22 + 0.9 * 0.18)
+        b_cedo, b_fim = conta(cedo_ic, "#FFFFFF", caixa_i, 30), conta(fim_ic, "#FFFFFF", caixa_i, 30)
+        check(b_fim > 300 and 20 < b_cedo < b_fim * 0.6,
+              f"o check é DESENHADO: no começo só um pedaço do traço ({b_cedo} px), no "
+              f"fim ele inteiro ({b_fim} px), branco sobre o coral")
+        check(conta(cedo_ic, "#FFFFFF", esq_i, 30) > conta(cedo_ic, "#FFFFFF", dir_i, 30),
+              "e a caneta começa pela perna curta do check (esquerda), como se escreve")
 
         # A EMENDA: o mesmo quadro visto de dois trechos diferentes é igual
         a = quadro(barras, 1.2, 0.0)
@@ -8795,6 +8820,394 @@ def testar_musica_em_relacao_a_voz() -> None:
         check("lufs_voz" in prev and "lufs_musica" in prev and "def _medir_trilha" in rota,
               "a prévia ao vivo faz a mesma conta (volume medido da voz e da música)")
     finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_logo_de_canto_sai_de_cena() -> None:
+    """ "A logo deve sumir quando aparece esse tipo de situação." O logo
+    pequeno no canto sai de cena enquanto outro gráfico (ícone, lista,
+    título) ou uma cena está na tela e volta depois — medido no quadro: o
+    coral do logo no canto existe antes do ícone, some durante e volta
+    depois. Um logo GRANDE (o da abertura da moldura) nunca some.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Cena, Clip, EditPlan, Grafico
+    from editor.render import logos as LG
+    from editor.render.renderer import _build_video_command, _chave_do_trecho, plan_segments
+
+    tmp = Path(tempfile.mkdtemp(prefix="logo_"))
+    try:
+        canto = Grafico(tipo="logo", logo="simbolo", x=0.9, y=0.15, tamanho=0.8,
+                        opacidade=1.0, out_start=0.0, out_end=8.0, entrada="fade")
+        icone = Grafico(tipo="icone", icone="check", x=0.25, y=0.5, out_start=3.0, out_end=5.0)
+        grande = Grafico(tipo="logo", logo="simbolo", x=0.26, y=0.42, tamanho=2.2,
+                         out_start=0.0, out_end=8.0)
+        partes = LG.efetivos([canto, icone], [])
+        do_canto = [(g.out_start, g.out_end) for g in partes if g.tipo == "logo"]
+        check(do_canto == [(0.0, 2.75), (5.25, 8.0)],
+              f"o logo de canto sai 0,25 s antes do ícone e volta 0,25 s depois ({do_canto})")
+        partes = LG.efetivos([canto, icone, grande], [])
+        check(any(g is grande for g in partes)
+              and not any(g.tipo == "logo" and g.x == 0.9 for g in partes),
+              "o logo grande (gráfico da vez) não é cortado — e enquanto ele está na "
+              "tela o de canto fica fora")
+        partes = LG.efetivos([canto, Grafico(tipo="icone", out_start=2, out_end=3),
+                              Grafico(tipo="icone", out_start=3.8, out_end=5)],
+                             [Cena(tipo="moldura", out_start=6.0, out_end=7.0)])
+        do_canto = [(g.out_start, g.out_end) for g in partes if g.tipo == "logo"]
+        check(do_canto == [(0.0, 1.75)],
+              f"entre elementos próximos (e até a cena) ele não volta para piscar ({do_canto})")
+
+        fonte = tmp / "fonte.mp4"
+        subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=0x303840:s=640x360:r=30:d=8", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(fonte)], check=True)
+        info = probe(fonte)
+        fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+        p = EditPlan()
+        p.export = ExportParams(scale="source", burn_subtitles=False, preset="ultrafast", crf=18)
+        p.clips = [Clip(src_start=0, src_end=8)]
+        p.graficos, p.marca = [canto, icone], "hospedepay"
+        segs = plan_segments(p, Timeline(p.active_clips, 30.0), fontes, info)
+        args, _ = _build_video_command(segs[0], p, info, [], tmp / "ass", {"main": str(fonte)}, None)
+        saida = tmp / "saida.mp4"
+        subprocess.run([*args, str(saida)], check=True, capture_output=True)
+
+        def coral_no_canto(t: float) -> int:
+            r = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{t}", "-i", str(saida),
+                                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                               capture_output=True, check=True)
+            q = np.frombuffer(r.stdout, np.uint8).reshape(360, 640, 3).astype(int)
+            regiao = q[20:100, 520:620]
+            return int(np.sum((regiao[..., 0] > 200) & (regiao[..., 1] < 120)))
+
+        antes, durante, depois = coral_no_canto(1.5), coral_no_canto(4.0), coral_no_canto(6.5)
+        check(antes > 300 and durante < 20 and depois > 300,
+              f"no quadro: o logo está no canto antes ({antes} px), some com o ícone "
+              f"({durante} px) e volta depois ({depois} px)")
+        k1 = _chave_do_trecho(segs[0], p, info, [], None)[0]
+        p.graficos = [canto, Grafico(tipo="icone", icone="check", x=0.25, y=0.5,
+                                     out_start=3.5, out_end=5.0, id=icone.id)]
+        check(_chave_do_trecho(segs[0], p, info, [], None)[0] != k1,
+              "mover o ícone muda a chave do trecho (onde o logo sai de cena mudou)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_lista_com_motion_a_cada_topico() -> None:
+    """ "Gostei, mas tinha que ter um motion a cada tópico que viesse a
+    aparecer." Cada tópico da lista entra com o próprio movimento: o selo
+    estoura, o texto entra, uma linha se desenha embaixo dele — e quando o
+    próximo chega, o anterior esmaece e a linha passa para o novo. Medido no
+    quadro, com o 2º tópico na vez: ele está branco e sublinhado; o 1º,
+    esmaecido e sem linha.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    from editor import marca as MK
+    from editor.config import FFMPEG
+    from editor.render import motion as MG
+
+    kit = MK.carregar("hospedepay")
+    W, H = 1280, 720
+    tmp = Path(tempfile.mkdtemp(prefix="lista_"))
+    try:
+        g = MG.normalizar({"tipo": "lista", "texto": "Antes da chave", "estilo": "marca",
+                           "x": 0.26, "y": 0.5, "out_start": 0, "out_end": 6,
+                           "itens": [{"texto": "Link após a reserva", "em": 0.5},
+                                     {"texto": "Documento com foto", "em": 1.6},
+                                     {"texto": "CPF ou passaporte", "em": 2.7}]})
+        fonte = MG.fonte_do_kit(kit, "Arial")
+        els = MG.elementos(g, W, H, fonte, kit)
+        textos = [e for e in els if e.an == 7 and e.x > 1 and isinstance(e.variantes[0][1], str)
+                  and any(t in e.variantes[0][1] for t in ("Link", "Documento", "CPF"))]
+        check(len(textos) == 3 and all(len(e.variantes) >= 1 for e in textos)
+              and "{\\1a&H78&}" in textos[0].variantes[-1][1]
+              and len(textos[-1].variantes) == 1,
+              "cada tópico esmaece quando o próximo chega (o último fica aceso)")
+        ass = tmp / "l.ass"
+        MG.escrever(ass, [g], W, H, 0.0, 7.0, fonte=fonte, kit=kit)
+        fd = str(Path("marcas/hospedepay/fontes").resolve())
+        r = subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                            f"color=c=0x202428:s={W}x{H}:r=30:d=7", "-ss", "2.3",
+                            "-vf", f"ass={ass}:fontsdir={fd}", "-frames:v", "1",
+                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                           capture_output=True, check=True)
+        q = np.frombuffer(r.stdout, np.uint8).reshape(H, W, 3).astype(int)
+        u = min(W, H)
+        ci = u * 0.047
+
+        def branco(x0, y0, x1, y1):
+            reg = q[int(y0):int(y1), int(x0):int(x1)]
+            return int(np.sum(np.all(reg > 225, axis=2)))
+
+        t1, t2 = textos[0], textos[1]
+        caixa1 = (t1.x, t1.y, t1.x + ci * 6, t1.y + ci * 1.1)
+        caixa2 = (t2.x, t2.y, t2.x + ci * 6, t2.y + ci * 1.1)
+        linha1 = (t1.x, t1.y + ci * 1.15, t1.x + ci * 6, t1.y + ci * 1.45)
+        linha2 = (t2.x, t2.y + ci * 1.15, t2.x + ci * 6, t2.y + ci * 1.45)
+        a1, a2 = branco(*caixa1), branco(*caixa2)
+        l1, l2 = branco(*linha1), branco(*linha2)
+        check(a2 > 150 and a1 < a2 * 0.3,
+              f"com o 2º tópico na vez, ele está aceso ({a2} px brancos) e o 1º esmaecido ({a1})")
+        check(l2 > 60 and l1 < 10,
+              f"e a linha desenhada está embaixo do 2º ({l2} px), não mais do 1º ({l1})")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_gancho_no_comeco() -> None:
+    """ "Quero um hook no início do vídeo onde eu possa colocar uma copy pra
+    pessoa clicar." A copy da primeira tela vira UM gráfico tipo=gancho nos
+    primeiros segundos (até o fim da primeira frase, entre 2,5 e 4,5 s); a
+    palavra entre *asteriscos* ganha a pílula da cor da marca; mexer no texto
+    pela tela muda a copy; tirar o gráfico tira a copy; e o Claude é avisado
+    para não mexer nem pôr nada por cima.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from editor import marca as MK
+    from editor import pos_edicao as PE
+    from editor import projects as svc
+    from editor.claude_editor import pedido
+    from editor.config import FFMPEG
+    from editor.models import Clip
+    from editor.render import motion as MG
+
+    tmp = Path(tempfile.mkdtemp(prefix="gancho_"))
+    projeto = None
+    try:
+        dur = 12.0
+        fonte = write_video(tmp / "fonte.mp4", build([(0.3, 2.1), (2.8, 11.5)], dur), dur, 180, 320, 30)
+        projeto = svc.create(str(fonte), "gancho", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=dur)]
+        projeto.save_plan()
+        cliente = TestClient(app)
+        r = cliente.post(f"/api/projects/{projeto.id}/params",
+                         json={"gancho": "Quem  *dorme* no seu imóvel hoje?"})
+        p = svc.load(projeto.id)
+        gs = [g for g in p.plan.graficos if g.origem == "gancho"]
+        check(r.status_code == 200 and p.plan.gancho == "Quem *dorme* no seu imóvel hoje?"
+              and len(gs) == 1 and gs[0].tipo == "gancho" and gs[0].out_start == 0.0
+              and PE.GANCHO_MIN <= gs[0].out_end <= PE.GANCHO_MAX,
+              f"a copy da primeira tela vira UM gráfico de gancho no começo "
+              f"({[(g.tipo, g.out_start, g.out_end) for g in gs]})")
+        PE.aplicar_gancho(p)
+        check(len([g for g in p.plan.graficos if g.origem == "gancho"]) == 1,
+              "aplicar de novo não duplica")
+        PE.por_grafico(p, {"texto": "Quem *entra* no seu imóvel?"}, gs[0].id)
+        check(p.plan.gancho == "Quem *entra* no seu imóvel?",
+              "mexer no texto pela tela muda a copy do plano")
+        PE.tirar(p, [gs[0].id])
+        PE.aplicar_gancho(p)
+        check(p.plan.gancho == "" and not any(g.origem == "gancho" for g in p.plan.graficos),
+              "tirar o gancho tira a copy — ele não volta sozinho")
+        p.plan.gancho = "Ninguém dorme sem *assinar*"
+        PE.aplicar_gancho(p)
+        p.save_plan()
+        check("GANCHO:" in pedido(svc.load(projeto.id)) and "assinar" in pedido(svc.load(projeto.id)),
+              "o Claude é avisado do gancho (não mexe, não põe nada por cima)")
+
+        kit = MK.carregar("hospedepay")
+        g = MG.normalizar({"tipo": "gancho", "texto": "Quem *dorme* no seu imóvel hoje?",
+                           "out_start": 0, "out_end": 3.5, "x": 0.5, "y": 0.2})
+        W, H = 720, 1280
+        ass = tmp / "g.ass"
+        MG.escrever(ass, [g], W, H, 0.0, 4.0, fonte=MG.fonte_do_kit(kit, "Arial"), kit=kit)
+        fd = str(Path("marcas/hospedepay/fontes").resolve())
+
+        def quadro(t):
+            r = subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                                f"color=c=0x303030:s={W}x{H}:r=30:d=4", "-ss", f"{t}",
+                                "-vf", f"ass={ass}:fontsdir={fd}", "-frames:v", "1",
+                                "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                               capture_output=True, check=True)
+            return np.frombuffer(r.stdout, np.uint8).reshape(H, W, 3).astype(int)
+
+        def coral(q):
+            return int(np.sum((q[..., 0] > 220) & (q[..., 1] < 110) & (q[..., 2] < 130)))
+
+        def branco(q):
+            return int(np.sum(np.all(q > 235, axis=2)))
+
+        cedo, meio, cheio = quadro(0.12), quadro(0.45), quadro(2.0)
+        check(branco(cedo) < branco(meio) < branco(cheio),
+              f"as palavras entram uma a uma ({branco(cedo)} → {branco(meio)} → "
+              f"{branco(cheio)} px de letra)")
+        check(coral(cheio) > 2000,
+              f"a palavra entre asteriscos está na pílula da cor da marca ({coral(cheio)} px)")
+    finally:
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_nome_do_arquivo_escolhido() -> None:
+    """ "Quero poder nomear o arquivo antes dele ser gerado para a pasta." O
+    nome da primeira tela vira o nome do vídeo (limpo para o Windows); a
+    exportação automática regrava o PRÓPRIO arquivo a cada retoque, mas nunca
+    apaga o vídeo de OUTRO projeto que ganhou o mesmo nome — esse vira "(2)".
+    """
+    import tempfile
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from editor import projects as svc
+    from editor.config import ExportParams
+    from editor.models import Clip
+    from tests.e2e import Ctx
+
+    tmp = Path(tempfile.mkdtemp(prefix="nome_"))
+    pasta = tmp / "saida"
+    criados = []
+    try:
+        dur = 4.0
+        fonte = write_video(tmp / "fonte.mp4", build([(0.3, 3.5)], dur), dur, 180, 320, 30)
+        cliente = TestClient(app)
+
+        def projeto_com_nome(nome: str):
+            p = svc.create(str(fonte), "gravacao", "VSL")
+            criados.append(p.id)
+            p.plan.clips = [Clip(src_start=0.0, src_end=dur)]
+            p.plan.export = ExportParams(scale="240", burn_subtitles=False,
+                                         preset="ultrafast", crf=32)
+            p.save_plan()
+            cliente.post(f"/api/projects/{p.id}/params", json={"nome_arquivo": nome})
+            return svc.load(p.id)
+
+        a = projeto_com_nome('hospedepay: anúncio "01"?.mp4')
+        check(a.plan.nome_arquivo == "hospedepay anúncio 01",
+              f"o nome é limpo para o Windows ({a.plan.nome_arquivo!r})")
+        opcoes = {"overwrite": True, "output_dir": str(pasta)}
+        r1 = svc.export(a, Ctx(quiet=True), dict(opcoes))
+        check(r1["nome"] == "hospedepay anúncio 01.mp4",
+              f"o vídeo sai com o nome que ele escolheu ({r1['nome']})")
+        r1b = svc.export(svc.load(a.id), Ctx(quiet=True), dict(opcoes))
+        check(r1b["nome"] == r1["nome"],
+              "reexportar o MESMO projeto regrava o próprio arquivo (não enche a pasta)")
+        b = projeto_com_nome("hospedepay anúncio 01")
+        r2 = svc.export(b, Ctx(quiet=True), dict(opcoes))
+        check(r2["nome"] == "hospedepay anúncio 01 (2).mp4"
+              and (pasta / "hospedepay anúncio 01.mp4").exists(),
+              f"outro projeto com o mesmo nome não apaga o primeiro ({r2['nome']})")
+        c = projeto_com_nome("")
+        legado = pasta / f"{svc._nome_de_arquivo(c.name)}.mp4"
+        legado.write_bytes(b"antigo")
+        (c.dir / "saidas.json").unlink(missing_ok=True)
+        r3 = svc.export(c, Ctx(quiet=True), dict(opcoes))
+        check(r3["nome"] == legado.name and legado.stat().st_size > 1000,
+              "projeto de antes do registro continua regravando o nome antigo dele")
+    finally:
+        for pid in criados:
+            try:
+                svc.delete_project(pid)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_previa_com_animacoes_sempre_em_dia() -> None:
+    """ "Quero poder ver na prévia todas as animações." A prévia renderizada
+    sempre trouxe a pós inteira; ela é que não chegava à tela. Agora: um
+    arquivo POR REVISÃO do plano (nunca regravado enquanto toca); sem mudança
+    ela é reaproveitada; a rota diz se está em dia (o editor a busca ao abrir);
+    e qualquer plano gravado — pela tela, pelo Claude, pelo MCP — faz o
+    servidor refazê-la sozinho uns segundos depois.
+    """
+    import tempfile
+    import time as _t
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from editor import previa_auto
+    from editor import projects as svc
+    from editor.config import ExportParams
+    from editor.jobs import get_queue
+    from editor.models import Clip, Grafico
+    from tests.e2e import Ctx
+
+    tmp = Path(tempfile.mkdtemp(prefix="previa_"))
+    projeto = None
+    antes_env, antes_espera = os.environ.get("SHARKCUT_PREVIA_AUTO"), previa_auto.ESPERA
+    try:
+        dur = 4.0
+        fonte = write_video(tmp / "fonte.mp4", build([(0.3, 3.5)], dur), dur, 180, 320, 30)
+        projeto = svc.create(str(fonte), "previa", "VSL")
+        projeto.plan.clips = [Clip(src_start=0.0, src_end=dur)]
+        projeto.plan.export = ExportParams(burn_subtitles=False)
+        projeto.save_plan()
+        cliente = TestClient(app)
+        e0 = cliente.get(f"/api/projects/{projeto.id}/previa").json()
+        check(e0["download"] is None and not e0["em_dia"], "sem prévia ainda: a rota diz")
+        r1 = svc.previa_da_edicao(svc.load(projeto.id), Ctx(quiet=True))
+        e1 = cliente.get(f"/api/projects/{projeto.id}/previa").json()
+        check(e1["em_dia"] and e1["download"] and e1["download"].endswith(f"previa-{e1['rev']}.mp4"),
+              f"a prévia é um arquivo POR REVISÃO e está em dia ({e1['download']})")
+        r2 = svc.previa_da_edicao(svc.load(projeto.id), Ctx(quiet=True))
+        check(r2.get("reaproveitada") and r2["download"] == r1["download"],
+              "sem mudança no plano, nada é renderizado de novo")
+        p = svc.load(projeto.id)
+        p.plan.graficos.append(Grafico(tipo="titulo", texto="Oi", out_start=0.5, out_end=2.0))
+        p.save_plan()
+        e2 = cliente.get(f"/api/projects/{projeto.id}/previa").json()
+        check(not e2["em_dia"] and e2["download"] == e1["download"],
+              "pôs um gráfico: a prévia antiga continua lá, marcada como velha")
+        # o servidor refaz sozinho quando o plano é gravado
+        os.environ["SHARKCUT_PREVIA_AUTO"] = "1"
+        previa_auto.ESPERA = 0.3
+        if previa_auto.plano_mudou not in svc.ao_salvar_plano:
+            svc.ao_salvar_plano.append(previa_auto.plano_mudou)
+        svc.load(projeto.id).save_plan()
+        fim = _t.time() + 90
+        while _t.time() < fim:
+            e3 = cliente.get(f"/api/projects/{projeto.id}/previa").json()
+            if e3["em_dia"]:
+                break
+            _t.sleep(0.5)
+        feitos = [j.kind for j in get_queue().list(projeto.id)]
+        check(e3["em_dia"] and e3["download"] != e1["download"] and "previa" in feitos,
+              f"gravar o plano fez o servidor refazer a prévia sozinho ({e3['download']})")
+        pasta = svc.load(projeto.id).dir / "exports"
+        check(len(list(pasta.glob("previa-*.mp4"))) <= 2,
+              "ficam só a prévia atual e a anterior (o player pode estar tocando a anterior)")
+        r = cliente.post(f"/api/projects/{projeto.id}/preview", json={"scale": "480"})
+        check(r.status_code == 200 and r.json().get("kind") == "previa",
+              "o botão usa o MESMO perfil de prévia (não reencoda tudo à toa)")
+    finally:
+        previa_auto.ESPERA = antes_espera
+        if previa_auto.plano_mudou in svc.ao_salvar_plano:
+            svc.ao_salvar_plano.remove(previa_auto.plano_mudou)
+        if antes_env is None:
+            os.environ.pop("SHARKCUT_PREVIA_AUTO", None)
+        else:
+            os.environ["SHARKCUT_PREVIA_AUTO"] = antes_env
+        if projeto is not None:
+            try:
+                svc.delete_project(projeto.id)
+            except Exception:  # noqa: BLE001
+                pass
         shutil.rmtree(tmp, ignore_errors=True)
 
 

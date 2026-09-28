@@ -9,7 +9,7 @@ export const TIPOS_GRAFICO: [string, string][] = [
   ['nome', 'Nome (lower third)'], ['seta', 'Seta'], ['circulo', 'Círculo'],
   ['barra', 'Barra de progresso'], ['logo', 'Logo'],
   ['barras', 'Gráfico de barras (sobe)'], ['linha', 'Gráfico de linha (sobe)'],
-  ['rosca', 'Rosca (%)'], ['icone', 'Ícone desenhado'],
+  ['rosca', 'Rosca (%)'], ['icone', 'Ícone desenhado'], ['gancho', 'Gancho (abre o vídeo)'],
 ]
 const ESTILOS: [string, string][] = [
   ['vidro', 'Vidro (translúcido)'], ['limpo', 'Sem fundo'],
@@ -18,7 +18,8 @@ const ESTILOS: [string, string][] = [
 ]
 export const ICONES: [string, string][] = [
   ['check', 'check (confirmado)'], ['x', 'x (errado)'], ['seta_cima', 'seta para cima'],
-  ['seta_baixo', 'seta para baixo'], ['casa', 'casa'], ['cadeado', 'cadeado'],
+  ['seta_baixo', 'seta para baixo'], ['casa', 'casa'], ['casa_x', 'casa riscada (vulnerável)'],
+  ['cadeado', 'cadeado'],
   ['chave', 'chave'], ['dinheiro', 'dinheiro'], ['relogio', 'relógio'],
   ['estrela', 'estrela'], ['alerta', 'alerta'], ['calendario', 'calendário'],
   ['pessoa', 'pessoa'], ['grafico', 'gráfico subindo'],
@@ -203,6 +204,7 @@ export default function PosInspector({ kind, id, onChanged, snapshot, onClose }:
             <span className="label">{d.tipo === 'nome' ? 'nome'
               : d.tipo === 'numero' || d.tipo === 'rosca' ? 'legenda do número'
                 : d.tipo === 'icone' ? 'rótulo embaixo (opcional)'
+                  : d.tipo === 'gancho' ? 'a copy do gancho (*palavra* = destaque na cor da marca)'
                   : pedeValores ? 'título do gráfico' : 'texto'}</span>
             <textarea className="field w-full text-xs py-1" rows={2} value={d.texto ?? ''}
                       data-campo="texto" onChange={(e) => set('texto', e.target.value)} />

@@ -381,8 +381,9 @@ def _achar(lista, iid: str):
 
 
 # os tipos que não têm cartão: a tela cheia (não há ninguém atrás), o logo
-# (imagem) e as marcações (seta, círculo)
-_SEM_CARTAO = ("tela", "logo", "seta", "circulo")
+# (imagem), as marcações (seta, círculo) e o ícone — o disco dele é pequeno
+# e SÓLIDO de propósito ("o card redondo é rosa")
+_SEM_CARTAO = ("tela", "logo", "seta", "circulo", "icone")
 
 
 def _no_lado_livre(project, g: dict) -> bool:
@@ -437,6 +438,49 @@ def _conferir_grafico(project, novo: dict) -> dict:
     return novo
 
 
+# O GANCHO fica entre o fim da primeira frase e estes limites: curto o bastante
+# para não tapar o começo, longo o bastante para ser lido
+GANCHO_MIN, GANCHO_MAX = 2.5, 4.5
+
+
+def _fim_da_primeira_frase(project) -> float:
+    try:
+        fps = project.info.fps if project.info else None
+        frases = _frases(palavras_na_saida(project, Timeline(project.plan.active_clips, fps)))
+        fim = float(frases[0]["fim"]) + 0.3 if frases else 3.2
+    except Exception:  # noqa: BLE001 — sem transcrição, o tempo padrão
+        fim = 3.2
+    return max(GANCHO_MIN, min(GANCHO_MAX, fim))
+
+
+def aplicar_gancho(project):
+    """Mantém o gráfico do GANCHO (a copy da primeira tela) no começo do vídeo:
+    cria quando há texto, atualiza o texto quando ele muda, tira quando o
+    texto é apagado. Um só gráfico, com origem "gancho" — a tela o mostra e
+    deixa mexer, e o Claude o vê no roteiro. Não grava."""
+    plan = project.plan
+    texto = " ".join(str(getattr(plan, "gancho", "") or "").split())[:160]
+    atuais = [g for g in plan.graficos if getattr(g, "origem", "") == "gancho"]
+    if not texto:
+        if atuais:
+            plan.graficos = [g for g in plan.graficos if getattr(g, "origem", "") != "gancho"]
+        return None
+    if atuais:
+        g = atuais[0]
+        plan.graficos = [x for x in plan.graficos
+                         if getattr(x, "origem", "") != "gancho" or x is g]
+        g.texto = texto
+        g.enabled = True
+        return g
+    g = Grafico(**MG.normalizar({
+        "tipo": "gancho", "texto": texto, "out_start": 0.0,
+        "out_end": _fim_da_primeira_frase(project), "x": 0.5, "y": 0.2,
+        "entrada": "pop", "saida": "fade", "estilo": "limpo", "origem": "gancho",
+    }, _duracao(project) or None))
+    plan.graficos.insert(0, g)
+    return g
+
+
 def por_grafico(project, dados: dict, gid: str | None = None) -> Grafico:
     """Cria (sem ``gid``) ou atualiza um gráfico. Não grava."""
     plan = project.plan
@@ -449,6 +493,9 @@ def por_grafico(project, dados: dict, gid: str | None = None) -> Grafico:
         for k, v in novo.items():
             if k != "id":
                 setattr(g, k, v)
+        if getattr(g, "origem", "") == "gancho":
+            # mexeu no texto do gancho pela tela: a copy do plano acompanha
+            plan.gancho = g.texto
         return g
     novo = _conferir_grafico(project, MG.normalizar(dados, _duracao(project)))
     novo.pop("id", None)
@@ -564,5 +611,9 @@ def tirar(project, ids: list[str] | None = None, tudo: bool = False,
                 if not ((x.id in alvo)
                         or (tudo and (not origem or getattr(x, "origem", "") == origem)))]
         n += len(antes) - len(fica)
+        if nome == "graficos" and any(getattr(x, "origem", "") == "gancho"
+                                      for x in antes if x not in fica):
+            # tirou o gancho: a copy sai junto (senão ele voltaria sozinho)
+            plan.gancho = ""
         setattr(plan, nome, fica)
     return n
