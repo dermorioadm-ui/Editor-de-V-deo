@@ -226,6 +226,14 @@ export default function Editor() {
     // a mudança pode ter vindo do Claude ou do MCP: a tela se atualiza junto
     refresh().catch(() => {})
   }, [chavePrevia])
+  // o objeto/transição 3D terminou de renderizar no Blender: entra na linha do tempo
+  const ultimo3d = useStore((s) => {
+    if (!project) return ''
+    const js = (Object.values(s.jobs ?? {}) as any[])
+      .filter((j) => j.project_id === project.id && j.kind === 'arte-3d' && j.status === 'ok')
+    return js.map((j) => j.id).sort().join(',')
+  })
+  useEffect(() => { if (ultimo3d) refresh().catch(() => {}) }, [ultimo3d])
   const refazendoPrevia = useStore((s) => !!project && (Object.values(s.jobs ?? {}) as any[])
     .some((j) => j.project_id === project.id && j.kind === 'previa'
                  && ['fila', 'rodando'].includes(j.status)))

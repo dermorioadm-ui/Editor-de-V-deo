@@ -1497,10 +1497,9 @@ def marca(c: Cliente, a: dict) -> str:
     "baixo/cima) sobre o fundo (desfoque = o próprio vídeo desfocado; marca; "
     "claro; escuro) — o outro lado fica LIVRE: ponha ali os gráficos que "
     "explicam (x≈0.26 com o vídeo à direita). No fim, o cartão volta à tela. "
-    "vidro3d = CAMADAS DE VIDRO: o fundo, os logos (logos=[...], na placa do "
-    "meio) e a pessoa viram placas que giram de lado, se separam em "
-    "profundidade, giram mais e se juntam de novo — para mostrar 'o que está "
-    "por trás'; precisa do recorte da pessoa; 4 a 7 s é o tempo bom. Com id, "
+    "vidro3d = camadas de vidro girando: REPROVADA pelo dono (pirotécnica, "
+    "sem sentido para o produto) — não use, a menos que ele peça com essas "
+    "palavras; para 3D que explica o produto use arte_3d acao=objeto. Com id, "
     "muda uma cena.",
     {"properties": {"projeto": {"type": "string"},
                     "id": {"type": "string"},
@@ -1645,17 +1644,42 @@ def arte(c: Cliente, a: dict) -> str:
 
 
 @ferramenta(
+    "gosto",
+    "O GOSTO DO DONO — leia ANTES de planejar a pós. Traz as notas que ele "
+    "escreveu sobre o gosto dele e o que ele já APAGOU ou TROCOU do que a IA "
+    "pôs em edições anteriores (aprendido da mão dele). O que ele apagou não "
+    "volta; o que ele trocou, use já trocado. Vale acima da habilidade.",
+    {"properties": {}},
+)
+def gosto(c: Cliente, a: dict) -> str:
+    return str(c.get("/api/gosto").get("resumo") or "")
+
+
+@ferramenta(
     "arte_3d",
-    "Blender LOCAL opcional, sem serviço pago. Use arte catalogo para ver disponibilidade e esquema. "
-    "criar recebe cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo,posicao,rotacao, "
-    "escala,cor,metalico,rugosidade,texto,marcos:[{t,posicao?,rotacao?,escala?}]}]}. camera.marcos aceita "
-    "{t,posicao?,alvo?,lente?}. Tipos cubo/esfera/torus/ "
-    "cilindro/plano/texto; rotação em graus, t relativo. Câmera/luzes reais; saída com transparência. "
-    "Até 24 objetos/10 s. Retorna job; use consultar com job até ok/erro/cancelado ANTES de revisar. "
-    "Ao terminar, entra na timeline como sobreposição editável. Não executa scripts arbitrários.",
-    {"properties":{"projeto":{"type":"string"},"acao":{"type":"string","enum":["criar","consultar"]},
+    "Blender LOCAL (sem serviço pago), saída com fundo transparente na linha do tempo. "
+    "PREFIRA acao=objeto: um OBJETO 3D PRONTO, modelado com acabamento de ícone 3D premium, "
+    "nas cores da marca do vídeo, montando peça por peça e girando pouco (nunca uma volta). "
+    "objeto: casa (imóvel de temporada, com piscina e guarda-sol), predio (apartamento), "
+    "chave (check-in, entrega da chave), cadeado (segurança, proteção), escudo (garantia, "
+    "proteção), documento (contrato, termo assinado), celular (app, mensagem), calendario "
+    "(reserva, data, prazo), check (aprovado, confirmado), estrela (avaliação), grafico "
+    "(crescimento, resultado), mala (hóspede, viagem). Use quando a FALA nomeia o conceito — "
+    "ele ilustra o produto; não é enfeite. lado=esquerda|direita (o lado livre, longe do "
+    "rosto) ou centro (tela cheia/moldura); duracao 2–4 s; animacao montar|surgir|flutuar. "
+    "acao=transicao: faixas 3D da marca que TAMPAM a tela no instante em= (a troca de "
+    "assunto) — no máximo 1 ou 2 por vídeo. acao=criar: cena livre com primitivas "
+    "(cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo cubo/esfera/"
+    "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job: use consultar com job até "
+    "ok/erro ANTES de revisar. Não executa scripts arbitrários.",
+    {"properties":{"projeto":{"type":"string"},
+        "acao":{"type":"string","enum":["objeto","transicao","criar","consultar"]},
         "job":{"type":"string"},"nome":{"type":"string"},"inicio":{"type":"number"},
-        "cena":{"type":"object"}},"required":["projeto","acao"]},
+        "objeto":{"type":"string","enum":["casa","predio","chave","cadeado","escudo","documento",
+                                          "celular","calendario","check","estrela","grafico","mala"]},
+        "duracao":{"type":"number"},"lado":{"type":"string","enum":["esquerda","direita","centro"]},
+        "tamanho":{"type":"number"},"animacao":{"type":"string","enum":["montar","surgir","flutuar"]},
+        "em":{"type":"number"},"cena":{"type":"object"}},"required":["projeto","acao"]},
 )
 def arte_3d(c: Cliente,a: dict) -> str:
     import json
@@ -1663,7 +1687,12 @@ def arte_3d(c: Cliente,a: dict) -> str:
     if a.get("acao")=="consultar":
         r=next((j for j in c.get("/api/jobs",project_id=pid) if j["id"]==a.get("job") and j["kind"]=="arte-3d"),None)
         return json.dumps(r or {"erro":"job 3D não encontrado neste projeto"},ensure_ascii=False)
-    r=c.post(f"/api/projects/{pid}/arte-3d",{**a,"origem":c.origem})
+    if a.get("acao")=="objeto":
+        r=c.post(f"/api/projects/{pid}/objeto-3d",{**a,"origem":c.origem})
+    elif a.get("acao")=="transicao":
+        r=c.post(f"/api/projects/{pid}/transicao-3d",{**a,"origem":c.origem})
+    else:
+        r=c.post(f"/api/projects/{pid}/arte-3d",{**a,"origem":c.origem})
     return json.dumps(r,ensure_ascii=False)
 
 

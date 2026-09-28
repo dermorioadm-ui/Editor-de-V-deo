@@ -62,8 +62,9 @@ INSTRUCOES = (
     "MARCA E CENAS: leia marca antes da pós (nome exato, cores, logos, regras). "
     "Logo = grafico tipo=logo (de lado e transparente; camada=atras passa atrás "
     "da pessoa). cena tipo=moldura põe o vídeo num cartão de um lado e deixa o "
-    "outro livre para explicar; cena tipo=vidro3d separa fundo, logos e pessoa "
-    "em placas de vidro que giram e se juntam. O manual completo é a skill "
+    "outro livre para explicar; arte_3d acao=objeto põe um objeto 3D pronto "
+    "(casa, chave, cadeado…) nas cores da marca quando a fala nomeia a coisa. "
+    "Leia gosto antes: o que o dono já apagou não volta. O manual completo é a skill "
     "sharkcut-motion (habilidades/sharkcut-motion/SKILL.md)."
 )
 

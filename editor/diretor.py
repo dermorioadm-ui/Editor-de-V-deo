@@ -16,6 +16,11 @@ COMPOSICOES = ("gancho", "comparacao", "passos", "prova", "fechamento")
 
 GUIA = """
 DIREÇÃO CRIATIVA — você responde pela edição inteira, não por enfeitar a tela.
+0. Leia gosto PRIMEIRO: as notas do dono e o que ele já apagou/trocou do que
+   a IA pôs. Não existe roteiro fixo: cada vídeo nasce do que ELE fala sobre
+   o produto. Nada pirotécnico (a cena vidro3d está reprovada). Para ilustrar
+   uma coisa concreta do produto (imóvel, chave, contrato, app, reserva),
+   arte_3d acao=objeto dá um objeto 3D pronto nas cores da marca.
 1. Leia a transcrição inteira e a marca. Identifique público, ideia central,
    tensão, prova e ação desejada. Preserve ressalvas, negações e o significado.
    Não transforme uma hipótese em promessa nem invente números ou depoimentos.

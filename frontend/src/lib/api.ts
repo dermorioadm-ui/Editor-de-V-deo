@@ -29,6 +29,13 @@ export const api = {
   artes: (id: string) => req<any>(`/api/projects/${id}/arte`),
   criarArte: (id: string, dados: any) => post<any>(`/api/projects/${id}/pos/arte`, dados),
   criarArte3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/arte-3d`, dados),
+  // objetos 3D prontos (casa, chave, cadeado…) e a transição 3D, no Blender local
+  objeto3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/objeto-3d`, dados),
+  transicao3d: (id: string, dados: any) => post<Job>(`/api/projects/${id}/transicao-3d`, dados),
+  // o gosto do dono: as notas dele e o que ele já corrigiu no que a IA pôs
+  gosto: () => req<any>('/api/gosto'),
+  gostoNotas: (notas: string) => put<any>('/api/gosto', { notas }),
+  gostoEsquecer: () => del<any>('/api/gosto/correcoes'),
   health: () => req<any>('/api/health'),
   browse: (path: string) => req<any>(`/api/browse?path=${encodeURIComponent(path)}`),
   locate: (name: string, size: number) =>

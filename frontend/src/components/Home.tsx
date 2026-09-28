@@ -100,6 +100,9 @@ export default function Home() {
   // A MARCA do vídeo: o kit que a pós usa (cores, fonte, logos, grafia)
   const [marcas, setMarcas] = useState<any>(null)
   const [lendoPdf, setLendoPdf] = useState('')
+  // o gosto dele: notas livres + o que ele já corrigiu no que a IA pôs
+  const [gosto, setGosto] = useState<any>(null)
+  const [notasGosto, setNotasGosto] = useState('')
   const [marcaDaVez, setMarcaDaVez] = useState<string | null>(null)
   // formatos EXTRAS do mesmo corte — o principal é sempre a proporção da
   // gravação. Cada extra é uma geração de encode a mais, a partir da fonte.
@@ -190,6 +193,7 @@ export default function Home() {
     lerIa().catch(() => {})
     api.claudeEstado().then(setClaude).catch(() => setClaude(null))
     api.marca().then(setMarcas).catch(() => setMarcas(null))
+    api.gosto().then((g) => { setGosto(g); setNotasGosto(g?.notas ?? '') }).catch(() => {})
     api.looks().then(setLooks).catch(() => {})
     api.outputDir().then(setSaida).catch(() => {})
     api.presets().then((p) => { setPresets(p); }).catch(() => {})
@@ -711,6 +715,25 @@ export default function Home() {
               </span>
             </div>
           )}
+          <label className="block" data-meu-gosto="1">
+            <span className="label">meu gosto — vale para toda edição da IA (opcional)</span>
+            <textarea className="field w-full text-sm" rows={2} value={notasGosto} maxLength={2000}
+                      data-campo="gosto"
+                      placeholder="ex.: nada pirotécnico · 3D só para mostrar o produto · pele natural, sem filtro · no máximo 3 gráficos por minuto"
+                      onChange={(e) => setNotasGosto(e.target.value)}
+                      onBlur={async () => {
+                        if ((gosto?.notas ?? '') === notasGosto.trim()) return
+                        try { setGosto(await api.gostoNotas(notasGosto)) } catch { /* fica no campo */ }
+                      }} />
+            <span className="text-[11px] text-slate-500">
+              {gosto?.correcoes
+                ? <>a IA também aprendeu com {gosto.correcoes} correção(ões) suas (o que você apagou ou trocou do que ela pôs) ·{' '}
+                    <button className="underline" data-esquecer-gosto="1" onClick={async () => {
+                      try { setGosto(await api.gostoEsquecer()) } catch { /* nada */ }
+                    }}>esquecer as correções</button></>
+                : 'o que você apagar ou trocar do que a IA puser também vira gosto — ela não repete'}
+            </span>
+          </label>
           <label className="block" data-nome-arquivo="1">
             <span className="label">nome do vídeo na pasta (opcional)</span>
             <input className="field w-full text-sm" value={nomeArquivo} maxLength={120}

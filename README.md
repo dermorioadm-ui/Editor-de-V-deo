@@ -1763,6 +1763,51 @@ posição, tamanho, estilo, entrada, tempo — e **ver o quadro exato**. Arraste
 para mudar de lugar, estique a borda para mudar a duração. O botão **tirar o
 que o Claude pôs** leva só o que ele pôs, e o que você pôs à mão fica.
 
+### O seu gosto, e não um roteiro
+
+A pós da IA (Claude ou Codex) não segue mais uma receita fixa. Cada vídeo é
+decidido pelo que aquele roteiro fala sobre o produto: 2 a 4 recursos que
+servem àquele vídeo, nada pirotécnico (a cena de camadas de vidro girando
+saiu do padrão), e vídeo cheio, só você falando, também é uma escolha.
+
+- **Meu gosto** (primeira tela): escreva do seu jeito ("nada pirotécnico",
+  "3D só para mostrar o produto", "pele natural, sem filtro"). Vale para toda
+  edição da IA, acima de qualquer regra.
+- **Ela aprende com as suas correções.** Tudo o que você APAGA ou TROCA (pela
+  tela) do que a IA pôs fica anotado: "apagou cena vidro3d ×3", "trocou
+  estilo vidro → marca ×2". Na próxima edição, ela lê isso antes de começar —
+  o que você apagou não volta, o que você trocou já vem trocado. O que a
+  própria IA muda não conta. **esquecer as correções** zera o aprendizado.
+- Uma troca de estilo que você faz num gráfico da IA agora fica como você
+  deixou (antes, cartão sólido de gráfico da IA virava vidro mesmo depois de
+  você escolher).
+
+### Objetos 3D prontos e transição 3D (Blender)
+
+Com o Blender instalado, a aba **Pós → Artes e composição** (e o
+Claude/Codex, pela ferramenta `arte_3d`) põe **objetos 3D modelados de
+verdade**, no estilo de ícone 3D premium, nas cores da marca do vídeo,
+montando peça por peça e girando pouco — para ILUSTRAR o produto quando a
+fala nomeia a coisa:
+
+| objeto | quando |
+|---|---|
+| **casa** (com piscina e guarda-sol) | imóvel de temporada |
+| **prédio** | apartamento |
+| **chave** | check-in, entrega da chave |
+| **cadeado**, **escudo** | segurança, proteção, garantia |
+| **contrato** | termo assinado |
+| **celular** | app, mensagem |
+| **calendário** | reserva, data |
+| **check**, **estrela**, **gráfico**, **mala** | aprovado, avaliação, crescimento, hóspede |
+
+Sai com fundo transparente e sombra suave no chão, no lado livre (esquerda,
+direita ou centro), e some com um fade no fim. **Transição 3D**: três faixas
+da marca que tampam a tela inteira no ponto do cursor (a troca de assunto) e
+saem do outro lado. Tudo renderiza no Blender desta máquina (nada vai para a
+internet) — alguns minutos por objeto; o vídeo continua editável enquanto
+isso, e o resultado fica guardado.
+
 ### A marca, os logos e as cenas
 
 **Kit de marca.** A pós-edição sai na identidade da marca do vídeo. O Sharkcut

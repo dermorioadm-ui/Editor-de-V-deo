@@ -838,6 +838,10 @@ def importar(caminho: str | Path, *, ativar: bool = True, pasta_usuario: Path | 
         pasta = salvar_kit(kit, logos, fontes, Path(pasta_usuario or MK.PASTA_DO_USUARIO))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        # os objetos do PDFium têm ciclo com o documento: sem coletar aqui, eles
+        # só morrem na saída do programa, depois da biblioteca, e avisam vazamento
+        import gc
+        gc.collect()
     slug = pasta.name
     final = MK.carregar(slug)
     if not final:

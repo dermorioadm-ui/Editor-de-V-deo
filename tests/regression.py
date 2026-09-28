@@ -367,6 +367,7 @@ def main() -> int:
     testar_nome_do_arquivo_escolhido()
     testar_previa_com_animacoes_sempre_em_dia()
     testar_marca_pelo_pdf()
+    testar_gosto_aprendido_e_objetos_3d()
 
     print()
     if FALHAS:
@@ -7728,7 +7729,9 @@ def testar_pos_edicao_no_encode() -> None:
           and n["tamanho"] == 0.4 and n["entrada"] == "pop"
           and n["out_end"] - n["out_start"] >= 0.3,
           "valores fora da lista caem no padrão e números fora da faixa voltam")
-    for tipo in [t for t in MG.TIPOS if t != "logo"]:   # o logo é imagem, não ASS
+    # o logo é imagem, não ASS; a composição vetorial tem os próprios testes
+    # (tests/artes.py) e sem os elementos dela não há o que desenhar
+    for tipo in [t for t in MG.TIPOS if t not in ("logo", "composicao")]:
         for entrada in MG.ENTRADAS:
             ev = MG.eventos([{"tipo": tipo, "texto": "Teste de gráfico",
                               "itens": ["um", "dois"], "numero": 42,
@@ -7737,7 +7740,7 @@ def testar_pos_edicao_no_encode() -> None:
             if not ev:
                 check(False, f"{tipo}/{entrada} não gerou nada")
                 break
-    check(True, f"os {len(MG.TIPOS) - 1} tipos × {len(MG.ENTRADAS)} entradas geram eventos")
+    check(True, f"os {len(MG.TIPOS) - 2} tipos × {len(MG.ENTRADAS)} entradas geram eventos")
     # a fatia que começa no meio da entrada leva o tempo da animação NEGATIVO:
     # a animação continua de onde estava, não recomeça
     ev = MG.eventos([Grafico(tipo="destaque", texto="X", out_start=1.9, out_end=4.0,
@@ -9291,6 +9294,98 @@ def testar_marca_pelo_pdf() -> None:
     shutil.rmtree(MK.PASTA_DO_USUARIO / slug, ignore_errors=True)
     db.ex("DELETE FROM settings WHERE key=?", ("marca_ativa",)) if antes is None \
         else db.set_setting("marca_ativa", antes)
+
+
+
+def testar_gosto_aprendido_e_objetos_3d() -> None:
+    """ "Está engessado. Eu quero que faça as coisas de acordo com o meu
+    gosto." O que ELE apaga ou troca (pela tela) do que a IA pôs vira gosto
+    anotado, e o diretor recebe esse gosto antes de planejar; o que a própria
+    IA muda pelo MCP não conta. E os objetos 3D prontos (casa de temporada,
+    chave…) e a transição 3D: validados, nas cores da marca, e sem Blender a
+    rota diz o que falta em vez de quebrar."""
+    import tempfile
+    from pathlib import Path
+
+    from editor import blender_local as B
+    from editor import claude_editor as CE
+    from editor import gosto
+    from editor.mcp.cliente import Cliente
+    from tests.mcp import semear
+
+    print("\n-- gosto aprendido e objetos 3D")
+    client = TestClient(app)
+    gosto.esquecer()
+    gosto.salvar_notas("")
+    pid = semear(Cliente(transporte=client), Path(tempfile.mkdtemp(prefix="gosto_")))
+    ia = {"X-Sharkcut-Autor": "claude"}
+    g = client.post(f"/api/projects/{pid}/pos/graficos", headers=ia,
+                    json={"tipo": "titulo", "texto": "Três travas", "estilo": "vidro",
+                          "out_start": 0.5, "out_end": 2.5, "origem": "claude"}).json()["item"]
+    c = client.post(f"/api/projects/{pid}/pos/cenas", headers=ia,
+                    json={"tipo": "vidro3d", "out_start": 3.0, "out_end": 7.5,
+                          "origem": "claude"}).json()["item"]
+    m = client.post(f"/api/projects/{pid}/pos/graficos",
+                    json={"tipo": "titulo", "texto": "meu", "out_start": 1, "out_end": 2}).json()["item"]
+    # a IA mexendo no que ela mesma pôs: não é gosto dele
+    client.put(f"/api/projects/{pid}/pos/graficos/{g['id']}", headers=ia, json={"estilo": "limpo"})
+    check(gosto.ler()["sinais"] == [], "o que a IA muda pelo MCP não vira gosto")
+    # ELE, pela tela: troca o estilo, mexe só na posição, apaga a cena girando
+    client.put(f"/api/projects/{pid}/pos/graficos/{g['id']}", json={"estilo": "marca"})
+    client.put(f"/api/projects/{pid}/pos/graficos/{g['id']}", json={"x": 0.3})
+    client.delete(f"/api/projects/{pid}/pos/{c['id']}")
+    client.delete(f"/api/projects/{pid}/pos/{m['id']}")
+    sinais = gosto.ler()["sinais"]
+    check(len(sinais) == 2, f"só as correções DELE no que a IA pôs viram gosto ({sinais})")
+    r = gosto.resumo()
+    check("cena vidro3d ×1" in r and "estilo limpo → marca" in r,
+          f"o resumo diz o que ele apagou e o que trocou ({r!r})")
+    client.put("/api/gosto", json={"notas": "nada pirotécnico; 3D só para o produto"})
+    d = client.get("/api/gosto").json()
+    check(d["notas"].startswith("nada pirotécnico") and d["correcoes"] == 2
+          and "nada pirotécnico" in d["resumo"], "as notas dele ficam salvas e vão no resumo")
+    pedido = CE._com_habilidade(["PEDIDO"])
+    txt = "\n".join(pedido)
+    check(txt.index("O GOSTO DO DONO") < txt.index("HABILIDADE DE MOTION")
+          and "nada pirotécnico" in txt, "o diretor recebe o gosto ANTES da habilidade")
+    habil = CE.habilidade()
+    check("siga à risca" not in habil and "REPROVADA" in habil and "acao=objeto" in habil,
+          "a habilidade é critério, não roteiro: vidro3d reprovada e objeto 3D no vocabulário")
+    check("gosto" in CE._liberadas("pos"), "o diretor pode ler o gosto na pós")
+    client.delete("/api/gosto/correcoes")
+    check(client.get("/api/gosto").json()["correcoes"] == 0, "dá para esquecer as correções")
+
+    # objetos 3D prontos
+    cena = B.cena_de_objeto("casa", 3.0, B.paleta_do_kit({"cores": {"marca": "#1e6fd9"}}))
+    obj = cena["objetos"][0]
+    check(obj["modelo"] == "casa" and obj["paleta"]["marca"] == "#1E6FD9"
+          and cena["sombra"] and cena["camera"]["enquadrar"],
+          "objeto 3D: casa na cor da marca, com sombra e enquadramento automático")
+    t = B.cena_de_transicao(1080, 1920, 0.8, {"marca": "#FF385C"})
+    check(t["objetos"] == [] and t["transicao"]["altura"] == 9.6 and t["altura"] > t["largura"],
+          "transição 3D no formato do vídeo (vertical)")
+    for ruim in ({"tipo": "modelo", "modelo": "foguete"},
+                 {"tipo": "modelo", "modelo": "casa", "animacao": "explodir"},
+                 {"tipo": "modelo", "modelo": "casa", "paleta": {"marca": "vermelho"}}):
+        try:
+            B.normalizar({"objetos": [ruim]})
+            ok = False
+        except ValueError:
+            ok = True
+        check(ok, f"objeto 3D fora da lista é recusado ({ruim})")
+    antes = os.environ.get("EDITOR_BLENDER")
+    os.environ["EDITOR_BLENDER"] = str(Path(tempfile.gettempdir()) / "nao-existe-blender.exe")
+    try:
+        r = client.post(f"/api/projects/{pid}/objeto-3d", json={"objeto": "casa", "inicio": 1})
+        check(r.status_code == 400 and "Blender" in r.text,
+              f"sem Blender, a rota diz o que falta ({r.status_code})")
+        r = client.post(f"/api/projects/{pid}/objeto-3d", json={"objeto": "foguete"})
+        check(r.status_code == 400 and "casa" in r.text, "objeto desconhecido: diz quais existem")
+    finally:
+        if antes is None:
+            os.environ.pop("EDITOR_BLENDER", None)
+        else:
+            os.environ["EDITOR_BLENDER"] = antes
 
 
 if __name__ == "__main__":

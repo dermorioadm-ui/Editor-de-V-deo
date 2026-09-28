@@ -58,7 +58,9 @@ class Cliente:
             return self._pelo_transporte(metodo, rota, corpo)
         url = f"{self.base}{rota}"
         dados = None
-        cabecalhos = {"Accept": "application/json"}
+        # quem chama se identifica: o Sharkcut separa a correção DELE (pela
+        # tela) do que o Claude/Codex muda — só a dele vira gosto aprendido
+        cabecalhos = {"Accept": "application/json", "X-Sharkcut-Autor": self.origem or "ia"}
         if corpo is not None:
             dados = json.dumps(corpo).encode("utf-8")
             cabecalhos["Content-Type"] = "application/json"
@@ -78,7 +80,8 @@ class Cliente:
         return json.loads(bruto) if bruto.strip() else {}
 
     def _pelo_transporte(self, metodo: str, rota: str, corpo: dict | None):
-        r = self.transporte.request(metodo, rota, json=corpo)
+        r = self.transporte.request(metodo, rota, json=corpo,
+                                    headers={"X-Sharkcut-Autor": self.origem or "ia"})
         if r.status_code >= 400:
             raise ErroDoEditor(self._motivo(r.text, r.status_code))
         return r.json() if r.text.strip() else {}

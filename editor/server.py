@@ -1853,9 +1853,16 @@ def api_overlay_update(pid: str, oid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.delete("/api/projects/{pid}/overlays/{oid}")
-def api_overlay_delete(pid: str, oid: str) -> dict:
+def api_overlay_delete(pid: str, oid: str, request: Request) -> dict:
     project = _project(pid)
     alvo = next((o for o in project.plan.overlays if o.id == oid), None)
+    if alvo is not None and _pela_mao_dele(request):
+        d = alvo.to_dict()
+        from . import db as _db
+        linha = _db.q1("SELECT name FROM media WHERE id=? AND project_id=?",
+                       (alvo.media_id, project.id))
+        d["nome"] = (linha["name"] if linha else "") or ""
+        _anotar_gosto(project, "apagou", ("overlays", d))
     project.plan.overlays = [o for o in project.plan.overlays if o.id != oid]
     if alvo is not None:
         # cartão apagado na prévia: a linha de mídia dele vai junto, senão o
@@ -2505,10 +2512,39 @@ def _recorte_estado() -> dict:
     return recorte.estado()
 
 
-def _pos_mudar(pid: str, fn) -> dict:
+COLECOES_DA_POS = ("graficos", "camadas", "transicoes", "cenas", "overlays")
+
+
+def _item_da_pos(project, iid: str) -> tuple[str, dict] | None:
+    for nome in COLECOES_DA_POS:
+        for x in getattr(project.plan, nome):
+            if x.id == iid:
+                return nome, x.to_dict()
+    return None
+
+
+def _pela_mao_dele(request: Request | None) -> bool:
+    """A chamada veio da TELA (dele), e não do Claude/Codex pelo MCP? O
+    cliente do MCP se identifica no cabeçalho; o navegador não."""
+    return request is not None and not request.headers.get("x-sharkcut-autor")
+
+
+def _anotar_gosto(project, acao: str, antes: tuple[str, dict] | None,
+                  depois: dict | None = None) -> None:
+    if not antes:
+        return
+    from . import gosto
+    try:
+        gosto.registrar(acao, antes[0], antes[1], depois, project.id)
+    except OSError:
+        pass                        # gosto é memória, não pode derrubar a edição
+
+
+def _pos_mudar(pid: str, fn, iid: str | None = None, request: Request | None = None) -> dict:
     from . import pos_edicao
 
     project = _project(pid)
+    antes = _item_da_pos(project, iid) if iid and _pela_mao_dele(request) else None
     try:
         item = fn(pos_edicao, project)
     except KeyError as exc:
@@ -2516,8 +2552,10 @@ def _pos_mudar(pid: str, fn) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     project.save_plan()
-    return {"ok": True, "item": item.to_dict() if hasattr(item, "to_dict") else item,
-            **_pos(project)}
+    dados = item.to_dict() if hasattr(item, "to_dict") else item
+    if antes:
+        _anotar_gosto(project, "trocou", antes, dados if isinstance(dados, dict) else None)
+    return {"ok": True, "item": dados, **_pos(project)}
 
 
 @app.get("/api/projects/{pid}/pos")
@@ -2538,8 +2576,10 @@ def api_pos_grafico(pid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.put("/api/projects/{pid}/pos/graficos/{gid}")
-def api_pos_grafico_mudar(pid: str, gid: str, payload: dict = Body(...)) -> dict:
-    return _pos_mudar(pid, lambda pe, p: pe.por_grafico(p, payload, gid))
+def api_pos_grafico_mudar(pid: str, gid: str, request: Request, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_grafico(p, payload, gid,
+                                                       pela_mao=_pela_mao_dele(request)),
+                      gid, request)
 
 
 @app.post("/api/projects/{pid}/pos/camadas")
@@ -2548,8 +2588,8 @@ def api_pos_camada(pid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.put("/api/projects/{pid}/pos/camadas/{cid}")
-def api_pos_camada_mudar(pid: str, cid: str, payload: dict = Body(...)) -> dict:
-    return _pos_mudar(pid, lambda pe, p: pe.por_camada(p, payload, cid))
+def api_pos_camada_mudar(pid: str, cid: str, request: Request, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_camada(p, payload, cid), cid, request)
 
 
 @app.post("/api/projects/{pid}/pos/transicoes")
@@ -2558,8 +2598,8 @@ def api_pos_transicao(pid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.put("/api/projects/{pid}/pos/transicoes/{xid}")
-def api_pos_transicao_mudar(pid: str, xid: str, payload: dict = Body(...)) -> dict:
-    return _pos_mudar(pid, lambda pe, p: pe.por_transicao(p, payload, xid))
+def api_pos_transicao_mudar(pid: str, xid: str, request: Request, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_transicao(p, payload, xid), xid, request)
 
 
 @app.post("/api/projects/{pid}/pos/cenas")
@@ -2568,8 +2608,8 @@ def api_pos_cena(pid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.put("/api/projects/{pid}/pos/cenas/{cid}")
-def api_pos_cena_mudar(pid: str, cid: str, payload: dict = Body(...)) -> dict:
-    return _pos_mudar(pid, lambda pe, p: pe.por_cena(p, payload, cid))
+def api_pos_cena_mudar(pid: str, cid: str, request: Request, payload: dict = Body(...)) -> dict:
+    return _pos_mudar(pid, lambda pe, p: pe.por_cena(p, payload, cid), cid, request)
 
 
 # ------------------------------------------------------------------ marca
@@ -2694,24 +2734,30 @@ def api_projeto_marca(pid: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/projects/{pid}/pos/tirar")
-def api_pos_tirar(pid: str, payload: dict = Body(...)) -> dict:
+def api_pos_tirar(pid: str, request: Request, payload: dict = Body(...)) -> dict:
     from . import pos_edicao
 
     project = _project(pid)
-    n = pos_edicao.tirar(project, [str(i) for i in payload.get("ids") or []],
+    ids = [str(i) for i in payload.get("ids") or []]
+    antes = ([_item_da_pos(project, i) for i in ids] if _pela_mao_dele(request) else [])
+    n = pos_edicao.tirar(project, ids,
                          bool(payload.get("tudo")), str(payload.get("origem") or ""))
+    for a in antes:
+        _anotar_gosto(project, "apagou", a)
     project.save_plan()
     return {"ok": True, "tirados": n, **_pos(project)}
 
 
 @app.delete("/api/projects/{pid}/pos/{iid}")
-def api_pos_apagar(pid: str, iid: str) -> dict:
+def api_pos_apagar(pid: str, iid: str, request: Request) -> dict:
     from . import pos_edicao
 
     project = _project(pid)
+    antes = _item_da_pos(project, iid) if _pela_mao_dele(request) else None
     n = pos_edicao.tirar(project, [iid])
     if not n:
         raise HTTPException(404, "item da pós-edição não encontrado")
+    _anotar_gosto(project, "apagou", antes)
     project.save_plan()
     return {"ok": True, **_pos(project)}
 
@@ -2964,6 +3010,89 @@ def api_arte_3d(pid: str, payload: dict = Body(...)) -> dict:
             if job.kind == "arte-3d" and job.status in ("fila", "rodando"):
                 raise HTTPException(409, f"Aguarde o render 3D {job.id} antes de criar outra cena.")
         return get_queue().submit("arte-3d", pid, lambda ctx: blender_local.trabalho(pid, dados, ctx)).to_dict()
+
+
+# ------------------------------------------------------------------ gosto
+# O GOSTO DO DONO (editor/gosto.py): as notas dele e o que ele já corrigiu no
+# que a IA pôs. O diretor lê pela ferramenta ``gosto`` antes de planejar.
+@app.get("/api/gosto")
+def api_gosto() -> dict:
+    from . import gosto
+    return gosto.publico()
+
+
+@app.put("/api/gosto")
+def api_gosto_notas(payload: dict = Body(...)) -> dict:
+    from . import gosto
+    gosto.salvar_notas(str(payload.get("notas") or ""))
+    return gosto.publico()
+
+
+@app.delete("/api/gosto/correcoes")
+def api_gosto_esquecer() -> dict:
+    from . import gosto
+    gosto.esquecer()
+    return gosto.publico()
+
+
+LADOS_3D = {"esquerda": 0.27, "direita": 0.73, "centro": 0.5}
+
+
+@app.post("/api/projects/{pid}/objeto-3d")
+def api_objeto_3d(pid: str, payload: dict = Body(...)) -> dict:
+    """Um OBJETO 3D PRONTO (casa de temporada, chave, cadeado…) modelado no
+    Blender local, nas cores da marca do vídeo, montando peça por peça.
+    Entra na linha do tempo como sobreposição com fundo transparente."""
+    from . import blender_local as B
+    from . import marca as MK
+
+    p = _project(pid)
+    try:
+        objeto = str(payload.get("objeto") or "")
+        if objeto not in B.MODELOS:
+            raise ValueError(f"objeto 3D: um de {', '.join(B.MODELOS)}")
+        dur = B.numero(payload.get("duracao", 3.0), "duracao", 1.2, 8)
+        inicio = B.numero(payload.get("inicio", 0), "inicio", 0, svc.duracao_de_saida(p))
+        dur = min(dur, max(1.2, svc.duracao_de_saida(p) - inicio))
+        anim = str(payload.get("animacao") or "montar")
+        cena = B.cena_de_objeto(objeto, dur, B.paleta_do_kit(MK.do_projeto(p)), anim)
+        lado = str(payload.get("lado") or "centro")
+        if lado not in LADOS_3D:
+            raise ValueError("lado: esquerda, direita ou centro")
+        tamanho = B.numero(payload.get("tamanho", 0.62), "tamanho", 0.2, 1.2)
+        y = B.numero(payload.get("y", 0.42), "y", 0.1, 0.9)
+        if not B.executavel():
+            raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    dados = {"cena": cena, "inicio": inicio, "x": LADOS_3D[lado], "y": y, "tamanho": tamanho,
+             "some": True, "nome": f"3D · {objeto}", "origem": payload.get("origem") or "manual"}
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
+
+
+@app.post("/api/projects/{pid}/transicao-3d")
+def api_transicao_3d(pid: str, payload: dict = Body(...)) -> dict:
+    """A TRANSIÇÃO 3D: faixas da marca que tampam a tela no instante ``em``
+    (o corte, a troca de assunto) e saem do outro lado."""
+    from . import blender_local as B
+    from . import marca as MK
+    from .render.renderer import target_size
+
+    p = _project(pid)
+    try:
+        total = svc.duracao_de_saida(p)
+        em = B.numero(payload.get("em", 0), "em", 0, total)
+        dur = B.numero(payload.get("duracao", 0.8), "duracao", 0.5, 1.6)
+        inicio = max(0.0, min(em - dur / 2, total - dur))
+        W, H = target_size(p.info, p.plan.export)
+        cena = B.cena_de_transicao(W, H, dur, B.paleta_do_kit(MK.do_projeto(p)))
+        if not B.executavel():
+            raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    dados = {"cena": cena, "inicio": inicio, "cobrir": True, "nome": "Transição 3D",
+             "origem": payload.get("origem") or "manual"}
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
 
 
 @app.post("/api/projects/{pid}/diretor")

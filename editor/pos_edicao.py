@@ -420,7 +420,7 @@ def _sem_cartao_solido(project, novo: dict) -> dict:
     return {**novo, "estilo": "vidro"}
 
 
-def _conferir_grafico(project, novo: dict) -> dict:
+def _conferir_grafico(project, novo: dict, pela_mao: bool = False) -> dict:
     """O nome da marca na grafia exata, e o logo pedido tem de existir."""
     kit = MK.do_projeto(project)
     for k in ("texto", "subtexto", "prefixo", "sufixo"):
@@ -429,7 +429,9 @@ def _conferir_grafico(project, novo: dict) -> dict:
     novo["itens"] = [({**it, "texto": MK.corrigir_grafia(it.get("texto", ""), kit)}
                       if isinstance(it, dict) else MK.corrigir_grafia(it, kit))
                      for it in novo.get("itens") or []]
-    novo = _sem_cartao_solido(project, novo)
+    if not pela_mao:
+        # ele trocou o estilo pela tela, mesmo num gráfico que a IA pôs: fica
+        novo = _sem_cartao_solido(project, novo)
     if novo.get("tipo") == "logo":
         disponiveis = sorted(MK.logos(kit))
         if novo.get("logo") not in disponiveis:
@@ -481,15 +483,17 @@ def aplicar_gancho(project):
     return g
 
 
-def por_grafico(project, dados: dict, gid: str | None = None) -> Grafico:
-    """Cria (sem ``gid``) ou atualiza um gráfico. Não grava."""
+def por_grafico(project, dados: dict, gid: str | None = None,
+                pela_mao: bool = False) -> Grafico:
+    """Cria (sem ``gid``) ou atualiza um gráfico. Não grava. ``pela_mao``: a
+    mudança veio DELE, pela tela — a escolha dele vale, sem troca automática."""
     plan = project.plan
     if gid:
         g = _achar(plan.graficos, gid)
         if g is None:
             raise KeyError(f"gráfico {gid} não existe")
         base = {**g.to_dict(), **{k: v for k, v in dados.items() if v is not None}}
-        novo = _conferir_grafico(project, MG.normalizar(base, _duracao(project)))
+        novo = _conferir_grafico(project, MG.normalizar(base, _duracao(project)), pela_mao)
         for k, v in novo.items():
             if k != "id":
                 setattr(g, k, v)

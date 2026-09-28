@@ -575,7 +575,7 @@ def _ajuda(caminho: str) -> str:
 MODOS = ("completo", "edicao", "pos")
 FERRAMENTAS_DA_POS = {"grafico", "camada", "transicao", "cena", "tirar_da_pos", "compor", "arte", "arte_3d"}
 FERRAMENTAS_DE_LEITURA = {"pos_contexto", "transcricao", "ver_projeto", "ver_quadros",
-                          "analisar_cena", "estado_do_editor", "marca", "direcao"}
+                          "analisar_cena", "estado_do_editor", "marca", "direcao", "gosto"}
 
 
 def _nomes() -> list[str]:
@@ -695,9 +695,11 @@ SISTEMA = (
 )
 
 GUIA_DA_POS = (
-    "PÓS-EDIÇÃO seguindo a HABILIDADE DE MOTION (no fim deste pedido): marca → "
-    "pos_contexto → analisar_cena → um PLANO por momento do vídeo → cenas "
-    "(moldura, vidro3d), gráficos (títulos e listas em vidro, logo de lado, "
+    "PÓS-EDIÇÃO seguindo a HABILIDADE DE MOTION (no fim deste pedido): gosto → marca → "
+    "pos_contexto → analisar_cena → um PLANO por momento do vídeo, escolhendo "
+    "só o que ESTE roteiro pede (nada de roteiro fixo, nada pirotécnico; "
+    "vidro3d está reprovada) → cena moldura quando explica, objeto 3D pronto "
+    "(arte_3d acao=objeto) quando a fala nomeia uma coisa do produto, gráficos (títulos e listas em vidro, logo de lado, "
     "texto atrás da pessoa, e GRÁFICOS DE DADOS animados — barras que sobem, "
     "linha que se desenha, rosca, ícones desenhados — sempre que a fala tem "
     "número, crescimento, comparação ou um 'sim/não'), poucas transições → "
@@ -726,8 +728,17 @@ def habilidade() -> str:
 
 
 def _com_habilidade(linhas: list[str]) -> list[str]:
+    """A habilidade de motion e, ANTES dela, o gosto do dono (o que ele
+    escreveu e o que ele já corrigiu) — o gosto vale mais que a receita."""
+    from . import gosto
+
+    try:
+        g = gosto.resumo()
+    except OSError:
+        g = ""
     h = habilidade()
-    return linhas + (["", "=== HABILIDADE DE MOTION (siga) ===", h] if h else [])
+    return (linhas + (["", "=== O GOSTO DO DONO (vale acima de tudo) ===", g] if g else [])
+            + (["", "=== HABILIDADE DE MOTION (critério, não roteiro) ===", h] if h else []))
 
 
 def instalar_habilidade() -> dict:
