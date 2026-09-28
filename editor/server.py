@@ -3106,13 +3106,15 @@ def api_objeto_3d(pid: str, payload: dict = Body(...)) -> dict:
             raise ValueError("lado: esquerda, direita ou centro")
         tamanho = B.numero(payload.get("tamanho", 0.62), "tamanho", 0.2, 1.2)
         y = B.numero(payload.get("y", 0.42), "y", 0.1, 0.9)
-        if not B.executavel():
+        if not B.disponivel(cena):
             raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     dados = {"cena": cena, "inicio": inicio, "x": LADOS_3D[lado], "y": y, "tamanho": tamanho,
              "some": True, "nome": f"3D · {objeto}", "origem": payload.get("origem") or "manual"}
-    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
+    # o que JÁ FOI GERADO entra na hora, sem esperar render nenhum na fila
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx),
+                              paralelo=B.tem_pronto(cena)).to_dict()
 
 
 @app.post("/api/projects/{pid}/logo-3d")
@@ -3138,22 +3140,24 @@ def api_logo_3d(pid: str, payload: dict = Body(...)) -> dict:
         lado = str(payload.get("lado") or "direita")
         if lado not in LADOS_3D:
             raise ValueError("lado: esquerda, direita ou centro")
-        if not B.executavel():
-            raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
         cams = logo3d.camadas(caminho)
+        cena = B.cena_de_logo(cams["camadas"], gancho3d.DURACAO_DO_RENDER)
+        if not B.disponivel(cena):
+            raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     from .render import recorte
 
     atras = bool(payload.get("atras", True)) and recorte.pronto()
     x = LADOS_3D[lado]
-    dados = {"cena": B.cena_de_logo(cams["camadas"], gancho3d.DURACAO_DO_RENDER),
+    dados = {"cena": cena,
              "inicio": inicio, "janela": dur, "x": x, "y": 0.3,
              "tamanho": B.numero(payload.get("tamanho", 0.3), "tamanho", 0.1, 1.0),
              "cache": str(gancho3d.CACHE), "camada": "atras" if atras else "",
              "some": not atras, "trajeto": gancho3d._trajeto(x, dur, atras, 0.0),
              "nome": f"Logo 3D · {nome}", "origem": payload.get("origem") or "manual"}
-    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx),
+                              paralelo=B.tem_pronto(cena)).to_dict()
 
 
 @app.post("/api/projects/{pid}/transicao-3d")
@@ -3172,13 +3176,14 @@ def api_transicao_3d(pid: str, payload: dict = Body(...)) -> dict:
         inicio = max(0.0, min(em - dur / 2, total - dur))
         W, H = target_size(p.info, p.plan.export)
         cena = B.cena_de_transicao(W, H, dur, B.paleta_do_kit(MK.do_projeto(p)))
-        if not B.executavel():
+        if not B.disponivel(cena):
             raise ValueError("Blender não encontrado. " + B.estado()["instalacao"])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     dados = {"cena": cena, "inicio": inicio, "cobrir": True, "nome": "Transição 3D",
              "origem": payload.get("origem") or "manual"}
-    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx)).to_dict()
+    return get_queue().submit("arte-3d", pid, lambda ctx: B.trabalho(pid, dados, ctx),
+                              paralelo=B.tem_pronto(cena)).to_dict()
 
 
 @app.post("/api/projects/{pid}/diretor")

@@ -254,11 +254,42 @@ def fps_de_saida(main: MediaInfo, export: ExportParams) -> float:
 
     Inventar quadro que não foi filmado não melhora nada e custa o dobro.
     """
-    fonte = float(main.fps or 30.0)
+    fonte = taxa_padrao(float(main.fps or 30.0))
     pedido = float(getattr(export, "fps", 0.0) or 0.0)
     if pedido <= 0:
         return fonte
     return min(pedido, fonte)
+
+
+TAXAS_PADRAO = (24000 / 1001, 24.0, 25.0, 30000 / 1001, 30.0, 50.0, 60000 / 1001, 60.0)
+
+
+def taxa_padrao(fps: float) -> float:
+    """Celular grava com taxa VARIÁVEL: a média sai 28,24 fps, e a saída nessa
+    taxa quebrada perdia 1 quadro a cada ~16 e andava irregular numa tela de
+    60 Hz. A saída encaixa na taxa padrão mais próxima (VFR vira 30)."""
+    if fps <= 0:
+        return 30.0
+    melhor = min(TAXAS_PADRAO, key=lambda t: abs(t - fps))
+    if abs(melhor - fps) / fps < 0.004:
+        return fps if abs(fps - round(fps)) < 1e-6 else melhor
+    # a média de um VFR fica um pouco ABAIXO da taxa em que o celular grava
+    for lo, hi, alvo in ((26.0, 30.0, 30.0), (21.5, 24.0, 24.0), (53.0, 60.0, 60.0)):
+        if lo <= fps < hi:
+            return alvo
+    return fps                                   # 15, 48, 120…: a taxa dela mesma
+
+
+def quadros_do_trecho(seg: VideoSegment, fps: float) -> int:
+    """Quantos quadros o trecho tem na saída — pela GRADE do vídeo inteiro.
+
+    Cada trecho arredondado por conta própria somava ±½ quadro de erro por
+    corte (60 cortes: a boca atrasava/adiantava ~0,1 s no fim do vídeo).
+    Pelas bordas na linha do tempo, a soma dos trechos é sempre o total.
+    """
+    a = int(round(seg.t_start * fps))
+    b = int(round((seg.t_start + seg.out_theoretical) * fps))
+    return max(1, b - a)
 
 
 def regua_da_legenda(main: MediaInfo, export: ExportParams,
@@ -461,9 +492,16 @@ def _marcar_transicoes(segs: list[VideoSegment], plan: EditPlan,
         return
     inicio = {placed.clip.id: placed.out_start for placed in timeline}
     alvo = TR.resolver(trans, [placed.clip for placed in timeline])
+    # uma CENA (moldura, vidro) que atravessa a emenda já segura o quadro: a
+    # transição por cima dava zoom/giro na composição inteira — o cartão
+    # "pulsava" em cada corte dos tópicos
+    cenas = [(float(CN._v(c, "out_start", 0.0)), float(CN._v(c, "out_end", 0.0)))
+             for c in CN.no_trecho(getattr(plan, "cenas", None) or [], 0.0, 1e9)]
     for t in trans:
         emenda = inicio.get(alvo.get(t.id, ""))
         if emenda is None:
+            continue
+        if any(a < emenda - 0.05 and b > emenda + 0.05 for a, b in cenas):
             continue
         metade = max(0.1, min(TR.DUR_MAX, float(t.duracao))) / 2
         for s in segs:
@@ -500,6 +538,13 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # com o filtro ass do próprio ffmpeg, texto "ISSO MUDA TUDO".)
     play_w, play_h, style_saida = regua_da_legenda(main, plan.export, plan.style)
     fps = fps_de_saida(main, plan.export)
+    # QUANTOS QUADROS O TRECHO TEM DE VERDADE: a linha do tempo quantiza para
+    # cima (ceil), e round(nominal*fps) dava 1 a menos em ~metade dos trechos.
+    # As cenas e as transições contavam com esse número, e o quadro que
+    # sobrava caía no ramo "sem cena": a moldura SUMIA no último quadro antes
+    # do corte — o vídeo cheio piscava 33 ms e a moldura voltava ("leg entre
+    # os cortes quando a tela fecha")
+    n_quadros = quadros_do_trecho(seg, fps)
     inputs: list[str] = []
     pre: list[str] = []
 
@@ -509,8 +554,10 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         pre += ["-loop", "1", "-framerate", f"{fps}",
                 "-t", f"{seg.out_theoretical:.6f}", "-i", seg.source_path]
     else:
+        # 2 quadros a mais da fonte: o trecho é cortado pelo NÚMERO de quadros
+        # na saída (-frames:v), e não pode faltar imagem para o último
         pre += ["-ss", f"{max(0.0, seg.src_start):.6f}",
-                "-t", f"{max(0.02, seg.src_duration):.6f}",
+                "-t", f"{max(0.02, seg.src_duration) + 2.0 * seg.speed / fps:.6f}",
                 "-i", seg.source_path]
 
     chain: list[str] = []
@@ -540,6 +587,8 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     else:
         chain.append(f"setpts=(PTS-STARTPTS)/{seg.speed:.6f}")
         chain.append(f"fps={fps}")
+        # no fim do arquivo não há quadro a mais para ler: repete o último
+        chain.append("tpad=stop_mode=clone:stop=2")
         info = seg.info
         needs_fit = bool(info and info.display_size != (width, height))
         fit = seg.fit or {}
@@ -807,7 +856,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
             return [p for p in (MK.caminho_do_logo(kit, n) for n in (getattr(c, "logos", None) or []))
                     if p]
         cn_graph = CN.grafo(cur_tag, "__vcn", cenas_seg, width, height, fps,
-                            max(1, int(round(seg.nominal * fps))), seg.t_start,
+                            n_quadros, seg.t_start,
                             plan.export.pix_fmt, kit, centro, mascara_cena, img,
                             ass_dir.parent / "cenas", logos_de)
         # A MÁSCARA SÓ ENTRA SE A CENA A USA. Uma cena de vidro que encosta no
@@ -826,7 +875,7 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     # por cima, o desfoque de proteção) e antes do que é GRÁFICO — o título e
     # a legenda não mergulham no zoom nem somem no flash.
     tr = TR.grafo(cur_tag, "__vt", width, height, fps,
-                  max(1, int(round(seg.nominal * fps))),
+                  n_quadros,
                   seg.trans_entra, seg.trans_sai, plan.export.pix_fmt)
     if tr:
         graph_parts.append(tr)
@@ -882,11 +931,11 @@ def _build_video_command(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
     args = [FFMPEG, "-y", "-v", "error", *pre,
             "-filter_complex", filtergraph, "-map", "[vout]"]
     args += encoder_args(plan.export, main, hw)
-    if ov_seg or mascara or imagens:
-        # o overlay (framesync) repete o último quadro do principal enquanto a
-        # entrada do PNG tiver quadros — sem esta trava, cada trecho com
-        # sobreposição saía mais longo que o planejado e a soma inflava o vídeo
-        args += ["-t", f"{seg.out_theoretical:.6f}"]
+    # O TRECHO SAI COM EXATAMENTE n_quadros. O "-t" com 6 casas arredondava
+    # para cima em 1/3 dos casos e deixava passar um quadro CONGELADO antes do
+    # corte (com sobreposição, o overlay repete o último quadro); e bloco com
+    # velocidade saía com 1 quadro a menos
+    args += ["-frames:v", str(n_quadros)]
     return args, inputs
 
 
@@ -1076,6 +1125,10 @@ def _chave_do_trecho(seg: VideoSegment, plan: EditPlan, main: MediaInfo,
         "ov_ref": tuple(main.display_size) if seg_overlays else None,
         "hw": hw, "size": target_size(main, plan.export),
         "fps": fps_de_saida(main, plan.export),
+        "quadros": quadros_do_trecho(seg, fps_de_saida(main, plan.export)),
+        # o motor mudou a CONTAGEM de quadros e o tempo das cenas: trecho
+        # encodado antes (com a moldura sumindo no fim) não vale mais
+        "motor": 3,
     })
     return key, seg_cues, seg_blurs, seg_overlays
 

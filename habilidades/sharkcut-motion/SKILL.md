@@ -76,8 +76,9 @@ daqui.
   `predio`; chave/check-in → `chave`; segurança → `cadeado` ou `escudo`;
   contrato/termo → `documento`; app/mensagem → `celular`; reserva/data →
   `calendario`; aprovado → `check`; avaliação → `estrela`; crescimento →
-  `grafico`; hóspede/viagem → `mala`. Modelado no Blender, cores da marca,
-  monta peça por peça, 2–4 s, no lado livre (longe do rosto). Um por ideia.
+  `grafico`; hóspede/viagem → `mala`. JÁ VEM PRONTO no Sharkcut (entra na
+  hora, sem Blender), cores da marca, monta peça por peça, 2–4 s, no lado
+  livre (longe do rosto). Um por ideia.
   QUANDO O DONO PEDE 3D, É PRIORIDADE: peça TODOS os 3D logo depois do plano,
   antes do resto (eles renderizam numa faixa própria enquanto você faz os
   gráficos); não fique parado esperando — o Sharkcut espera o 3D antes do
@@ -264,8 +265,10 @@ Construa uma composição para a ideia. Use cores da marca, preserve a pessoa
 e a faixa da legenda e confira os quadros. Não transforme números de exemplo
 em afirmações do vídeo. Não cubra a pessoa com painel opaco.
 
-`arte_3d` usa Blender local opcional. Consulte a disponibilidade primeiro;
-crie a cena com objetos, materiais e câmera em dados; aguarde o job concluir
+Objetos 3D, transição 3D e todo 3D já gerado entram prontos, sem Blender.
+Só a cena livre (`arte_3d acao=criar`) usa o Blender local opcional. Consulte
+a disponibilidade primeiro; crie a cena com objetos, materiais e câmera em
+dados; aguarde o job concluir
 antes de revisar. O resultado é uma sobreposição com alfa. Não afirme que
 há rastreamento, rotoscopia livre, importação MOGRT ou avaliação do som apenas
 porque o render terminou. A documentação completa está em MOTOR-CRIATIVO.md.

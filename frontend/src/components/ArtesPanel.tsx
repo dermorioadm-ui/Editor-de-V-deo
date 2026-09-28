@@ -40,8 +40,8 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
     setBusy(true); snapshot()
     try {
       await api.objeto3d(project.id, { objeto, inicio, duracao: 3, lado: lado3d, origem: 'manual' })
-      toast('ok', `Objeto 3D (${objeto}) no Blender`,
-        'Renderiza nesta máquina e entra na linha do tempo quando terminar — acompanhe no rodapé.')
+      toast('ok', `Objeto 3D (${objeto})`,
+        'Já vem pronto: entra na linha do tempo em segundos, nas cores da marca.')
     } catch (e: any) { toast('warn', 'Não deu para criar o objeto 3D', String(e.message ?? e)) }
     finally { setBusy(false) }
   }
@@ -49,7 +49,7 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
     setBusy(true); snapshot()
     try {
       await api.transicao3d(project.id, { em: Math.max(0, getPlayhead()), duracao: 0.8, origem: 'manual' })
-      toast('ok', 'Transição 3D no Blender', 'As faixas da marca tampam a tela no ponto do cursor.')
+      toast('ok', 'Transição 3D', 'As faixas da marca tampam a tela no ponto do cursor.')
     } catch (e: any) { toast('warn', 'Não deu para criar a transição 3D', String(e.message ?? e)) }
     finally { setBusy(false) }
   }
@@ -70,7 +70,7 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
           className="btn text-xs text-left disabled:opacity-40">{String(nome)}</button>)}
     </div>
     <p className="text-[11px] text-slate-500">Exemplos editáveis no ponto do cursor. A escolha de texto e números é sua.</p>
-    {catalogo?.blender?.disponivel && <div className="space-y-2 border-t border-line/60 pt-2" data-objetos-3d>
+    <div className="space-y-2 border-t border-line/60 pt-2" data-objetos-3d>
       <div className="flex items-center gap-2">
         <h4 className="text-xs font-semibold text-slate-200">Objeto 3D pronto</h4>
         <select className="field text-xs py-0.5" value={lado3d} onChange={e => setLado3d(e.target.value)}>
@@ -83,9 +83,9 @@ export default function ArtesPanel({ onChanged, onSelect, snapshot }: {
       </div>
       <button disabled={busy} data-transicao-3d onClick={transicao3d}
         className="btn btn-xs w-full disabled:opacity-40">Transição 3D no cursor</button>
-      <p className="text-[11px] text-slate-500">Modelados no Blender desta máquina, nas cores da marca,
-        montando peça por peça. Leva alguns minutos; o vídeo continua editável enquanto isso.</p>
-    </div>}
+      <p className="text-[11px] text-slate-500">Já vêm prontos com o Sharkcut (não precisam do Blender),
+        nas cores da marca, montando peça por peça. Entram na hora.</p>
+    </div>
     <div className="flex items-center gap-2 flex-wrap text-[11px]" data-blender-estado={blender?.disponivel ? 'ok' : 'falta'}>
       <span className={blender?.disponivel ? 'text-emerald-300' : 'text-amber-300'}>
         {blender == null ? 'procurando o Blender…'

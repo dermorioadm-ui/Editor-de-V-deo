@@ -1788,10 +1788,10 @@ gancho está na tela. Apagou o do canto na aba Pós: ele não volta.
   deixou (antes, cartão sólido de gráfico da IA virava vidro mesmo depois de
   você escolher).
 
-### Objetos 3D prontos e transição 3D (Blender)
+### Objetos 3D prontos e transição 3D (já vêm prontos, sem Blender)
 
-Com o Blender instalado, a aba **Pós → Artes e composição** (e o
-Claude/Codex, pela ferramenta `arte_3d`) põe **objetos 3D modelados de
+A aba **Pós → Artes e composição** (e o Claude/Codex, pela ferramenta
+`arte_3d`) põe **objetos 3D modelados de
 verdade**, no estilo de ícone 3D premium, nas cores da marca do vídeo,
 montando peça por peça e girando pouco — para ILUSTRAR o produto quando a
 fala nomeia a coisa:
@@ -1810,9 +1810,17 @@ fala nomeia a coisa:
 Sai com fundo transparente e sombra suave no chão, no lado livre (esquerda,
 direita ou centro), e some com um fade no fim. **Transição 3D**: três faixas
 da marca que tampam a tela inteira no ponto do cursor (a troca de assunto) e
-saem do outro lado. Tudo renderiza no Blender desta máquina (nada vai para a
-internet) — alguns minutos por objeto; o vídeo continua editável enquanto
-isso, e o resultado fica guardado.
+saem do outro lado.
+
+**Os 12 objetos e a transição (vertical, horizontal, quadrado e 4:5) já vêm
+prontos com o Sharkcut** (`editor/prontos3d`): entram na linha do tempo em
+segundos, sem abrir o Blender. Marca de outra cor: a mesma peça sai na cor
+dela. E **todo 3D que o Blender já gerou uma vez nesta máquina** — em
+qualquer projeto, antes de qualquer atualização — fica numa biblioteca
+(`prontos-3d` na pasta de dados) e é reaproveitado pelo que ele MOSTRA (o
+objeto e a cor, o logo, a transição no formato), não pela versão do
+programa. O Blender só entra para o que nunca foi gerado (cena livre, logo
+novo), e o resultado fica guardado.
 
 ### Logos 3D no gancho (Airbnb, Booking…), passando por trás de você
 

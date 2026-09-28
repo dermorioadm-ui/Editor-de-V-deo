@@ -1,0 +1,122 @@
+[
+ {
+  "base": "modelo:casa",
+  "marca": "#FF385C",
+  "arquivo": "modelo-casa.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:predio",
+  "marca": "#FF385C",
+  "arquivo": "modelo-predio.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:chave",
+  "marca": "#FF385C",
+  "arquivo": "modelo-chave.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:cadeado",
+  "marca": "#FF385C",
+  "arquivo": "modelo-cadeado.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:escudo",
+  "marca": "#FF385C",
+  "arquivo": "modelo-escudo.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:documento",
+  "marca": "#FF385C",
+  "arquivo": "modelo-documento.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:celular",
+  "marca": "#FF385C",
+  "arquivo": "modelo-celular.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:calendario",
+  "marca": "#FF385C",
+  "arquivo": "modelo-calendario.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:check",
+  "marca": "#FF385C",
+  "arquivo": "modelo-check.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:estrela",
+  "marca": "#FF385C",
+  "arquivo": "modelo-estrela.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:grafico",
+  "marca": "#FF385C",
+  "arquivo": "modelo-grafico.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "modelo:mala",
+  "marca": "#FF385C",
+  "arquivo": "modelo-mala.webm",
+  "animacao": "montar",
+  "duracao": 2.5,
+  "largura": 540,
+  "altura": 540,
+  "fps": 30
+ }
+]

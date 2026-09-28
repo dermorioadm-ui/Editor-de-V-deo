@@ -78,8 +78,9 @@ def pedidos(project) -> list[dict]:
     from .render import recorte
 
     jan = janela(project)
-    if not jan or not B.executavel():
+    if not jan:
         return []
+    blender = bool(B.executavel())
     nomes = list(getattr(project.plan, "gancho_logos", None) or [])
     if not nomes:
         return []
@@ -99,6 +100,8 @@ def pedidos(project) -> list[dict]:
         except ValueError:
             continue
         cena = B.cena_de_logo(cams["camadas"], DURACAO_DO_RENDER)
+        if not blender and not B.tem_pronto(cena, [CACHE]):
+            continue            # sem Blender, só o logo que JÁ foi gerado
         lado = LADOS[k % 2] if len(nomes) > 1 else LADOS[1]
         out.append({"cena": cena, "inicio": ini, "janela": dur, "x": lado, "y": 0.42,
                     "tamanho": 0.3, "cache": str(CACHE), "camada": "atras" if atras else "",
@@ -124,7 +127,7 @@ def aplicar(project) -> int:
         ids = {o.id for o in sobra}
         project.plan.overlays = [o for o in project.plan.overlays if o.id not in ids]
         project.save_plan()
-    if not queridos or not B.executavel():
+    if not queridos:
         return 0
     ini, fim = jan
     dur = min(DURACAO_DO_RENDER, fim - ini)
@@ -150,7 +153,9 @@ def aplicar(project) -> int:
             finally:
                 with _trava:
                     _pendentes.discard(_c)
-        fila.submit("arte-3d", project.id, rodar)
+        # o logo que JÁ FOI GERADO (em qualquer vídeo) entra na hora
+        fila.submit("arte-3d", project.id, rodar,
+                    paralelo=B.tem_pronto(dados["cena"], [CACHE]))
         n += 1
     return n
 

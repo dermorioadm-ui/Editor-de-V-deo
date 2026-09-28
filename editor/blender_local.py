@@ -195,7 +195,7 @@ def _camadas_do_logo(obj):
     return {"camadas":out,"animacao":anim}
 
 
-def cena_de_logo(camadas, duracao=4.5, fps=24, lado=640):
+def cena_de_logo(camadas, duracao=4.5, fps=30, lado=640):
     """O logo 3D sozinho, de frente, flutuando — fundo transparente, sem chão
     (ele flutua no ar, atrás e ao lado da pessoa)."""
     return normalizar({"duracao":duracao,"largura":lado,"altura":lado,"fps":fps,"amostras":10,
@@ -297,7 +297,7 @@ def paleta_do_kit(kit):
     return _paleta(p)
 
 
-def cena_de_objeto(modelo, duracao=3.0, paleta=None, animacao="montar", lado=720, fps=24):
+def cena_de_objeto(modelo, duracao=3.0, paleta=None, animacao="montar", lado=720, fps=30):
     """O objeto pronto numa cena de estúdio: luz macia, sombra no chão
     invisível, câmera de três-quartos que enquadra sozinha."""
     return normalizar({"duracao":duracao,"largura":lado,"altura":lado,"fps":fps,"amostras":10,
@@ -307,7 +307,7 @@ def cena_de_objeto(modelo, duracao=3.0, paleta=None, animacao="montar", lado=720
                                    "paleta":paleta or {}}]})
 
 
-def cena_de_transicao(W, H, duracao=0.8, paleta=None, fps=24):
+def cena_de_transicao(W, H, duracao=0.8, paleta=None, fps=30):
     """Três faixas da marca que tampam a tela no meio do tempo — o corte fica ali."""
     esc=min(1.0,960/max(W,H))
     w,h=max(64,int(W*esc)//2*2),max(64,int(H*esc)//2*2)
@@ -381,6 +381,191 @@ def renderizar(raw,pasta,ctx):
     return video,cena
 
 
+# ------------------------------------------------ o que JÁ FOI GERADO
+# "Os elementos já foram gerados": o cache era por PROJETO e pela versão do
+# programa e do Blender — projeto novo, ou qualquer atualização do Sharkcut,
+# renderizava tudo de novo (minutos por objeto na CPU) e o vídeo saía sem o
+# 3D. Agora a chave é O QUE o 3D mostra (o objeto e a cor da marca, o logo, a
+# transição no formato): o que já saiu uma vez — em qualquer projeto, em
+# qualquer versão — ou que vem pronto com o programa entra NA HORA.
+PRONTOS=Path(__file__).with_name("prontos3d")
+_memo={}
+
+
+def _marca(paleta):
+    return str((paleta or {}).get("marca") or "#FF385C").upper()
+
+
+def assinatura(cena):
+    """O QUE a cena mostra, sem COMO foi renderizada (duração, fps, amostras,
+    tamanho, versão). None para cena livre (essa só o Blender faz)."""
+    try:
+        cena=normalizar(cena)
+    except (ValueError,TypeError):
+        return None
+    objs=cena.get("objetos") or []
+    if cena.get("transicao"):
+        return f"transicao:{cena['largura']/cena['altura']:.2f}:{_marca(cena['transicao'].get('paleta'))}"
+    if len(objs)==1 and objs[0]["tipo"]=="modelo":
+        return f"modelo:{objs[0]['modelo']}:{_marca(objs[0].get('paleta'))}"
+    if objs and all(o["tipo"]=="logo3d" for o in objs):
+        g=json.dumps([o["camadas"] for o in objs],sort_keys=True)
+        return "logo3d:"+hashlib.sha256(g.encode()).hexdigest()[:20]
+    return None
+
+
+def _biblioteca():
+    from .config import DATA_DIR
+    return DATA_DIR/"prontos-3d"
+
+
+def _gerados(extra=()):
+    """Tudo que o Blender JÁ gerou nesta máquina: a pasta de cada projeto, o
+    cache global dos logos e a biblioteca. Lê cada cena.json uma vez só."""
+    from .config import DATA_DIR, PROJECTS_DIR
+    pastas=[*PROJECTS_DIR.glob("*/artes-3d/*"),*(DATA_DIR/"cache-3d").glob("*"),
+            *_biblioteca().glob("*"),*(q for e in extra for q in Path(e).glob("*"))]
+    out=[]
+    for d in pastas:
+        v=d/"arte.mov"
+        try:
+            st=v.stat()
+        except OSError:
+            continue
+        if st.st_size<=0: continue
+        chave=(str(v),st.st_mtime_ns)
+        if chave not in _memo:
+            try:
+                cena=normalizar(json.loads((d/"cena.json").read_text(encoding="utf-8")))
+            except (OSError,ValueError,TypeError):
+                cena=None
+            _memo[chave]=(assinatura(cena) if cena else None,cena)
+        a,cena=_memo[chave]
+        if a: out.append({"assinatura":a,"arquivo":v,"cena":cena,"quando":st.st_mtime})
+    return out
+
+
+def _do_programa(a):
+    """O que vem PRONTO com o Sharkcut para esta assinatura (a mesma peça, em
+    qualquer cor: a cor da marca é trocada na hora)."""
+    if not a or a.startswith("logo3d:"): return None
+    base,_,marca=a.rpartition(":")
+    try:
+        idx=json.loads((PRONTOS/"indice.json").read_text(encoding="utf-8"))
+    except (OSError,ValueError):
+        return None
+    iguais=[e for e in idx if e.get("base")==base and (PRONTOS/e.get("arquivo","")).is_file()]
+    if not iguais: return None
+    return next((e for e in iguais if e.get("marca","").upper()==marca),iguais[0])
+
+
+def tem_pronto(cena,extra=()):
+    """Existe este 3D sem abrir o Blender? (barato: não converte nada)"""
+    a=assinatura(cena)
+    if not a: return False
+    return any(e["assinatura"]==a for e in _gerados(extra)) or _do_programa(a) is not None
+
+
+def disponivel(cena,extra=()):
+    return tem_pronto(cena,extra) or bool(executavel())
+
+
+def _hsl(hexcor):
+    import colorsys
+    r,g,b=(int(hexcor[i:i+2],16)/255 for i in (1,3,5))
+    h,l,s=colorsys.rgb_to_hls(r,g,b)
+    return h*360,s,l
+
+
+def _converter(entrada,destino,marca,ctx=None):
+    """webm VP9 com alfa (o pronto do programa) -> o MESMO formato que o
+    Blender entrega (qtrle argb), já na cor da marca pedida."""
+    from .config import FFMPEG
+    h0,s0,_l0=_hsl(entrada.get("marca","#FF385C"))
+    h1,s1,_l1=_hsl(marca)
+    filtros=[]
+    if entrada.get("marca","").upper()!=marca.upper():
+        filtros.append(f"hue=h={(h1-h0+540)%360-180:.1f}:s={max(0.0,min(4.0,s1/max(s0,1e-3))):.3f}")
+    temp=destino.with_name(destino.stem+"-parcial.mov")
+    destino.parent.mkdir(parents=True,exist_ok=True)
+    # o decodificador libvpx é o que lê o ALFA do VP9 (o nativo o descarta)
+    subprocess.run([FFMPEG,"-y","-v","error","-nostdin","-c:v","libvpx-vp9","-i",str(PRONTOS/entrada["arquivo"]),
+                    *(["-vf",",".join(filtros)] if filtros else []),
+                    "-c:v","qtrle","-pix_fmt","argb","-an",str(temp)],
+                   check=True,capture_output=True,timeout=300,
+                   creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    temp.replace(destino)
+    return destino
+
+
+def pronto(cena,extra=(),ctx=None):
+    """(vídeo, cena do vídeo) do 3D que JÁ EXISTE com esta assinatura — o
+    gerado antes (a animação pedida primeiro, depois o mais longo e o mais
+    novo) ou o que vem com o programa. None: só o Blender faz."""
+    a=assinatura(cena)
+    if not a: return None
+    cena=normalizar(cena)
+    anim=(cena.get("objetos") or [{}])[0].get("animacao")
+    iguais=[e for e in _gerados(extra) if e["assinatura"]==a]
+    if iguais:
+        def nota(e):
+            c=e["cena"]
+            return ((c.get("objetos") or [{}])[0].get("animacao")==anim,
+                    c.get("duracao",0)>=cena["duracao"]-0.05,
+                    -abs(c.get("duracao",0)-cena["duracao"]),c.get("fps")==30,e["quando"])
+        e=max(iguais,key=nota)
+        video=e["arquivo"]
+        from .config import PROJECTS_DIR
+        try:
+            de_projeto=video.resolve().is_relative_to(PROJECTS_DIR.resolve())
+        except (OSError,ValueError):
+            de_projeto=False
+        if de_projeto:
+            # veio da pasta de OUTRO projeto (que pode ser apagado): uma cópia
+            # vai para a biblioteca, e daqui em diante é ela que serve
+            pasta=_biblioteca()/hashlib.sha256(str(video).encode()).hexdigest()[:20]
+            if not (pasta/"arte.mov").is_file():
+                pasta.mkdir(parents=True,exist_ok=True)
+                shutil.copy2(video,pasta/"arte-parcial.mov")
+                (pasta/"cena.json").write_text(json.dumps(e["cena"],ensure_ascii=False),encoding="utf-8")
+                (pasta/"arte-parcial.mov").replace(pasta/"arte.mov")
+            video=pasta/"arte.mov"
+        return video,e["cena"]
+    ent=_do_programa(a)
+    if not ent: return None
+    marca=a.rpartition(":")[2]
+    pasta=_biblioteca()/f"{Path(ent['arquivo']).stem}-{marca.strip('#').lower()}"
+    video=pasta/"arte.mov"
+    feito=normalizar({**cena,**{k:ent[k] for k in ("duracao","largura","altura","fps")}})
+    if ent.get("animacao") and feito.get("objetos"):
+        feito["objetos"][0]["animacao"]=ent["animacao"]
+    if not (video.is_file() and video.stat().st_size>0):
+        if ctx: ctx.progress(0.3,"Pegando o 3D pronto da biblioteca","pronto")
+        try:
+            _converter(ent,video,marca,ctx)
+        except (subprocess.SubprocessError,OSError):
+            return None
+        (pasta/"cena.json").write_text(json.dumps(feito,ensure_ascii=False),encoding="utf-8")
+    return video,feito
+
+
+def _segurar(video,dur,alvo,pasta):
+    """O pronto é mais curto que a janela: o último quadro fica parado (a peça
+    montada) até o fim — e a saída em fade acontece de verdade."""
+    from .config import FFMPEG
+    destino=Path(pasta)/f"segura-{hashlib.sha256(f'{video}|{alvo:.3f}'.encode()).hexdigest()[:16]}.mov"
+    if destino.is_file() and destino.stat().st_size>0: return destino
+    destino.parent.mkdir(parents=True,exist_ok=True)
+    temp=destino.with_name(destino.stem+"-parcial.mov")
+    subprocess.run([FFMPEG,"-y","-v","error","-nostdin","-i",str(video),
+                    "-vf",f"tpad=stop_mode=clone:stop_duration={max(0.0,alvo-dur)+0.1:.3f}",
+                    "-t",f"{alvo:.3f}","-c:v","qtrle","-pix_fmt","argb","-an",str(temp)],
+                   check=True,capture_output=True,timeout=300,
+                   creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    temp.replace(destino)
+    return destino
+
+
 def trabalho(pid,dados,ctx):
     from . import projects as P
     from .models import Overlay
@@ -394,7 +579,19 @@ def trabalho(pid,dados,ctx):
     if ini+janela>P.duracao_de_saida(p)+0.001: raise ValueError("3D não cabe na montagem")
     # cache: o da pasta do projeto, ou o GLOBAL (o mesmo logo serve a todo vídeo)
     pasta=Path(dados["cache"]) if dados.get("cache") else p.dir/"artes-3d"
-    video,cena=renderizar(cena,pasta,ctx)
+    achado=pronto(cena,[pasta],ctx)
+    if achado:
+        # JÁ EXISTE (gerado antes ou vindo com o programa): nada de Blender
+        video,feito=achado
+        if dados.get("cobrir") and abs(feito["duracao"]-cena["duracao"])>0.02:
+            # transição de outra duração: o meio dela continua no corte
+            ini=max(0.0,ini+(cena["duracao"]-feito["duracao"])/2)
+            janela=feito["duracao"]
+        elif feito["duracao"]<janela-0.02:
+            video=_segurar(video,feito["duracao"],janela,p.dir/"artes-3d")
+        cena={**feito,"duracao":max(feito["duracao"],janela)}
+    else:
+        video,cena=renderizar(cena,pasta,ctx)
     ctx.check()
     p=P.load(pid) # carrega novamente para preservar alterações durante o render
     if ini+janela>P.duracao_de_saida(p)+0.001:
@@ -434,4 +631,5 @@ def trabalho(pid,dados,ctx):
               origem=str(dados.get("origem") or "manual"),keyframes=marcos,camada=camada)
     p.plan.overlays.append(o);p.save_plan()
     return {"ok":True,"overlay":o.to_dict(),"arquivo":str(video),"cena":cena,
+            "pronto":bool(achado),
             "conferir":[ini+0.1,ini+janela/2,ini+janela-0.1]}

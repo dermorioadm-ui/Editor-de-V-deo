@@ -259,15 +259,18 @@ def _moldura(tag_in: str, tag_out: str, cena, W: int, H: int, fps: float,
                   f"scale=w='max(2,trunc({cw + 2 * m}*{esc}/2)*2)'"
                   f":h='max(2,trunc({ch + 2 * m}*{esc}/2)*2)':eval=frame[{p}ss]")
     dy = min(W, H) * 0.02
-    partes.append(f"[{p}1][{p}ss]overlay=x='{x}-{m}*{esc}':y='{y}-{m}*{esc}+{dy:.1f}*{P}'"
-                  f":eval=frame:format=auto:shortest=1[{p}2]")
+    # yuv444 e round(): em 4:2:0 o overlay trunca x/y para PAR — o cartão
+    # andava em degraus de 2 px e dava um "clique" depois de parar
+    partes.append(f"[{p}1][{p}ss]overlay=x='round({x}-{m}*{esc})':"
+                  f"y='round({y}-{m}*{esc}+{dy:.1f}*{P})'"
+                  f":eval=frame:format=yuv444:shortest=1[{p}2]")
     # o cartão: o pedaço do vídeo em volta da pessoa, de canto largo
     partes.append(f"[{p}c]crop={cw}:{ch}:{g['cx0']}:{g['cy0']},format=yuva420p[{p}cc]")
     partes.append(f"[{img(masc)}]format=gray,scale={cw}:{ch}[{p}mm]")
     partes.append(f"[{p}cc][{p}mm]alphamerge,"
                   f"scale=w='max(2,trunc({cw}*{esc}/2)*2)'"
                   f":h='max(2,trunc({ch}*{esc}/2)*2)':eval=frame[{p}cs]")
-    partes.append(f"[{p}2][{p}cs]overlay=x='{x}':y='{y}':eval=frame:format=auto"
+    partes.append(f"[{p}2][{p}cs]overlay=x='round({x})':y='round({y})':eval=frame:format=yuv444"
                   f":shortest=1[{tag_out}]")
     return ";".join(partes)
 
@@ -421,7 +424,13 @@ def grafo(tag_in: str, tag_out: str, cenas: list, W: int, H: int, fps: float,
             ramos.append((cursor, f0, None))
         ramos.append((f0, f1, (c, a, b)))
         cursor = f1
-    ramos.append((cursor, -1, None))           # até o fim de verdade
+    if cursor >= n_total:
+        # a cena vai até o corte: ela mesma cobre até o último quadro real (se
+        # o trecho tiver um a mais do que a conta, ele não sai sem a cena)
+        f0, _f1, alvo = ramos[-1]
+        ramos[-1] = (f0, -1, alvo)
+    else:
+        ramos.append((cursor, -1, None))       # até o fim de verdade
     n = len(ramos)
     rot = [f"__cn{k}" for k in range(n)]
     partes = [f"[{tag_in}]format={pix_fmt},setsar=1,split={n}" + "".join(f"[{r}s]" for r in rot)]

@@ -1657,7 +1657,9 @@ def gosto(c: Cliente, a: dict) -> str:
 
 @ferramenta(
     "arte_3d",
-    "Blender LOCAL (sem serviço pago), saída com fundo transparente na linha do tempo. "
+    "3D com fundo transparente na linha do tempo. Os 12 OBJETOS e a TRANSIÇÃO JÁ VÊM PRONTOS "
+    "no Sharkcut (e todo 3D que já foi gerado uma vez fica guardado): entram NA HORA, sem "
+    "Blender. Só acao=criar (cena livre) e um logo novo precisam do Blender local. "
     "PREFIRA acao=objeto: um OBJETO 3D PRONTO, modelado com acabamento de ícone 3D premium, "
     "nas cores da marca do vídeo, montando peça por peça e girando pouco (nunca uma volta). "
     "objeto: casa (imóvel de temporada, com piscina e guarda-sol), predio (apartamento), "
@@ -1674,12 +1676,12 @@ def gosto(c: Cliente, a: dict) -> str:
     "acao=transicao: faixas 3D da marca que TAMPAM a tela no instante em= (a troca de "
     "assunto) — no máximo 1 ou 2 por vídeo. acao=criar: cena livre com primitivas "
     "(cena={duracao,largura,altura,fps,camera:{posicao,alvo,lente},objetos:[{tipo cubo/esfera/"
-    "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job. PEÇA O 3D LOGO NO COMEÇO "
-    "do trabalho, assim que o plano estiver pronto: ele renderiza numa faixa própria enquanto "
-    "você faz o resto (cada um leva alguns minutos). Não fique parado esperando: o Sharkcut "
-    "espera todos os 3D terminarem antes da prévia final e do vídeo. Consulte (acao=consultar) "
-    "no fim, para conferir com ver_quadros e revisar. Se voltar erro de Blender, diga isso no "
-    "relatório. Não executa scripts arbitrários.",
+    "torus/cilindro/plano/texto/modelo,...}]}). Tudo retorna job (o pronto termina em segundos). "
+    "PEÇA O 3D LOGO NO COMEÇO do trabalho, assim que o plano estiver pronto. O que precisar do "
+    "Blender renderiza numa faixa própria enquanto você faz o resto, e o Sharkcut espera antes "
+    "da prévia final e do vídeo. Consulte (acao=consultar) no fim, para conferir com "
+    "ver_quadros e revisar. Se voltar erro de Blender, diga isso no relatório. Não executa "
+    "scripts arbitrários.",
     {"properties":{"projeto":{"type":"string"},
         "acao":{"type":"string","enum":["objeto","logo","transicao","criar","consultar"]},
         "logo":{"type":"string"},"atras":{"type":"boolean"},

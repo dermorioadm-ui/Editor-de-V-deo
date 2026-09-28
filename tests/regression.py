@@ -373,6 +373,7 @@ def main() -> int:
     testar_logo_no_canto_e_pos_rica()
     testar_cada_tomada_toca_na_previa()
     testar_3d_tem_prioridade()
+    testar_moldura_em_todo_quadro_do_trecho()
 
     print()
     if FALHAS:
@@ -1758,7 +1759,7 @@ def testar_janela_do_sistema() -> None:
     """A janela de escolher arquivo é a DO SISTEMA, não uma imitação em HTML."""
     from editor import nativo
 
-    check(set(nativo.FILTROS) == {"video", "audio", "image", "media", "texto", "pdf"},
+    check(set(nativo.FILTROS) == {"video", "audio", "image", "media", "texto", "pdf", "programa"},
           "todo tipo que o editor aceita tem filtro, inclusive o 'media' do "
           "material auxiliar (vídeo e imagem na MESMA janela: separar obriga a "
           "abrir duas vezes para anexar uma gravação de tela e um print)")
@@ -3087,9 +3088,12 @@ def testar_janela_de_video() -> None:
     o = Overlay(media_id="m", out_start=4.0, out_end=7.0, media_start=1.5)
     _g, ent = overlay_chain([o], {"m": "/x.mp4"}, 5.0, 1080, 1920, 1, "a", "b",
                             ref_height=1920)
-    check(ent and ent[0]["video"] and abs(ent[0]["ss"] - 2.5) < 1e-6,
+    # meio quadro (a 60 fps) antes: o -ss exato caía no quadro SEGUINTE da
+    # mídia quando o arredondamento passava do ponto, e a janela pulava um
+    # quadro no corte
+    check(ent and ent[0]["video"] and abs(ent[0]["ss"] - (2.5 - 1 / 120)) < 1e-3,
           f"o trecho que começa 1 s depois da janela entra no vídeo em "
-          f"media_start + 1 s = 2,5 s ({ent[0]['ss'] if ent else '?'})")
+          f"media_start + 1 s = 2,5 s, meio quadro antes ({ent[0]['ss'] if ent else '?'})")
     check(ent and abs(ent[0]["t"] - 2.5) < 1e-6,
           f"e lê só o que a janela ainda dura mais meio segundo ({ent[0]['t'] if ent else '?'})")
     _g, ent_png = overlay_chain([o], {"m": "/x.png"}, 5.0, 1080, 1920, 1, "a", "b")
@@ -9334,8 +9338,9 @@ def testar_gosto_aprendido_e_objetos_3d() -> None:
     gosto." O que ELE apaga ou troca (pela tela) do que a IA pôs vira gosto
     anotado, e o diretor recebe esse gosto antes de planejar; o que a própria
     IA muda pelo MCP não conta. E os objetos 3D prontos (casa de temporada,
-    chave…) e a transição 3D: validados, nas cores da marca, e sem Blender a
-    rota diz o que falta em vez de quebrar."""
+    chave…) e a transição 3D: validados, nas cores da marca, e JÁ VÊM PRONTOS
+    (sem Blender); só a cena livre nunca gerada diz que falta o Blender."""
+    import subprocess
     import tempfile
     from pathlib import Path
 
@@ -9408,9 +9413,65 @@ def testar_gosto_aprendido_e_objetos_3d() -> None:
     antes = os.environ.get("EDITOR_BLENDER")
     os.environ["EDITOR_BLENDER"] = str(Path(tempfile.gettempdir()) / "nao-existe-blender.exe")
     try:
-        r = client.post(f"/api/projects/{pid}/objeto-3d", json={"objeto": "casa", "inicio": 1})
+        # "os elementos já foram gerados": os 12 objetos VÊM PRONTOS, sem Blender
+        import time as _t
+        t0 = _t.time()
+        r = client.post(f"/api/projects/{pid}/objeto-3d",
+                        json={"objeto": "casa", "inicio": 1, "duracao": 3})
+        job, j = (r.json() if r.status_code == 200 else {}), {}
+        for _ in range(300):
+            j = next((x for x in client.get("/api/jobs", params={"project_id": pid}).json()
+                      if x["id"] == job.get("id")), {})
+            if j.get("status") in ("ok", "erro"):
+                break
+            _t.sleep(0.1)
+        res = j.get("result") or {}
+        check(r.status_code == 200 and j.get("status") == "ok" and res.get("pronto")
+              and _t.time() - t0 < 20,
+              f"sem Blender, a casa 3D já vem pronta e entra na hora "
+              f"({r.status_code}, {j.get('status')}, {j.get('error', '')[:120]}, {_t.time() - t0:.1f} s)")
+        arq = res.get("arquivo", "")
+        info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                               "stream=pix_fmt,width:format=duration", "-of", "json", arq],
+                              capture_output=True, text=True).stdout if arq else "{}"
+        dados = json.loads(info or "{}")
+        dur = float((dados.get("format") or {}).get("duration") or 0)
+        check((dados.get("streams") or [{}])[0].get("pix_fmt") == "argb" and dur >= 2.95,
+              f"o pronto sai como o Blender entregaria (com alfa) e dura a janela pedida ({dur:.2f} s)")
+        ov = res.get("overlay") or {}
+        proj = client.get(f"/api/projects/{pid}").json()
+        check(any(o["id"] == ov.get("id") for o in proj["plan"]["overlays"])
+              and abs(ov.get("out_end", 0) - ov.get("out_start", 0) - 3.0) < 0.05,
+              "e está na linha do tempo, na janela pedida")
+        # outra cor de marca: a mesma peça, com a cor trocada na hora
+        azul = B.pronto(B.cena_de_objeto("chave", 2.0, B.paleta_do_kit({"cores": {"marca": "#1E6FD9"}})))
+        cor = None
+        if azul:
+            q = subprocess.run(["ffmpeg", "-v", "error", "-sseof", "-0.2", "-i", str(azul[0]),
+                                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+                               capture_output=True).stdout
+            a = np.frombuffer(q, np.uint8).reshape(-1, 4)
+            cor = a[a[:, 3] > 200][:, :3].mean(axis=0)
+        check(cor is not None and cor[2] > cor[0] + 20,
+              f"marca azul: a chave pronta sai azul, não coral ({None if cor is None else cor.round()})")
+        # o que JÁ FOI GERADO pelo Blender, em qualquer projeto e versão, é reaproveitado
+        from editor.config import PROJECTS_DIR
+        logo = B.cena_de_logo([{"cor": "#FF5A5F", "lacos": [[[0, 0], [1, 0], [1, 1], [0, 1]]]}], 4.5)
+        velho = PROJECTS_DIR / "projeto-antigo" / "artes-3d" / "qualquer"
+        velho.mkdir(parents=True, exist_ok=True)
+        (velho / "cena.json").write_text(json.dumps({**logo, "fps": 24, "amostras": 16}))
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=red@0.5:s=64x64:d=4.5,format=argb", "-c:v", "qtrle",
+                        str(velho / "arte.mov")], check=True)
+        achado = B.pronto(logo)
+        check(B.tem_pronto(logo) and achado and "prontos-3d" in str(achado[0])
+              and achado[0].is_file(),
+              "o logo 3D gerado antes (outro projeto, outra versão) entra sem Blender — "
+              "e uma cópia fica na biblioteca")
+        r = client.post(f"/api/projects/{pid}/arte-3d",
+                        json={"inicio": 0, "cena": {"duracao": 1, "objetos": [{"tipo": "cubo"}]}})
         check(r.status_code == 400 and "Blender" in r.text,
-              f"sem Blender, a rota diz o que falta ({r.status_code})")
+              f"cena livre (nunca gerada) sem Blender: diz o que falta ({r.status_code})")
         r = client.post(f"/api/projects/{pid}/objeto-3d", json={"objeto": "foguete"})
         check(r.status_code == 400 and "casa" in r.text, "objeto desconhecido: diz quais existem")
     finally:
@@ -9784,6 +9845,116 @@ def testar_3d_tem_prioridade() -> None:
     check(n == 1 and _t.time() - t0 >= 1.0 and any("esperando o 3D" in m for m in ctx.msgs),
           "quem gera o vídeo espera o 3D pendente do projeto, e diz que está esperando")
     check(fila.esperar("outro", ctx) == 0, "sem 3D pendente, não espera nada")
+
+
+def testar_moldura_em_todo_quadro_do_trecho() -> None:
+    """ "Continua dando o bug no vídeo" / "leg entre os cortes da fala quando a
+    tela fecha pra falar os tópicos". Medido no vídeo dele: os ÚLTIMOS quadros
+    dos trechos (60, 85, 107…) saíam SEM a moldura — o vídeo cheio piscava
+    33 ms e a moldura voltava. A cena contava round(nominal×fps) quadros, e o
+    trecho saía com um a mais (a linha do tempo arredonda para cima).
+    Conferido QUADRO A QUADRO, com cortes em durações quebradas."""
+    import subprocess
+
+    from editor.config import FFMPEG, ExportParams
+    from editor.edit.timeline import Timeline
+    from editor.ffmpeg_utils import probe
+    from editor.models import Cena, Clip, EditPlan, Overlay
+    from editor.render.renderer import (plan_segments, quadros_do_trecho,
+                                        render_video_segments, taxa_padrao)
+
+    print("\n-- a moldura em todo quadro do trecho (sem piscar no corte)")
+    tmp = Path(tempfile.mkdtemp(prefix="moldura_q_"))
+    fonte = tmp / "fonte.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=s=320x180:r=30:d=6", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(fonte)], check=True)
+    info = probe(fonte)
+    fontes = {"main": {"path": str(fonte), "info": info, "kind": "video"}}
+    # durações que NÃO caem na grade de 30 fps (1,01 s; 0,84 s; 0,75 s…)
+    cortes = ((0.0, 1.01), (1.5, 2.34), (2.8, 3.55), (3.6, 4.47), (4.9, 5.93))
+    p = EditPlan()
+    p.export = ExportParams(scale="source", burn_subtitles=False, preset="ultrafast", crf=18)
+    p.clips = [Clip(src_start=a, src_end=b) for a, b in cortes]
+    p.marca = "hospedepay"
+    total = sum(b - a for a, b in cortes)
+    p.cenas = [Cena(tipo="moldura", lado="direita", fundo="marca", out_start=0.3,
+                    out_end=total - 0.2)]
+    tl = Timeline(p.active_clips, 30.0)
+    segs = plan_segments(p, tl, fontes, info)
+    render_video_segments(segs, p, info, [], tmp / "t", {"main": str(fonte)}, None)
+    lista = tmp / "l.txt"
+    lista.write_text("".join(f"file '{s.file}'\n" for s in segs))
+    saida = tmp / "s.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                    "-i", str(lista), "-c", "copy", str(saida)], check=True)
+    r = subprocess.run([FFMPEG, "-v", "error", "-i", str(saida), "-f", "rawvideo",
+                        "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
+    quadros = np.frombuffer(r.stdout, np.uint8).reshape(-1, 180, 320, 3).astype(int)
+    n = len(quadros)
+    na_linha = int(round((segs[-1].t_start + segs[-1].out_theoretical) * 30))
+    check(n == na_linha,
+          f"o vídeo tem exatamente os quadros da linha do tempo ({n} de {na_linha})")
+    check(sum(quadros_do_trecho(s, 30.0) for s in segs) == na_linha,
+          "a soma dos trechos é o total — o erro de arredondamento não acumula corte a corte")
+    lado = quadros[:, 20:160, 10:100].reshape(n, -1, 3).mean(axis=1)
+    coral = (np.abs(lado[:, 0] - 255) < 35) & (lado[:, 1] < 110)
+    dentro = range(int(0.3 * 30) + 21, int((total - 0.2) * 30) - 21)
+    sem = [i for i in dentro if not coral[i]]
+    bordas = []
+    acc = 0
+    for s in segs[:-1]:
+        acc += quadros_do_trecho(s, 30.0)
+        bordas.append(acc - 1)
+    check(not sem,
+          f"a moldura está em TODO quadro da cena, inclusive o último de cada trecho "
+          f"(últimos quadros dos trechos: {bordas}; sem moldura: {sem[:12]})")
+
+    # transição num corte DENTRO da moldura dava zoom na composição inteira
+    # (o cartão "pulsava"); num corte fora dela, continua valendo
+    from editor.models import Transicao
+    p.transicoes = [Transicao(clip_id=p.clips[2].id, tipo="zoom", duracao=0.4),
+                    Transicao(clip_id=p.clips[1].id, tipo="zoom", duracao=0.4)]
+    p.cenas = [Cena(tipo="moldura", lado="direita", fundo="marca", out_start=1.2,
+                    out_end=total - 0.2)]
+    segs_t = plan_segments(p, Timeline(p.active_clips, 30.0), fontes, info)
+    check(not any(s.trans_entra or s.trans_sai for s in segs_t[2:4])
+          and segs_t[1].trans_entra and segs_t[0].trans_sai,
+          "transição em corte dentro da moldura não entra; fora dela, entra")
+
+    # a janela com fade que atravessa o corte NÃO recomeça o fade no trecho
+    # seguinte (a janela piscava e reaparecia a cada corte)
+    img = tmp / "branco.png"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=white:s=64x64", "-frames:v", "1", str(img)], check=True)
+    p2 = EditPlan()
+    p2.export = p.export
+    p2.clips = [Clip(src_start=a, src_end=b) for a, b in cortes[:2]]
+    p2.overlays = [Overlay(media_id="img", out_start=0.2, out_end=1.7, x=0.17, y=0.2,
+                           anim_in="fade", dur_in=0.3, anim_out="fade", dur_out=0.3)]
+    fontes2 = dict(fontes, img={"path": str(img), "info": probe(img), "kind": "image"})
+    tl2 = Timeline(p2.active_clips, 30.0)
+    segs2 = plan_segments(p2, tl2, fontes2, info)
+    render_video_segments(segs2, p2, info, [], tmp / "o", {"main": str(fonte), "img": str(img)},
+                          None)
+    lista2 = tmp / "l2.txt"
+    lista2.write_text("".join(f"file '{s.file}'\n" for s in segs2))
+    saida2 = tmp / "s2.mp4"
+    subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                    "-i", str(lista2), "-c", "copy", str(saida2)], check=True)
+    r = subprocess.run([FFMPEG, "-v", "error", "-i", str(saida2), "-f", "rawvideo",
+                        "-pix_fmt", "gray", "-"], capture_output=True, check=True)
+    q2 = np.frombuffer(r.stdout, np.uint8).reshape(-1, 180, 320).astype(int)
+    corte = quadros_do_trecho(segs2[0], 30.0)
+    brilho = [int(q2[i, 30:45, 45:65].mean()) for i in range(corte - 3, corte + 4)]
+    check(min(brilho) > 235,
+          f"a janela aberta atravessa o corte inteira, sem refazer o fade ({brilho})")
+
+    check(taxa_padrao(28.235) == 30.0 and abs(taxa_padrao(29.97) - 30000 / 1001) < 1e-3
+          and taxa_padrao(15.0) == 15.0 and taxa_padrao(57.3) == 60.0
+          and taxa_padrao(25.0) == 25.0 and taxa_padrao(23.4) == 24.0,
+          "celular com taxa variável (28,24 fps de média) sai em 30 — sem quadro perdido")
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -237,8 +237,10 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         ja_passou = max(0.0, clip_out_start - o.out_start)
         inputs.append({
             "path": str(path), "video": video,
-            "ss": round(max(0.0, float(getattr(o, "media_start", 0.0) or 0.0))
-                        + ja_passou, 4),
+            # meio quadro (a 60 fps) ANTES: o -ss arredondado para cima caía no
+            # quadro seguinte da mídia, e a janela pulava um quadro no corte
+            "ss": max(0.0, round(max(0.0, float(getattr(o, "media_start", 0.0) or 0.0))
+                                 + ja_passou - (1.0 / 120 if ja_passou > 0 else 0.0), 4)),
             "t": round((end - start) + 0.5, 3),
         })
         scaled = f"{prefixo}{i}"
@@ -312,9 +314,16 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
         elif opac0 < 0.999:
             chain.append(f"colorchannelmixer=aa={opac0:.3f}")
 
-        if o.anim_in == "fade" and o.dur_in > 0:
-            chain.append(f"fade=t=in:st=0:d={o.dur_in:.3f}:alpha=1")
-        if o.anim_out == "fade" and o.dur_out > 0:
+        # A ENTRADA E A SAÍDA SÃO DA JANELA, NÃO DO TRECHO. Numa janela que
+        # atravessa um corte, o trecho seguinte começa com a janela já aberta:
+        # o fade de entrada recomeçava do zero a cada corte (a janela piscava
+        # e reaparecia), e o de saída acontecia no corte em vez de no fim.
+        falta_entrar = o.dur_in - ja_passou
+        if o.anim_in == "fade" and o.dur_in > 0 and falta_entrar > 0.02:
+            chain.append(f"fade=t=in:st=0:d={falta_entrar:.3f}:alpha=1")
+        fim_real = o.out_end - clip_out_start          # o fim da JANELA, neste relógio
+        if (o.anim_out == "fade" and o.dur_out > 0
+                and fim_real <= end + 1.0 / 60):
             chain.append(f"fade=t=out:st={max(0.0, (end-start)-o.dur_out):.3f}:"
                          f"d={o.dur_out:.3f}:alpha=1")
         chain.append(f"setpts=PTS-STARTPTS+{start:.3f}/TB")
@@ -332,7 +341,9 @@ def overlay_chain(overlays: list, media_paths: dict, clip_out_start: float,
             cy = f"({cy}+{dy})"
         x_expr, y_expr = cx, cy
         p = max(o.dur_in, 1e-3)
-        rel = f"(t-{start:.3f})"
+        # o relógio da entrada é o da JANELA: num trecho que começa com ela já
+        # aberta, o slide/pop continua de onde estava (ou já terminou)
+        rel = f"(t-{start - ja_passou:.3f})"
         prog = f"min(1,max(0,{rel}/{p:.3f}))"
         if o.anim_in == "slide_left":
             x_expr = f"({cx}-(1-{prog})*(main_w*0.6))"
