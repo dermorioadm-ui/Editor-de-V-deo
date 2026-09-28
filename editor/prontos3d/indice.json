@@ -154,5 +154,13 @@
   "largura": 768,
   "altura": 960,
   "fps": 30
+ },
+ {
+  "assinatura": "logo3d:0a67519e37b511d9d485",
+  "arquivo": "logo-airbnb.webm",
+  "duracao": 4.5,
+  "largura": 640,
+  "altura": 640,
+  "fps": 30
  }
 ]

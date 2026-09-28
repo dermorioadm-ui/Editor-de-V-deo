@@ -485,10 +485,11 @@ def _converter(entrada,destino,marca,ctx=None):
     """webm VP9 com alfa (o pronto do programa) -> o MESMO formato que o
     Blender entrega (qtrle argb), já na cor da marca pedida."""
     from .config import FFMPEG
-    h0,s0,_l0=_hsl(entrada.get("marca","#FF385C"))
-    h1,s1,_l1=_hsl(marca)
     filtros=[]
     if marca and entrada.get("marca") and entrada["marca"].upper()!=marca.upper():
+        # o logo pronto não tem "cor de marca" para trocar: é a cor dele
+        h0,s0,_l0=_hsl(entrada["marca"])
+        h1,s1,_l1=_hsl(marca)
         filtros.append(f"hue=h={(h1-h0+540)%360-180:.1f}:s={max(0.0,min(4.0,s1/max(s0,1e-3))):.3f}")
     temp=destino.with_name(destino.stem+"-parcial.mov")
     destino.parent.mkdir(parents=True,exist_ok=True)

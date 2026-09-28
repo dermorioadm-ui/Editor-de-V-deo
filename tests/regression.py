@@ -374,6 +374,7 @@ def main() -> int:
     testar_cada_tomada_toca_na_previa()
     testar_3d_tem_prioridade()
     testar_moldura_em_todo_quadro_do_trecho()
+    testar_logos_de_plataforma_prontos()
 
     print()
     if FALHAS:
@@ -9959,6 +9960,49 @@ def testar_moldura_em_todo_quadro_do_trecho() -> None:
           and taxa_padrao(25.0) == 25.0 and taxa_padrao(23.4) == 24.0,
           "celular com taxa variável (28,24 fps de média) sai em 30 — sem quadro perdido")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+def testar_logos_de_plataforma_prontos() -> None:
+    """ "Porra, mas você já criou." Os logos do Airbnb e do Booking, tirados
+    do print dele, vêm COM o programa — o PNG e a peça 3D já renderizada —
+    e entram no gancho sem Blender nenhum."""
+    import json as _json
+    import subprocess
+
+    from editor import blender_local as B
+    from editor import gancho3d, logo3d
+    from editor import marca as MK
+
+    print("\n-- Airbnb e Booking prontos em 3D")
+    todos = MK.logos(MK.carregar("hospedepay"))
+    check(all(n in todos and not todos[n]["da_marca"] for n in ("airbnb", "booking")),
+          "Airbnb e Booking estão na biblioteca, como logos de plataforma (vêm marcados no gancho)")
+    idx = _json.loads((B.PRONTOS / "indice.json").read_text(encoding="utf-8"))
+    antes = os.environ.get("EDITOR_BLENDER")
+    os.environ["EDITOR_BLENDER"] = str(Path(tempfile.gettempdir()) / "nao-existe-blender.exe")
+    try:
+        for n in ("airbnb",):
+            cena = B.cena_de_logo(logo3d.camadas(todos[n]["caminho"])["camadas"],
+                                  gancho3d.DURACAO_DO_RENDER)
+            a = B.assinatura(cena)
+            ent = next((e for e in idx if e.get("assinatura") == a), None)
+            check(ent is not None,
+                  f"{n}: o 3D que vem pronto é deste MESMO logo ({a}) — se o desenho do "
+                  f"contorno mudar, o pronto tem de ser refeito")
+            r = B.pronto(cena)
+            info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                   "-show_entries", "stream=pix_fmt:format=duration", "-of", "json",
+                                   str(r[0])], capture_output=True, text=True).stdout if r else "{}"
+            d = _json.loads(info or "{}")
+            check(not B.executavel() and B.disponivel(cena) and r
+                  and (d.get("streams") or [{}])[0].get("pix_fmt") == "argb"
+                  and float((d.get("format") or {}).get("duration") or 0) >= 4.4,
+                  f"{n}: sem Blender, o logo 3D entra pronto (com alfa, {d.get('format', {}).get('duration')} s)")
+    finally:
+        if antes is None:
+            os.environ.pop("EDITOR_BLENDER", None)
+        else:
+            os.environ["EDITOR_BLENDER"] = antes
 
 
 if __name__ == "__main__":

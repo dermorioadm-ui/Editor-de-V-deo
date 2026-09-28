@@ -1824,8 +1824,11 @@ novo), e o resultado fica guardado.
 
 ### Logos 3D no gancho (Airbnb, Booking…), passando por trás de você
 
-Ponha o logo na biblioteca (aba **Pós → pôr logo**; os logos de plataforma
-não vêm com o programa — são marcas dos outros). Serve PNG transparente ou um
+**Airbnb e Booking já vêm com o programa, prontos em 3D** (feitos do print
+do dono, em `marcas/_plataformas` e `editor/prontos3d`): aparecem marcados em
+**logos 3D no gancho** e entram na hora, sem Blender. Para outro logo, ponha
+na biblioteca (aba **Pós → pôr logo**; com o mesmo nome, o seu vale por cima
+do que vem com o programa). Serve PNG transparente ou um
 **print/JPG com o logo sobre fundo liso** (o de uma busca de imagem): o fundo
 sai sozinho, a sobra do canto também, e o branco de dentro do logo fica. Um
 print com DOIS logos lado a lado é recusado — recorte um de cada vez
