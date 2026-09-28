@@ -9454,6 +9454,10 @@ def testar_gosto_aprendido_e_objetos_3d() -> None:
             cor = a[a[:, 3] > 200][:, :3].mean(axis=0)
         check(cor is not None and cor[2] > cor[0] + 20,
               f"marca azul: a chave pronta sai azul, não coral ({None if cor is None else cor.round()})")
+        formatos = [B.pronto(B.cena_de_transicao(W, H, 0.8, {"marca": "#FF385C"}))
+                    for W, H in ((1080, 1920), (1920, 1080), (1080, 1080), (1080, 1350))]
+        check(all(formatos) and all(f[0].is_file() for f in formatos),
+              "a transição 3D também vem pronta: vertical, horizontal, quadrado e 4:5")
         # o que JÁ FOI GERADO pelo Blender, em qualquer projeto e versão, é reaproveitado
         from editor.config import PROJECTS_DIR
         logo = B.cena_de_logo([{"cor": "#FF5A5F", "lacos": [[[0, 0], [1, 0], [1, 1], [0, 1]]]}], 4.5)

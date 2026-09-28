@@ -118,5 +118,41 @@
   "largura": 540,
   "altura": 540,
   "fps": 30
+ },
+ {
+  "base": "transicao:0.56",
+  "marca": "#FF385C",
+  "arquivo": "transicao-1080x1920.webm",
+  "duracao": 0.8,
+  "largura": 540,
+  "altura": 960,
+  "fps": 30
+ },
+ {
+  "base": "transicao:1.78",
+  "marca": "#FF385C",
+  "arquivo": "transicao-1920x1080.webm",
+  "duracao": 0.8,
+  "largura": 960,
+  "altura": 540,
+  "fps": 30
+ },
+ {
+  "base": "transicao:1.00",
+  "marca": "#FF385C",
+  "arquivo": "transicao-1080x1080.webm",
+  "duracao": 0.8,
+  "largura": 960,
+  "altura": 960,
+  "fps": 30
+ },
+ {
+  "base": "transicao:0.80",
+  "marca": "#FF385C",
+  "arquivo": "transicao-1080x1350.webm",
+  "duracao": 0.8,
+  "largura": 768,
+  "altura": 960,
+  "fps": 30
  }
 ]
