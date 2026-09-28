@@ -9981,7 +9981,7 @@ def testar_logos_de_plataforma_prontos() -> None:
     antes = os.environ.get("EDITOR_BLENDER")
     os.environ["EDITOR_BLENDER"] = str(Path(tempfile.gettempdir()) / "nao-existe-blender.exe")
     try:
-        for n in ("airbnb",):
+        for n in ("airbnb", "booking"):
             cena = B.cena_de_logo(logo3d.camadas(todos[n]["caminho"])["camadas"],
                                   gancho3d.DURACAO_DO_RENDER)
             a = B.assinatura(cena)

@@ -162,5 +162,13 @@
   "largura": 640,
   "altura": 640,
   "fps": 30
+ },
+ {
+  "assinatura": "logo3d:8819ecc14db5b0a9eb43",
+  "arquivo": "logo-booking.webm",
+  "duracao": 4.5,
+  "largura": 640,
+  "altura": 640,
+  "fps": 30
  }
 ]
